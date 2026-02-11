@@ -1,13 +1,17 @@
-import React, { useState } from 'react';
-import { FiFile, FiSave, FiFolderPlus, FiSettings, FiInfo } from 'react-icons/fi';
-import useWorkspaceStore from '../../stores/workspaceStore';
-import useEditorStore from '../../stores/editorStore';
-import './Header.css';
+import { useState } from 'react';
+import { FiFile, FiSave, FiFolderPlus, FiSettings, FiInfo, FiGlobe } from 'react-icons/fi';
+import { useNavigate } from 'react-router-dom';
+import useWorkspaceStore from '@stores/workspaceStore';
+import useEditorStore from '@stores/editorStore';
+import { useFileOperations } from '@hooks/useFileOperations';
 
-function Header({ onOpenFile }) {
-  const [showMenu, setShowMenu] = useState(null);
+function Header() {
+  const [activeMenu, setActiveMenu] = useState(null);
+  const navigate = useNavigate();
+  
   const { addTab } = useWorkspaceStore();
   const { isModified } = useEditorStore();
+  const { openFile, saveFile } = useFileOperations();
 
   const handleNewFile = () => {
     addTab({
@@ -15,7 +19,12 @@ function Header({ onOpenFile }) {
       type: 'file',
       content: null
     });
-    setShowMenu(null);
+    setActiveMenu(null);
+  };
+
+  const handleOpenFile = () => {
+    openFile.mutate();
+    setActiveMenu(null);
   };
 
   const handleOpenUrl = () => {
@@ -27,85 +36,103 @@ function Header({ onOpenFile }) {
         content: { url }
       });
     }
-    setShowMenu(null);
+    setActiveMenu(null);
   };
 
+  const handleSave = () => {
+    // 저장 로직
+    setActiveMenu(null);
+  };
+
+  const menus = {
+    file: [
+      { icon: <FiFile />, label: '새 파일', action: handleNewFile },
+      { icon: <FiFolderPlus />, label: '파일 열기', action: handleOpenFile, shortcut: 'Ctrl+O' },
+      { icon: <FiGlobe />, label: '웹페이지 열기', action: handleOpenUrl },
+      { divider: true },
+      { icon: <FiSave />, label: '저장', action: handleSave, shortcut: 'Ctrl+S' },
+      { icon: <FiSave />, label: '다른 이름으로 저장', action: () => {}, shortcut: 'Ctrl+Shift+S' },
+    ],
+    edit: [
+      { label: '↶ 실행 취소', shortcut: 'Ctrl+Z' },
+      { label: '↷ 다시 실행', shortcut: 'Ctrl+Y' },
+      { divider: true },
+      { label: '✂ 잘라내기', shortcut: 'Ctrl+X' },
+      { label: '📋 복사', shortcut: 'Ctrl+C' },
+      { label: '📌 붙여넣기', shortcut: 'Ctrl+V' },
+    ],
+    view: [
+      { label: '💻 코드 에디터', shortcut: 'F12' },
+      { label: '🤖 AI 코파일럿', shortcut: 'Ctrl+Shift+C' },
+      { label: '📂 사이드바', shortcut: 'Ctrl+B' },
+      { divider: true },
+      { label: '⛶ 전체화면', shortcut: 'F11' },
+    ],
+    help: [
+      { icon: <FiInfo />, label: '단축키 목록' },
+      { label: '📖 사용 가이드' },
+      { label: 'ℹ️ 정보' },
+    ]
+  };
+
+  const MenuButton = ({ name, label }) => (
+    <div
+      className="relative px-3 py-2 text-sm cursor-pointer hover:bg-gray-700 rounded transition-colors"
+      onMouseEnter={() => setActiveMenu(name)}
+      onMouseLeave={() => setActiveMenu(null)}
+    >
+      <span>{label}</span>
+      
+      {activeMenu === name && (
+        <div className="absolute top-full left-0 mt-1 bg-gray-800 border border-gray-700 rounded-md shadow-lg min-w-[200px] py-1 z-50 slide-in">
+          {menus[name].map((item, index) => (
+            item.divider ? (
+              <div key={index} className="h-px bg-gray-700 my-1" />
+            ) : (
+              <button
+                key={index}
+                onClick={item.action}
+                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-700 flex items-center gap-3 transition-colors"
+              >
+                {item.icon && <span className="text-gray-400">{item.icon}</span>}
+                <span className="flex-1">{item.label}</span>
+                {item.shortcut && (
+                  <span className="text-xs text-gray-500">{item.shortcut}</span>
+                )}
+              </button>
+            )
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   return (
-    <header className="header">
-      <div className="header-left">
-        <div className="app-title">
-          <span className="app-icon">📝</span>
+    <header className="flex items-center justify-between h-12 bg-gray-800 border-b border-gray-700 px-4 flex-shrink-0">
+      <div className="flex items-center gap-5">
+        <div className="flex items-center gap-2 font-semibold">
+          <span className="text-2xl">📝</span>
           <span>PDF Editor Pro</span>
         </div>
 
-        <nav className="menu-bar">
-          <div className="menu-item" onMouseEnter={() => setShowMenu('file')} onMouseLeave={() => setShowMenu(null)}>
-            <span>파일</span>
-            {showMenu === 'file' && (
-              <div className="dropdown-menu">
-                <button onClick={handleNewFile}>
-                  <FiFile /> 새 파일
-                </button>
-                <button onClick={onOpenFile}>
-                  <FiFolderPlus /> 파일 열기 <span className="shortcut">Ctrl+O</span>
-                </button>
-                <button onClick={handleOpenUrl}>
-                  🌐 웹페이지 열기
-                </button>
-                <div className="menu-divider"></div>
-                <button>
-                  <FiSave /> 저장 <span className="shortcut">Ctrl+S</span>
-                </button>
-                <button>
-                  <FiSave /> 다른 이름으로 저장 <span className="shortcut">Ctrl+Shift+S</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="menu-item" onMouseEnter={() => setShowMenu('edit')} onMouseLeave={() => setShowMenu(null)}>
-            <span>편집</span>
-            {showMenu === 'edit' && (
-              <div className="dropdown-menu">
-                <button>↶ 실행 취소 <span className="shortcut">Ctrl+Z</span></button>
-                <button>↷ 다시 실행 <span className="shortcut">Ctrl+Y</span></button>
-                <div className="menu-divider"></div>
-                <button>✂ 잘라내기</button>
-                <button>📋 복사</button>
-                <button>📌 붙여넣기</button>
-              </div>
-            )}
-          </div>
-
-          <div className="menu-item" onMouseEnter={() => setShowMenu('view')} onMouseLeave={() => setShowMenu(null)}>
-            <span>보기</span>
-            {showMenu === 'view' && (
-              <div className="dropdown-menu">
-                <button>💻 코드 에디터 <span className="shortcut">F12</span></button>
-                <button>🤖 AI 코파일럿 <span className="shortcut">Ctrl+Shift+C</span></button>
-                <div className="menu-divider"></div>
-                <button>⛶ 전체화면 <span className="shortcut">F11</span></button>
-              </div>
-            )}
-          </div>
-
-          <div className="menu-item" onMouseEnter={() => setShowMenu('help')} onMouseLeave={() => setShowMenu(null)}>
-            <span>도움말</span>
-            {showMenu === 'help' && (
-              <div className="dropdown-menu">
-                <button><FiInfo /> 단축키 목록</button>
-                <button>📖 사용 가이드</button>
-                <button>ℹ️ 정보</button>
-              </div>
-            )}
-          </div>
+        <nav className="flex gap-1">
+          <MenuButton name="file" label="파일" />
+          <MenuButton name="edit" label="편집" />
+          <MenuButton name="view" label="보기" />
+          <MenuButton name="help" label="도움말" />
         </nav>
       </div>
 
-      <div className="header-right">
-        {isModified && <span className="modified-indicator">●</span>}
-        <button className="icon-button" title="설정">
-          <FiSettings />
+      <div className="flex items-center gap-3">
+        {isModified && (
+          <span className="text-yellow-500 text-lg pulse-dot">●</span>
+        )}
+        <button
+          onClick={() => navigate('/settings')}
+          className="p-2 hover:bg-gray-700 rounded transition-colors"
+          title="설정"
+        >
+          <FiSettings className="text-lg" />
         </button>
       </div>
     </header>

@@ -1,26 +1,24 @@
-import React, { useEffect } from 'react';
-import Header from './components/Layout/Header';
-import Toolbar from './components/Toolbar/Toolbar';
-import Workspace from './components/Workspace/Workspace';
-import CodeEditor from './components/Editor/CodeEditor';
-import CopilotPanel from './components/AI/CopilotPanel';
-import useWorkspaceStore from './stores/workspaceStore';
-import useEditorStore from './stores/editorStore';
-import shortcutService from './services/shortcutService';
-import fileService from './services/fileService';
-import './App.css';
+import { useEffect } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import Layout from '@components/Layout/Layout';
+import EditorPage from '@pages/EditorPage';
+import SettingsPage from '@pages/SettingsPage';
+import useWorkspaceStore from '@stores/workspaceStore';
+import useEditorStore from '@stores/editorStore';
+import { useGlobalShortcuts } from '@hooks/useShortcuts';
+import { useFileOperations } from '@hooks/useFileOperations';
 
 function App() {
-   const { 
-    showCodeEditor, 
-    showCopilot,
+  const {
     toggleCodeEditor,
     toggleCopilot,
-    addTab,
-    removeTab,
+    toggleSidebar,
+    toggleFullscreen,
     tabs,
     activeTabId,
-    setActiveTab
+    setActiveTab,
+    removeTab,
+    closeAllTabs,
   } = useWorkspaceStore();
 
   const {
@@ -30,93 +28,109 @@ function App() {
     setSelectedColor,
     fontSize,
     setFontSize,
-    resetEditor
+    canUndo,
+    canRedo,
   } = useEditorStore();
 
-  // --- 핸들러들을 먼저 정의한다 (useEffect보다 위에) ---
-  const handleOpenFile = async () => {
-    try {
-      const fileData = await fileService.openFile();
-      if (fileData) {
-        addTab({
-          title: fileData.fileName,
-          type: 'file',
-          content: fileData,
-          filePath: fileData.filePath
-        });
+  const { openFile, saveFile } = useFileOperations();
+
+  // 전역 단축키 설정
+  useGlobalShortcuts({
+    // 파일
+    openFile: () => openFile.mutate(),
+    saveFile: () => {
+      // 저장 로직
+      console.log('Save file');
+    },
+    saveFileAs: () => {
+      // 다른 이름으로 저장
+      console.log('Save as');
+    },
+    closeTab: () => {
+      if (activeTabId) {
+        removeTab(activeTabId);
       }
-    } catch (error) {
-      console.error('Failed to open file:', error);
-      alert('파일을 열 수 없습니다: ' + error.message);
-    }
-  };
+    },
+    closeAllTabs: () => closeAllTabs(),
+    
+    // 편집
+    undo: () => canUndo() && undo(),
+    redo: () => canRedo() && redo(),
+    selectAll: () => console.log('Select all'),
+    deleteSelected: () => console.log('Delete selected'),
+    
+    // 도구
+    selectTool: setSelectedTool,
+    
+    // 뷰
+    toggleCodeEditor,
+    toggleCopilot,
+    toggleSidebar,
+    toggleFullscreen: () => {
+      toggleFullscreen();
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => {
+          console.error('Fullscreen error:', err);
+        });
+      } else {
+        document.exitFullscreen();
+      }
+    },
+    
+    // 색상
+    setColor: setSelectedColor,
+    
+    // 폰트 크기
+    increaseFontSize: () => setFontSize(Math.min(72, fontSize + 2)),
+    decreaseFontSize: () => setFontSize(Math.max(8, fontSize - 2)),
+    resetFontSize: () => setFontSize(16),
+    
+    // 탭 탐색
+    nextTab: () => {
+      const currentIndex = tabs.findIndex(t => t.id === activeTabId);
+      const nextIndex = (currentIndex + 1) % tabs.length;
+      if (tabs[nextIndex]) {
+        setActiveTab(tabs[nextIndex].id);
+      }
+    },
+    prevTab: () => {
+      const currentIndex = tabs.findIndex(t => t.id === activeTabId);
+      const prevIndex = currentIndex - 1 < 0 ? tabs.length - 1 : currentIndex - 1;
+      if (tabs[prevIndex]) {
+        setActiveTab(tabs[prevIndex].id);
+      }
+    },
+    goToTab: (index) => {
+      if (tabs[index]) {
+        setActiveTab(tabs[index].id);
+      }
+    },
+    
+    // AI
+    triggerAICompletion: () => console.log('AI completion'),
+    explainCode: () => console.log('Explain code'),
+    optimizeCode: () => console.log('Optimize code'),
+    
+    // 기타
+    toggleComments: () => console.log('Toggle comments'),
+    find: () => console.log('Find'),
+    findAndReplace: () => console.log('Find and replace'),
+  });
 
-  const handleSaveFile = async () => {
-    console.log('Save file');
-  };
-
-  const handleSaveFileAs = async () => {
-    console.log('Save file as');
-  };
-
-  const handleCloseTab = () => {
-    if (activeTabId) {
-      removeTab(activeTabId);
-    }
-  };
-
-  const handleToggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen();
-    } else {
-      document.exitFullscreen();
-    }
-  };
-
-  const handleNextTab = () => {
-    const currentIndex = tabs.findIndex(t => t.id === activeTabId);
-    const nextIndex = (currentIndex + 1) % tabs.length;
-    if (tabs[nextIndex]) {
-      setActiveTab(tabs[nextIndex].id);
-    }
-  };
-
-  const handlePrevTab = () => {
-    const currentIndex = tabs.findIndex(t => t.id === activeTabId);
-    const prevIndex = currentIndex - 1 < 0 ? tabs.length - 1 : currentIndex - 1;
-    if (tabs[prevIndex]) {
-      setActiveTab(tabs[prevIndex].id);
-    }
-  };
-
+  // 다크 모드 적용
   useEffect(() => {
-    // 단축키 설정
-    const shortcuts = {
-      openFile: handleOpenFile,
-      saveFile: handleSaveFile,
-      saveFileAs: handleSaveFileAs,
-      closeTab: handleCloseTab,
-      undo: undo,
-      redo: redo,
-      selectTool: setSelectedTool,
-      toggleCodeEditor: toggleCodeEditor,
-      toggleCopilot: toggleCopilot,
-      toggleFullscreen: handleToggleFullscreen,
-      setColor: setSelectedColor,
-      increaseFontSize: () => setFontSize(fontSize + 2),
-      decreaseFontSize: () => setFontSize(Math.max(8, fontSize - 2)),
-      nextTab: handleNextTab,
-      prevTab: handlePrevTab,
-      triggerAICompletion: () => console.log('AI completion'),
-      explainSelection: () => console.log('Explain selection')
-    };
+    document.documentElement.classList.add('dark');
+  }, []);
 
-    shortcutService.setupDefaultShortcuts(shortcuts);
-
-    return () => {
-      shortcutService.unregisterAll();
-    };
-  }, [fontSize, undo, redo, setSelectedTool, toggleCodeEditor, toggleCopilot, setSelectedColor, setFontSize, tabs, activeTabId, toggleCodeEditor]);
+  return (
+    <Routes>
+      <Route path="/" element={<Layout />}>
+        <Route index element={<EditorPage />} />
+        <Route path="settings" element={<SettingsPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
+  );
 }
 
 export default App;

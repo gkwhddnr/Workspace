@@ -12,13 +12,13 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
-      webSecurity: false // 외부 웹사이트 로드용
+      webSecurity: false
     },
     titleBarStyle: 'default',
-    autoHideMenuBar: true
+    autoHideMenuBar: true,
+    backgroundColor: '#1e1e1e'
   });
 
-  // 개발 모드
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
@@ -47,22 +47,22 @@ app.on('window-all-closed', () => {
   }
 });
 
-// IPC Handlers
+// ==================== IPC Handlers ====================
 
-// 파일 불러오기
-ipcMain.handle('open-file-dialog', async (event, filters) => {
+// 파일 열기 다이얼로그
+ipcMain.handle('dialog:openFile', async (event, options = {}) => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
-    filters: filters || [
-      { name: 'All Files', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'hwp', 'html'] },
-      { name: 'PDF', extensions: ['pdf'] },
-      { name: 'Images', extensions: ['png', 'jpg', 'jpeg'] },
-      { name: 'HWP', extensions: ['hwp'] }
+    filters: options.filters || [
+      { name: 'All Files', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'hwp', 'html', 'docx'] },
+      { name: 'PDF Files', extensions: ['pdf'] },
+      { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+      { name: 'Documents', extensions: ['hwp', 'docx', 'txt'] }
     ]
   });
 
   if (result.canceled) {
-    return null;
+    return { canceled: true };
   }
 
   const filePath = result.filePaths[0];
@@ -74,20 +74,21 @@ ipcMain.handle('open-file-dialog', async (event, filters) => {
     const base64 = fileBuffer.toString('base64');
     
     return {
+      canceled: false,
       fileName,
       filePath,
       extension,
       base64,
-      size: fileBuffer.length
+      size: fileBuffer.length,
+      mimeType: getMimeType(extension)
     };
   } catch (error) {
-    console.error('File read error:', error);
-    throw error;
+    throw new Error(`파일 읽기 실패: ${error.message}`);
   }
 });
 
-// 파일 저장
-ipcMain.handle('save-file-dialog', async (event, { defaultName, data, fileType }) => {
+// 파일 저장 다이얼로그
+ipcMain.handle('dialog:saveFile', async (event, { defaultName, data, fileType }) => {
   const result = await dialog.showSaveDialog(mainWindow, {
     defaultPath: defaultName || 'untitled',
     filters: [
@@ -97,68 +98,123 @@ ipcMain.handle('save-file-dialog', async (event, { defaultName, data, fileType }
   });
 
   if (result.canceled) {
-    return null;
+    return { canceled: true };
   }
 
   try {
     const buffer = Buffer.from(data, 'base64');
     await fs.writeFile(result.filePath, buffer);
-    return { success: true, filePath: result.filePath };
+    return { 
+      canceled: false, 
+      success: true, 
+      filePath: result.filePath 
+    };
   } catch (error) {
-    console.error('File save error:', error);
-    throw error;
+    throw new Error(`파일 저장 실패: ${error.message}`);
   }
 });
 
 // 자동 저장
-ipcMain.handle('auto-save', async (event, { filePath, data }) => {
-  if (!filePath) return { success: false };
+ipcMain.handle('file:autoSave', async (event, { filePath, data }) => {
+  if (!filePath) {
+    return { success: false, error: 'No file path provided' };
+  }
   
   try {
     const buffer = Buffer.from(data, 'base64');
     await fs.writeFile(filePath, buffer);
-    return { success: true, timestamp: new Date().toISOString() };
+    return { 
+      success: true, 
+      timestamp: new Date().toISOString() 
+    };
   } catch (error) {
-    console.error('Auto save error:', error);
-    return { success: false, error: error.message };
+    return { 
+      success: false, 
+      error: error.message 
+    };
   }
 });
 
 // 파일 읽기
-ipcMain.handle('read-file', async (event, filePath) => {
+ipcMain.handle('file:read', async (event, filePath) => {
   try {
     const fileBuffer = await fs.readFile(filePath);
-    return fileBuffer.toString('base64');
+    return {
+      success: true,
+      data: fileBuffer.toString('base64'),
+      size: fileBuffer.length
+    };
   } catch (error) {
-    console.error('File read error:', error);
-    throw error;
+    throw new Error(`파일 읽기 실패: ${error.message}`);
   }
 });
 
-// MCP 서버와 통신 (여기서는 시뮬레이션)
-ipcMain.handle('mcp-request', async (event, { action, payload }) => {
+// 파일 쓰기
+ipcMain.handle('file:write', async (event, { filePath, data }) => {
+  try {
+    const buffer = Buffer.from(data, 'base64');
+    await fs.writeFile(filePath, buffer);
+    return { success: true };
+  } catch (error) {
+    throw new Error(`파일 쓰기 실패: ${error.message}`);
+  }
+});
+
+// MCP AI 요청 (시뮬레이션)
+ipcMain.handle('ai:request', async (event, { action, payload }) => {
+  console.log('AI Request:', action, payload);
+  
   // 실제로는 MCP 서버와 통신
-  // 여기서는 시뮬레이션된 응답 반환
-  console.log('MCP Request:', action, payload);
+  await new Promise(resolve => setTimeout(resolve, 500));
   
   switch (action) {
     case 'code_complete':
       return {
         suggestions: [
-          { text: 'const result = await fetch(...);', score: 0.95 },
-          { text: 'function handleClick() {', score: 0.87 }
+          { 
+            text: 'const handleClick = () => {\n  console.log("Clicked");\n};', 
+            score: 0.95,
+            description: '클릭 핸들러 함수'
+          },
+          { 
+            text: 'async function fetchData() {\n  const response = await fetch(url);\n  return response.json();\n}', 
+            score: 0.88,
+            description: '비동기 데이터 페칭'
+          }
         ]
       };
     
     case 'explain':
       return {
-        explanation: '이 코드는 비동기 함수를 정의하고 있습니다...'
+        explanation: `이 코드는 다음과 같이 동작합니다:\n\n1. 함수를 정의합니다\n2. 비동기 작업을 수행합니다\n3. 결과를 반환합니다\n\n주요 특징:\n- ES6+ 문법 사용\n- 에러 처리 포함\n- 타입 안전성`
       };
     
     case 'optimize':
       return {
-        optimized: payload.code.replace(/var /g, 'const '),
-        suggestions: ['var 대신 const/let 사용', '화살표 함수 고려']
+        optimized: payload.code.replace(/var /g, 'const ').replace(/function/g, 'const'),
+        suggestions: [
+          'var 대신 const/let 사용',
+          '화살표 함수로 변경',
+          '불필요한 중복 제거',
+          '메모이제이션 고려'
+        ]
+      };
+    
+    case 'debug':
+      return {
+        issues: [
+          {
+            line: 5,
+            severity: 'error',
+            message: '변수가 정의되지 않았습니다',
+            suggestion: 'const를 사용하여 변수를 선언하세요'
+          }
+        ]
+      };
+    
+    case 'chat':
+      return {
+        response: `질문에 대한 답변입니다:\n\n${payload.message}\n\n도움이 더 필요하시면 말씀해주세요!`
       };
     
     default:
@@ -167,13 +223,55 @@ ipcMain.handle('mcp-request', async (event, { action, payload }) => {
 });
 
 // 폴더 선택
-ipcMain.handle('select-folder', async () => {
+ipcMain.handle('dialog:selectFolder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory']
   });
   
-  if (result.canceled) return null;
-  return result.filePaths[0];
+  if (result.canceled) {
+    return { canceled: true };
+  }
+  
+  return { 
+    canceled: false, 
+    path: result.filePaths[0] 
+  };
 });
+
+// 앱 정보
+ipcMain.handle('app:getInfo', async () => {
+  return {
+    name: app.getName(),
+    version: app.getVersion(),
+    platform: process.platform,
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node
+  };
+});
+
+// 유틸리티 함수
+function getMimeType(extension) {
+  const mimeTypes = {
+    '.pdf': 'application/pdf',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.html': 'text/html',
+    '.htm': 'text/html',
+    '.css': 'text/css',
+    '.js': 'text/javascript',
+    '.json': 'application/json',
+    '.xml': 'application/xml',
+    '.txt': 'text/plain',
+    '.hwp': 'application/x-hwp',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  };
+  
+  return mimeTypes[extension] || 'application/octet-stream';
+}
 
 console.log('Electron app started');

@@ -1,21 +1,20 @@
-import React, { useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { FiPlay, FiCode, FiX } from 'react-icons/fi';
-import useWorkspaceStore from '../../stores/workspaceStore';
-import useAIStore from '../../stores/aiStore';
-import './CodeEditor.css';
+import useWorkspaceStore from '@stores/workspaceStore';
+import useAIStore from '@stores/aiStore';
 
 function CodeEditor() {
   const editorRef = useRef(null);
   const [previewHtml, setPreviewHtml] = useState('');
   const [showPreview, setShowPreview] = useState(false);
 
-  const { 
-    editorCode, 
-    editorLanguage, 
-    setEditorCode, 
+  const {
+    editorCode,
+    editorLanguage,
+    setEditorCode,
     setEditorLanguage,
-    toggleCodeEditor 
+    toggleCodeEditor,
   } = useWorkspaceStore();
 
   const { getCodeCompletion, codeSuggestions } = useAIStore();
@@ -23,7 +22,7 @@ function CodeEditor() {
   const handleEditorDidMount = (editor, monaco) => {
     editorRef.current = editor;
 
-    // AI 자동완성 제공자 등록
+    // AI 자동완성 제공자
     monaco.languages.registerCompletionItemProvider(editorLanguage, {
       provideCompletionItems: async (model, position) => {
         const code = model.getValue();
@@ -31,25 +30,26 @@ function CodeEditor() {
 
         try {
           await getCodeCompletion(code, offset);
-          
+
           return {
             suggestions: codeSuggestions.map((suggestion, index) => ({
-              label: suggestion.text,
+              label: suggestion.text.substring(0, 50),
               kind: monaco.languages.CompletionItemKind.Snippet,
               insertText: suggestion.text,
+              detail: suggestion.description,
               range: {
                 startLineNumber: position.lineNumber,
                 startColumn: position.column,
                 endLineNumber: position.lineNumber,
-                endColumn: position.column
+                endColumn: position.column,
               },
-              sortText: `0${index}`
-            }))
+              sortText: `0${index}`,
+            })),
           };
-        } catch (error) {
+        } catch {
           return { suggestions: [] };
         }
-      }
+      },
     });
   };
 
@@ -59,7 +59,6 @@ function CodeEditor() {
       setShowPreview(true);
     } else if (editorLanguage === 'javascript') {
       try {
-        // JavaScript 코드 실행 (안전하지 않으므로 주의)
         const result = eval(editorCode);
         console.log('Result:', result);
         alert(`결과: ${result}`);
@@ -75,42 +74,50 @@ function CodeEditor() {
     { value: 'javascript', label: 'JavaScript' },
     { value: 'typescript', label: 'TypeScript' },
     { value: 'python', label: 'Python' },
-    { value: 'json', label: 'JSON' }
+    { value: 'json', label: 'JSON' },
   ];
 
   return (
-    <div className="code-editor-panel">
-      <div className="code-editor-header">
-        <div className="code-editor-title">
+    <div className="flex flex-col h-full bg-gray-900">
+      {/* 헤더 */}
+      <div className="flex items-center justify-between h-12 px-4 bg-gray-800 border-b border-gray-700">
+        <div className="flex items-center gap-2 font-semibold">
           <FiCode />
           <span>코드 에디터</span>
         </div>
-        
-        <div className="code-editor-controls">
+
+        <div className="flex items-center gap-3">
           <select
             value={editorLanguage}
             onChange={(e) => setEditorLanguage(e.target.value)}
-            className="language-select"
+            className="px-3 py-1 bg-gray-700 border border-gray-600 rounded text-sm focus:border-primary-500"
           >
-            {languages.map(lang => (
+            {languages.map((lang) => (
               <option key={lang.value} value={lang.value}>
                 {lang.label}
               </option>
             ))}
           </select>
 
-          <button onClick={handleRunCode} className="run-button" title="실행 (Ctrl+Enter)">
+          <button
+            onClick={handleRunCode}
+            className="px-3 py-1 bg-primary-500 hover:bg-primary-600 rounded flex items-center gap-2 text-sm transition-colors"
+          >
             <FiPlay />
             <span>실행</span>
           </button>
 
-          <button onClick={toggleCodeEditor} className="close-button" title="닫기 (F12)">
+          <button
+            onClick={toggleCodeEditor}
+            className="p-2 hover:bg-gray-700 rounded transition-colors"
+          >
             <FiX />
           </button>
         </div>
       </div>
 
-      <div className="code-editor-content">
+      {/* 에디터 */}
+      <div className="flex-1 overflow-hidden">
         <Editor
           height="100%"
           language={editorLanguage}
@@ -119,31 +126,33 @@ function CodeEditor() {
           onMount={handleEditorDidMount}
           theme="vs-dark"
           options={{
-            minimap: { enabled: false },
+            minimap: { enabled: true },
             fontSize: 14,
             lineNumbers: 'on',
             roundedSelection: false,
             scrollBeyondLastLine: false,
             automaticLayout: true,
             tabSize: 2,
-            suggestOnTriggerCharacters: true,
-            quickSuggestions: true,
-            wordBasedSuggestions: false
+            wordWrap: 'on',
           }}
         />
       </div>
 
+      {/* 미리보기 */}
       {showPreview && editorLanguage === 'html' && (
-        <div className="code-preview">
-          <div className="code-preview-header">
-            <span>미리보기</span>
-            <button onClick={() => setShowPreview(false)}>
+        <div className="h-1/2 border-t border-gray-700 flex flex-col">
+          <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700">
+            <span className="font-medium text-sm">미리보기</span>
+            <button
+              onClick={() => setShowPreview(false)}
+              className="p-1 hover:bg-gray-700 rounded"
+            >
               <FiX />
             </button>
           </div>
           <iframe
             srcDoc={previewHtml}
-            className="preview-frame"
+            className="flex-1 bg-white"
             title="HTML Preview"
             sandbox="allow-scripts"
           />

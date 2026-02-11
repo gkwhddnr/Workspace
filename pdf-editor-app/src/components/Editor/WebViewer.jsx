@@ -1,33 +1,30 @@
-import React, { useRef, useEffect } from 'react';
-import './WebViewer.css';
+import { useRef, useEffect } from 'react';
 
 function WebViewer({ tab }) {
-  const webviewRef = useRef(null);
+  const iframeRef = useRef(null);
 
   useEffect(() => {
-    if (webviewRef.current && tab.content?.url) {
-      // 외부 웹사이트를 iframe으로 로드
+    if (iframeRef.current && tab.content?.url) {
       loadWebsite(tab.content.url);
     }
   }, [tab.content]);
 
   const loadWebsite = (url) => {
-    // URL 유효성 검사
     let validUrl = url;
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       validUrl = 'https://' + url;
     }
 
-    if (webviewRef.current) {
-      webviewRef.current.src = validUrl;
+    if (iframeRef.current) {
+      iframeRef.current.src = validUrl;
     }
   };
 
   return (
-    <div className="web-viewer">
+    <div className="w-full h-full bg-white">
       <iframe
-        ref={webviewRef}
-        className="webview-frame"
+        ref={iframeRef}
+        className="w-full h-full border-0"
         sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
         title="External Website"
       />

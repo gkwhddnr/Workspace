@@ -2,32 +2,34 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // Renderer 프로세스에 안전한 API 노출
 contextBridge.exposeInMainWorld('electronAPI', {
-  // 파일 작업
-  openFile: (filters) => ipcRenderer.invoke('open-file-dialog', filters),
-  saveFile: (data) => ipcRenderer.invoke('save-file-dialog', data),
-  autoSave: (data) => ipcRenderer.invoke('auto-save', data),
-  readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
+  // 다이얼로그
+  openFileDialog: (options) => ipcRenderer.invoke('dialog:openFile', options),
+  saveFileDialog: (data) => ipcRenderer.invoke('dialog:saveFile', data),
+  selectFolderDialog: () => ipcRenderer.invoke('dialog:selectFolder'),
   
-  // MCP AI 작업
-  mcpRequest: (request) => ipcRenderer.invoke('mcp-request', request),
+  // 파일 시스템
+  readFile: (filePath) => ipcRenderer.invoke('file:read', filePath),
+  writeFile: (data) => ipcRenderer.invoke('file:write', data),
+  autoSave: (data) => ipcRenderer.invoke('file:autoSave', data),
   
-  // 폴더 선택
-  selectFolder: () => ipcRenderer.invoke('select-folder'),
+  // AI
+  aiRequest: (request) => ipcRenderer.invoke('ai:request', request),
   
-  // 플랫폼 정보
+  // 앱 정보
+  getAppInfo: () => ipcRenderer.invoke('app:getInfo'),
+  
+  // 플랫폼
   platform: process.platform,
   
   // 이벤트 리스너
   on: (channel, callback) => {
-    const validChannels = ['file-saved', 'auto-save-status'];
+    const validChannels = ['file-saved', 'auto-save-status', 'ai-response'];
     if (validChannels.includes(channel)) {
-      ipcRenderer.on(channel, (event, ...args) => callback(...args));
+      const subscription = (event, ...args) => callback(...args);
+      ipcRenderer.on(channel, subscription);
+      return () => ipcRenderer.removeListener(channel, subscription);
     }
   },
-  
-  removeListener: (channel, callback) => {
-    ipcRenderer.removeListener(channel, callback);
-  }
 });
 
 console.log('Preload script loaded');
