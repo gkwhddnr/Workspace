@@ -1,0 +1,127 @@
+.code-editor-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-dark);
+}
+
+.code-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 48px;
+  padding: 0 16px;
+  background: var(--bg-light);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.code-editor-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.code-editor-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.language-select {
+  padding: 6px 12px;
+  background: var(--bg-dark);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.language-select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+}
+
+.run-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.run-button:hover {
+  background: var(--secondary-color);
+}
+
+.close-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.close-button:hover {
+  background: var(--hover-color);
+}
+
+.code-editor-content {
+  flex: 1;
+  overflow: hidden;
+}
+
+.code-preview {
+  height: 50%;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  background: white;
+}
+
+.code-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--bg-light);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.code-preview-header button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.code-preview-header button:hover {
+  background: var(--hover-color);
+}
+
+.preview-frame {
+  flex: 1;
+  border: none;
+  background: white;
+}
