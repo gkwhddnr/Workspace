@@ -19,16 +19,23 @@ function createWindow() {
     backgroundColor: '#1e1e1e'
   });
 
-  if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+  // 개발 모드 체크 개선
+  const isDev = !app.isPackaged;
+  
+  if (isDev) {
+    console.log('Development mode - Loading from localhost:5173');
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
   } else {
+    console.log('Production mode - Loading from dist');
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+  
+  console.log('Window created successfully');
 }
 
 app.whenReady().then(() => {
@@ -274,4 +281,8 @@ function getMimeType(extension) {
   return mimeTypes[extension] || 'application/octet-stream';
 }
 
-console.log('Electron app started');
+console.log('===========================================');
+console.log('Electron Main Process Started');
+console.log('App Path:', app.getAppPath());
+console.log('Is Packaged:', app.isPackaged);
+console.log('===========================================');
