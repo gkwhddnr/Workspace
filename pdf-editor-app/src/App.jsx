@@ -38,13 +38,49 @@ function App() {
   useGlobalShortcuts({
     // 파일
     openFile: () => openFile.mutate(),
-    saveFile: () => {
-      // 저장 로직
-      console.log('Save file');
+    saveFile: async () => {
+      const canvas = document.querySelector('canvas');
+      if (!canvas) {
+        alert('저장할 내용이 없습니다.');
+        return;
+      }
+      
+      try {
+        canvas.toBlob(async (blob) => {
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            const base64 = reader.result.split(',')[1];
+            const { fileName } = useEditorStore.getState();
+            await saveFile.mutateAsync({
+              fileName: fileName || 'untitled.png',
+              data: base64,
+              fileType: 'png'
+            });
+            alert('저장되었습니다!');
+          };
+          reader.readAsDataURL(blob);
+        });
+      } catch (error) {
+        console.error('Save error:', error);
+        alert('저장 실패');
+      }
     },
-    saveFileAs: () => {
-      // 다른 이름으로 저장
-      console.log('Save as');
+    saveFileAs: async () => {
+      const canvas = document.querySelector('canvas');
+      if (!canvas) return;
+      
+      canvas.toBlob(async (blob) => {
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const base64 = reader.result.split(',')[1];
+          await saveFile.mutateAsync({
+            fileName: 'untitled.png',
+            data: base64,
+            fileType: 'png'
+          });
+        };
+        reader.readAsDataURL(blob);
+      });
     },
     closeTab: () => {
       if (activeTabId) {

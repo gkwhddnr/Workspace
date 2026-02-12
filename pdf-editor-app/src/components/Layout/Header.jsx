@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { FiFile, FiSave, FiFolderPlus, FiSettings, FiInfo, FiGlobe } from 'react-icons/fi';
+import { FiFile, FiSave, FiFolderPlus, FiSettings, FiInfo, FiGlobe, FiAlertCircle } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 import useWorkspaceStore from '@stores/workspaceStore';
 import useEditorStore from '@stores/editorStore';
 import { useFileOperations } from '@hooks/useFileOperations';
+import { isElectron } from '../../utils/environment';
 
 function Header() {
   const [activeMenu, setActiveMenu] = useState(null);
@@ -23,6 +24,10 @@ function Header() {
   };
 
   const handleOpenFile = () => {
+    if (!isElectron()) {
+      alert('파일 열기는 Electron 환경에서만 가능합니다.\n터미널에서 "npm run dev"를 실행하세요.');
+      return;
+    }
     openFile.mutate();
     setActiveMenu(null);
   };
@@ -39,8 +44,76 @@ function Header() {
     setActiveMenu(null);
   };
 
-  const handleSave = () => {
-    // 저장 로직
+  const handleSave = async () => {
+    if (!isElectron()) {
+      alert('저장 기능은 Electron 환경에서만 가능합니다.');
+      return;
+    }
+    
+    const { filePath, fileName, fileContent } = useEditorStore.getState();
+    
+    if (!filePath) {
+      // 새 파일이면 다른 이름으로 저장
+      handleSaveAs();
+      return;
+    }
+
+    try {
+      // Canvas를 이미지로 내보내기
+      const canvas = document.querySelector('canvas');
+      if (canvas) {
+        canvas.toBlob(async (blob) => {
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            const base64 = reader.result.split(',')[1];
+            await saveFile.mutateAsync({
+              fileName: fileName,
+              data: base64,
+              fileType: 'png'
+            });
+            alert('저장되었습니다!');
+          };
+          reader.readAsDataURL(blob);
+        });
+      }
+    } catch (error) {
+      console.error('Save error:', error);
+      alert('저장 실패: ' + error.message);
+    }
+    
+    setActiveMenu(null);
+  };
+
+  const handleSaveAs = async () => {
+    if (!isElectron()) {
+      alert('저장 기능은 Electron 환경에서만 가능합니다.');
+      return;
+    }
+
+    try {
+      const canvas = document.querySelector('canvas');
+      if (canvas) {
+        canvas.toBlob(async (blob) => {
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            const base64 = reader.result.split(',')[1];
+            const result = await saveFile.mutateAsync({
+              fileName: 'untitled.png',
+              data: base64,
+              fileType: 'png'
+            });
+            if (result && !result.canceled) {
+              alert('저장되었습니다!');
+            }
+          };
+          reader.readAsDataURL(blob);
+        });
+      }
+    } catch (error) {
+      console.error('Save as error:', error);
+      alert('저장 실패: ' + error.message);
+    }
+    
     setActiveMenu(null);
   };
 
@@ -51,7 +124,7 @@ function Header() {
       { icon: <FiGlobe />, label: '웹페이지 열기', action: handleOpenUrl },
       { divider: true },
       { icon: <FiSave />, label: '저장', action: handleSave, shortcut: 'Ctrl+S' },
-      { icon: <FiSave />, label: '다른 이름으로 저장', action: () => {}, shortcut: 'Ctrl+Shift+S' },
+      { icon: <FiSave />, label: '다른 이름으로 저장', action: handleSaveAs, shortcut: 'Ctrl+Shift+S' },
     ],
     edit: [
       { label: '↶ 실행 취소', shortcut: 'Ctrl+Z' },
@@ -113,6 +186,12 @@ function Header() {
         <div className="flex items-center gap-2 font-semibold">
           <span className="text-2xl">📝</span>
           <span>PDF Editor Pro</span>
+          {!isElectron() && (
+            <span className="ml-2 px-2 py-1 bg-yellow-900 text-yellow-400 text-xs rounded border border-yellow-700 flex items-center gap-1">
+              <FiAlertCircle className="text-xs" />
+              브라우저 모드
+            </span>
+          )}
         </div>
 
         <nav className="flex gap-1">
