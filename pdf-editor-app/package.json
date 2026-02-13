@@ -15,6 +15,7 @@
     "@monaco-editor/react": "^4.6.0",
     "@tanstack/react-query": "^5.17.19",
     "axios": "^1.6.5",
+    "dotenv": "^16.6.1",
     "fabric": "^5.3.0",
     "mousetrap": "^1.6.5",
     "pdfjs-dist": "^3.11.174",
@@ -49,7 +50,9 @@
       "output": "release"
     },
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "build/icon.ico"
     }
   }

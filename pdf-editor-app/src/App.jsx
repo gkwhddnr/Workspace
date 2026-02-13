@@ -34,6 +34,33 @@ function App() {
 
   const { openFile, saveFile } = useFileOperations();
 
+  // -------------------------
+  // 앱 초기 설정 로드 (Electron 메인 또는 Vite env)
+  // -------------------------
+  useEffect(() => {
+    (async () => {
+      try {
+        // Electron 환경이면 preload에서 노출한 API 사용
+        if (window?.electronAPI?.getConfig) {
+          const cfg = await window.electronAPI.getConfig();
+          console.log('앱 설정 (from main):', cfg);
+
+          // 예: 필요하면 스토어에 저장하거나 UI에 반영하세요.
+          // 예: if (cfg?.aiModel) someStore.setAiModel(cfg.aiModel);
+        } else {
+          // 브라우저(Vite) 환경: import.meta.env 사용
+          console.log('Vite env (renderer):', {
+            provider: import.meta.env.VITE_AI_PROVIDER,
+            model: import.meta.env.VITE_AI_MODEL,
+            temperature: import.meta.env.VITE_AI_TEMPERATURE
+          });
+        }
+      } catch (err) {
+        console.error('getConfig error:', err);
+      }
+    })();
+  }, []); // 한 번만 실행
+
   // 전역 단축키 설정
   useGlobalShortcuts({
     // 파일

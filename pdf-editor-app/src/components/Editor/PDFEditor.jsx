@@ -23,7 +23,7 @@ function PDFEditor({ tab }) {
 
   // 캔버스 초기화
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || !canvasRef.current) return;
 
     try {
       initializeCanvas();
@@ -34,7 +34,12 @@ function PDFEditor({ tab }) {
     
     return () => {
       if (fabricCanvasRef.current) {
-        fabricCanvasRef.current.dispose();
+        try {
+          fabricCanvasRef.current.dispose();
+          fabricCanvasRef.current = null;
+        } catch (err) {
+          console.error('Canvas dispose error:', err);
+        }
       }
     };
   }, []);
@@ -56,7 +61,17 @@ function PDFEditor({ tab }) {
 
   const initializeCanvas = () => {
     if (fabricCanvasRef.current) {
-      fabricCanvasRef.current.dispose();
+      try {
+        fabricCanvasRef.current.dispose();
+        fabricCanvasRef.current = null;
+      } catch (err) {
+        console.error('Previous canvas dispose error:', err);
+      }
+    }
+
+    if (!canvasRef.current || !containerRef.current) {
+      console.error('Canvas or container ref not available');
+      return;
     }
 
     const container = containerRef.current;
@@ -76,11 +91,13 @@ function PDFEditor({ tab }) {
 
     // 리사이즈 핸들러
     const handleResize = () => {
-      canvas.setDimensions({
-        width: container.clientWidth - 40,
-        height: container.clientHeight - 40
-      });
-      canvas.renderAll();
+      if (canvas && containerRef.current) {
+        canvas.setDimensions({
+          width: containerRef.current.clientWidth - 40,
+          height: containerRef.current.clientHeight - 40
+        });
+        canvas.renderAll();
+      }
     };
 
     window.addEventListener('resize', handleResize);
@@ -107,6 +124,10 @@ function PDFEditor({ tab }) {
       else if (fileContent.extension === '.pdf') {
         await loadPDFAsImage(fileContent);
       }
+      // HWP 파일인 경우
+      else if (fileContent.extension === '.hwp') {
+        showPlaceholder('HWP 문서 미리보기\n\n(한글 파일 뷰어 통합 필요)', fileContent.fileName);
+      }
       // 기타 파일
       else {
         setError(`지원하지 않는 파일 형식: ${fileContent.extension}`);
@@ -122,6 +143,11 @@ function PDFEditor({ tab }) {
   const loadImage = (fileContent) => {
     return new Promise((resolve, reject) => {
       const canvas = fabricCanvasRef.current;
+      if (!canvas) {
+        reject(new Error('Canvas not initialized'));
+        return;
+      }
+
       const mimeType = fileContent.mimeType || 'image/png';
       
       console.log('Loading image with mimeType:', mimeType);
@@ -130,34 +156,39 @@ function PDFEditor({ tab }) {
       img.crossOrigin = 'anonymous';
       
       img.onload = () => {
-        console.log('Image loaded:', img.width, 'x', img.height);
-        
-        const fabricImg = new fabric.Image(img, {
-          left: 0,
-          top: 0,
-          selectable: false,
-          evented: false,
-        });
-        
-        // 캔버스에 맞게 스케일 조정
-        const scaleX = (canvas.width - 100) / fabricImg.width;
-        const scaleY = (canvas.height - 100) / fabricImg.height;
-        const scale = Math.min(scaleX, scaleY, 1); // 최대 원본 크기
-        
-        fabricImg.scale(scale);
-        fabricImg.set({
-          left: (canvas.width - fabricImg.width * scale) / 2,
-          top: (canvas.height - fabricImg.height * scale) / 2,
-        });
-        
-        canvas.clear();
-        canvas.backgroundColor = '#f0f0f0';
-        canvas.add(fabricImg);
-        canvas.sendToBack(fabricImg);
-        canvas.renderAll();
-        
-        console.log('Image rendered successfully');
-        resolve();
+        try {
+          console.log('Image loaded:', img.width, 'x', img.height);
+          
+          const fabricImg = new fabric.Image(img, {
+            left: 0,
+            top: 0,
+            selectable: false,
+            evented: false,
+          });
+          
+          // 캔버스에 맞게 스케일 조정
+          const scaleX = (canvas.width - 100) / fabricImg.width;
+          const scaleY = (canvas.height - 100) / fabricImg.height;
+          const scale = Math.min(scaleX, scaleY, 1); // 최대 원본 크기
+          
+          fabricImg.scale(scale);
+          fabricImg.set({
+            left: (canvas.width - fabricImg.width * scale) / 2,
+            top: (canvas.height - fabricImg.height * scale) / 2,
+          });
+          
+          canvas.clear();
+          canvas.backgroundColor = '#f0f0f0';
+          canvas.add(fabricImg);
+          canvas.sendToBack(fabricImg);
+          canvas.renderAll();
+          
+          console.log('Image rendered successfully');
+          resolve();
+        } catch (err) {
+          console.error('Image render error:', err);
+          reject(err);
+        }
       };
       
       img.onerror = (err) => {
@@ -178,72 +209,86 @@ function PDFEditor({ tab }) {
 
   const showPlaceholder = (message, fileName = '') => {
     const canvas = fabricCanvasRef.current;
-    if (!canvas) return;
+    if (!canvas) {
+      console.warn('Canvas not available for placeholder');
+      return;
+    }
 
-    canvas.clear();
-    canvas.backgroundColor = '#f5f5f5';
+    try {
+      canvas.clear();
+      canvas.backgroundColor = '#f5f5f5';
 
-    // 아이콘
-    const icon = new fabric.Text('📄', {
-      left: canvas.width / 2,
-      top: canvas.height / 2 - 100,
-      fontSize: 80,
-      fill: '#999',
-      originX: 'center',
-      originY: 'center',
-      selectable: false,
-    });
-
-    // 메시지
-    const text = new fabric.Text(message, {
-      left: canvas.width / 2,
-      top: canvas.height / 2,
-      fontSize: 18,
-      fill: '#666',
-      textAlign: 'center',
-      originX: 'center',
-      originY: 'center',
-      selectable: false,
-    });
-
-    // 파일명
-    if (fileName) {
-      const fileNameText = new fabric.Text(fileName, {
+      // 아이콘
+      const icon = new fabric.Text('📄', {
         left: canvas.width / 2,
-        top: canvas.height / 2 + 60,
-        fontSize: 14,
+        top: canvas.height / 2 - 100,
+        fontSize: 80,
         fill: '#999',
         originX: 'center',
         originY: 'center',
         selectable: false,
       });
-      canvas.add(fileNameText);
-    }
 
-    canvas.add(icon, text);
-    canvas.renderAll();
+      // 메시지
+      const text = new fabric.Text(message, {
+        left: canvas.width / 2,
+        top: canvas.height / 2,
+        fontSize: 18,
+        fill: '#666',
+        textAlign: 'center',
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+      });
+
+      // 파일명
+      if (fileName) {
+        const fileNameText = new fabric.Text(fileName, {
+          left: canvas.width / 2,
+          top: canvas.height / 2 + 60,
+          fontSize: 14,
+          fill: '#999',
+          originX: 'center',
+          originY: 'center',
+          selectable: false,
+        });
+        canvas.add(fileNameText);
+      }
+
+      canvas.add(icon, text);
+      canvas.renderAll();
+    } catch (err) {
+      console.error('Placeholder render error:', err);
+    }
   };
 
   const updateCanvasMode = () => {
     const canvas = fabricCanvasRef.current;
-    if (!canvas) return;
-
-    canvas.isDrawingMode = selectedTool === 'drawing';
-    canvas.selection = selectedTool === 'cursor';
-
-    if (selectedTool === 'drawing') {
-      canvas.freeDrawingBrush.color = selectedColor;
-      canvas.freeDrawingBrush.width = strokeWidth;
+    if (!canvas) {
+      console.warn('Canvas not available for mode update');
+      return;
     }
 
-    canvas.forEachObject((obj) => {
-      if (obj.type !== 'image') {
-        obj.selectable = selectedTool === 'cursor';
-        obj.evented = selectedTool === 'cursor';
-      }
-    });
+    try {
+      canvas.isDrawingMode = selectedTool === 'drawing';
+      canvas.selection = selectedTool === 'cursor';
 
-    canvas.renderAll();
+      if (selectedTool === 'drawing') {
+        canvas.freeDrawingBrush.color = selectedColor;
+        canvas.freeDrawingBrush.width = strokeWidth;
+      }
+
+      canvas.forEachObject((obj) => {
+        if (obj.type !== 'image') {
+          obj.selectable = selectedTool === 'cursor';
+          obj.evented = selectedTool === 'cursor';
+        }
+      });
+
+      canvas.renderAll();
+    } catch (err) {
+      console.error('Canvas mode update error:', err);
+    }
   };
 
   let isDrawing = false;

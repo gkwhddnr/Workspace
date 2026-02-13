@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
-import { FiPlay, FiCode, FiX, FiCpu, FiZap, FiBug } from 'react-icons/fi';
+import { FiPlay, FiCode, FiX, FiCpu, FiZap, FiAlertCircle } from 'react-icons/fi';
 import useWorkspaceStore from '@stores/workspaceStore';
 import useAIStore from '@stores/aiStore';
 
@@ -206,7 +206,7 @@ function CodeEditor() {
             className="px-2 py-1 bg-orange-600 hover:bg-orange-700 rounded text-xs flex items-center gap-1 transition-colors disabled:opacity-50"
             title="디버그"
           >
-            <FiBug className="text-sm" />
+            <FiAlertCircle className="text-sm" />
             <span>디버그</span>
           </button>
 

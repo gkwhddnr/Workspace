@@ -1,12 +1,37 @@
-// 현재 앱이 Electron 환경에서 실행 중인지 확인하는 함수
+// Electron 환경 체크
 export const isElectron = () => {
-    // 1. process 객체가 있는지 확인
-    // 2. process.versions에 electron이 포함되어 있는지 확인
-    return typeof window !== 'undefined' && 
-           typeof window.process !== 'undefined' && 
-           Boolean(window.process.versions.electron);
+  return typeof window !== 'undefined' && window.electronAPI;
 };
 
-// 필요하다면 다른 환경 변수들도 여기서 관리하면 편합니다.
-export const isDevelopment = import.meta.env.DEV;
-export const isProduction = import.meta.env.PROD;
+// 브라우저 환경 체크
+export const isBrowser = () => {
+  return typeof window !== 'undefined' && !window.electronAPI;
+};
+
+// 환경 정보 가져오기
+export const getEnvironment = () => {
+  if (isElectron()) {
+    return 'electron';
+  }
+  if (isBrowser()) {
+    return 'browser';
+  }
+  return 'unknown';
+};
+
+// Electron API 사용 가능 여부 체크
+export const hasElectronAPI = () => {
+  return typeof window !== 'undefined' && 
+         typeof window.electronAPI !== 'undefined';
+};
+
+// 특정 Electron API 기능 체크
+export const canUseFileSystem = () => {
+  return hasElectronAPI() && 
+         typeof window.electronAPI.openFileDialog === 'function';
+};
+
+export const canUseAI = () => {
+  return hasElectronAPI() && 
+         typeof window.electronAPI.aiRequest === 'function';
+};

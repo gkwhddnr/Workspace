@@ -17,7 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // 앱 정보
   getAppInfo: () => ipcRenderer.invoke('app:getInfo'),
-  
+  getConfig: () => ipcRenderer.invoke('app:getConfig'),
+
   // 플랫폼
   platform: process.platform,
   
