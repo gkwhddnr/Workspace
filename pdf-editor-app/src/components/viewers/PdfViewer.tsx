@@ -15,6 +15,8 @@ const PdfViewer: React.FC = () => {
     const containerRef = useRef<HTMLDivElement>(null);
 
     const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
+    const [imageDoc, setImageDoc] = useState<HTMLImageElement | null>(null);
+    const [docType, setDocType] = useState<'pdf' | 'image' | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
     const [numPages, setNumPages] = useState(0);
     const [scale, setScale] = useState(1.0);
@@ -32,6 +34,34 @@ const PdfViewer: React.FC = () => {
     const [tempText, setTempText] = useState('');
 
     const { activeTool, toolSettings } = useAppStore();
+
+    const renderImage = useCallback(
+        async (img: HTMLImageElement, s: number) => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d')!;
+
+            const width = Math.max(1, Math.round(img.naturalWidth * s));
+            const height = Math.max(1, Math.round(img.naturalHeight * s));
+
+            canvas.width = width;
+            canvas.height = height;
+            if (overlayCanvasRef.current) {
+                overlayCanvasRef.current.width = width;
+                overlayCanvasRef.current.height = height;
+            }
+
+            ctx.clearRect(0, 0, width, height);
+            ctx.drawImage(img, 0, 0, width, height);
+
+            setTextBlocks([]); // 이미지에는 PDF 텍스트 블록이 없음
+            setHistory([]);
+            setHistoryIndex(-1);
+            const overlay = overlayCanvasRef.current;
+            if (overlay) overlay.getContext('2d')!.clearRect(0, 0, overlay.width, overlay.height);
+        },
+        [setTextBlocks]
+    );
 
     const renderPage = useCallback(
         async (page: pdfjsLib.PDFPageProxy, s: number) => {
@@ -92,6 +122,8 @@ const PdfViewer: React.FC = () => {
             const doc = await loadingTask.promise;
             console.log('PDF loaded successfully:', doc.numPages, 'pages');
 
+            setDocType('pdf');
+            setImageDoc(null);
             setPdfDoc(doc);
             setNumPages(doc.numPages);
             setCurrentPage(1);
@@ -103,13 +135,75 @@ const PdfViewer: React.FC = () => {
         }
     };
 
+    const loadImage = async (file: File) => {
+        try {
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+            img.onload = async () => {
+                try {
+                    setDocType('image');
+                    setPdfDoc(null);
+                    setImageDoc(img);
+                    setNumPages(1);
+                    setCurrentPage(1);
+                    setCurrentFile(file.name, file.name);
+                    await renderImage(img, scale);
+                } finally {
+                    URL.revokeObjectURL(url);
+                }
+            };
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                throw new Error('이미지 로드에 실패했습니다.');
+            };
+            img.src = url;
+        } catch (error) {
+            console.error('Error loading image:', error);
+            alert(`이미지 로드 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
+
+    const convertOfficeToPdfAndLoad = async (file: File) => {
+        try {
+            const formData = new FormData();
+            formData.append('file', file, file.name);
+
+            const response = await fetch('http://localhost:8080/api/pdf/convert-to-pdf', {
+                method: 'POST',
+                body: formData,
+            });
+
+            if (!response.ok) {
+                const text = await response.text().catch(() => '');
+                throw new Error(text || 'PPT 변환에 실패했습니다. (LibreOffice 설치/설정 필요)');
+            }
+
+            const blob = await response.blob();
+            const baseName = file.name.replace(/\.(ppt|pptx)$/i, '');
+            const pdfFile = new File([blob], `${baseName}.pdf`, { type: 'application/pdf' });
+            await loadPdf(pdfFile);
+        } catch (error) {
+            console.error('Error converting PPT to PDF:', error);
+            alert(`PPT 변환 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
+
+    const loadAnyDocument = async (file: File) => {
+        const lower = file.name.toLowerCase();
+        if (lower.endsWith('.pdf') || file.type === 'application/pdf') return loadPdf(file);
+        if (lower.endsWith('.png') || file.type === 'image/png') return loadImage(file);
+        if (lower.endsWith('.ppt') || lower.endsWith('.pptx')) return convertOfficeToPdfAndLoad(file);
+
+        alert('지원하지 않는 파일 형식입니다. (PDF, PNG, PPT, PPTX)');
+    };
+
     const handleFileOpen = async () => {
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = '.pdf';
+        input.accept = '.pdf,.png,.ppt,.pptx';
         input.onchange = async (e) => {
             const file = (e.target as HTMLInputElement).files?.[0];
-            if (file) await loadPdf(file);
+            if (file) await loadAnyDocument(file);
         };
         input.click();
     };
@@ -118,7 +212,7 @@ const PdfViewer: React.FC = () => {
         e.preventDefault();
         setIsDraggingOver(false);
         const file = e.dataTransfer.files[0];
-        if (file?.type === 'application/pdf') await loadPdf(file);
+        if (file) await loadAnyDocument(file);
     };
 
     const getPos = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -200,12 +294,15 @@ const PdfViewer: React.FC = () => {
     }, [handleUndo, handleRedo]);
 
     useEffect(() => {
-        if (pdfDoc) loadPage(pdfDoc, currentPage, scale);
-    }, [currentPage, scale, pdfDoc, loadPage]);
+        if (pdfDoc) {
+            loadPage(pdfDoc, currentPage, scale);
+        } else if (imageDoc) {
+            renderImage(imageDoc, scale);
+        }
+    }, [currentPage, scale, pdfDoc, imageDoc, loadPage, renderImage]);
 
     const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
         if (activeTool === 'select' || activeTool === 'text') return;
-        saveToHistory();
         setIsDrawing(true);
         const pos = getPos(e);
         setStartPos(pos);
@@ -216,15 +313,25 @@ const PdfViewer: React.FC = () => {
         ctx.beginPath();
         ctx.moveTo(pos.x, pos.y);
 
-        // Highlight logic: semi-transparent and thicker
-        if (activeTool === 'highlight') {
-            ctx.globalAlpha = 0.4;
+        ctx.globalCompositeOperation = 'source-over';
+
+        const highlightAsStroke = activeTool === 'highlight' && (docType === 'image' || textBlocks.length === 0);
+
+        if (activeTool === 'eraser') {
+            // 진짜 지우개(투명 처리): 이미지 위에서도 자연스럽게 동작
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.globalAlpha = 1.0;
+            ctx.strokeStyle = 'rgba(0,0,0,1)';
+            ctx.lineWidth = toolSettings.strokeWidth * 10;
+        } else if (activeTool === 'highlight') {
+            ctx.globalAlpha = 0.35;
             ctx.strokeStyle = toolSettings.color;
             ctx.lineWidth = toolSettings.strokeWidth * 10;
+            // highlightAsStroke 여부는 draw()에서 처리
         } else {
             ctx.globalAlpha = 1.0;
-            ctx.strokeStyle = activeTool === 'eraser' ? '#ffffff' : toolSettings.color;
-            ctx.lineWidth = activeTool === 'eraser' ? toolSettings.strokeWidth * 5 : toolSettings.strokeWidth;
+            ctx.strokeStyle = toolSettings.color;
+            ctx.lineWidth = toolSettings.strokeWidth;
         }
 
         ctx.lineCap = 'round';
@@ -237,7 +344,9 @@ const PdfViewer: React.FC = () => {
         const ctx = canvas.getContext('2d')!;
         const pos = getPos(e);
 
-        if (activeTool === 'pen' || activeTool === 'eraser') {
+        const highlightAsStroke = activeTool === 'highlight' && (docType === 'image' || textBlocks.length === 0);
+
+        if (activeTool === 'pen' || activeTool === 'eraser' || (activeTool === 'highlight' && highlightAsStroke)) {
             ctx.lineTo(pos.x, pos.y);
             ctx.stroke();
         } else if (activeTool === 'highlight') {
@@ -257,9 +366,8 @@ const PdfViewer: React.FC = () => {
                 }
             }
         } else if ((activeTool === 'rect' || activeTool === 'circle') && startPos) {
-            const lastState = history[history.length - 1];
-            if (lastState) {
-                ctx.putImageData(lastState, 0, 0);
+            if (historyIndex >= 0 && history[historyIndex]) {
+                ctx.putImageData(history[historyIndex], 0, 0);
             } else {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
             }
@@ -283,10 +391,12 @@ const PdfViewer: React.FC = () => {
     const endDraw = () => {
         if (!isDrawing) return;
         setIsDrawing(false);
+        saveToHistory();
         setStartPos(null);
         const ctx = overlayCanvasRef.current?.getContext('2d')!;
         ctx.beginPath();
         ctx.globalAlpha = 1.0; // Reset alpha
+        ctx.globalCompositeOperation = 'source-over';
     };
 
     const handleTextClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -388,20 +498,31 @@ const PdfViewer: React.FC = () => {
         const baseName = currentFileName ? currentFileName.replace(/\.pdf$/i, '') : 'document';
         const finalFileName = `edited_${baseName}.pdf`.replace(/[\\/:*?"<>|]/g, '_');
 
-        // Robust download trigger
+        // Robust download trigger replaced with upload to backend
         const blob = pdf.output('blob');
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = finalFileName;
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
 
-        setTimeout(() => {
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-        }, 100);
+        const formData = new FormData();
+        formData.append('file', blob, finalFileName);
+        formData.append('filename', finalFileName);
+
+        try {
+            const response = await fetch('http://localhost:8080/api/pdf/save', {
+                method: 'POST',
+                body: formData,
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                console.log('Saved to backend successfully:', data);
+                alert(`성공적으로 저장되었습니다: ${data.savedFileName}\n(다운로드 폴더)`);
+            } else {
+                console.error('Failed to save to backend');
+                alert('저장에 실패했습니다.');
+            }
+        } catch (error) {
+            console.error('Error saving to backend:', error);
+            alert('서버 연결 오류가 발생했습니다.');
+        }
     };
 
     const changePage = (delta: number) => {
@@ -409,7 +530,8 @@ const PdfViewer: React.FC = () => {
         setCurrentPage(newPage);
     };
 
-    if (!pdfDoc) {
+    const hasDocument = !!pdfDoc || !!imageDoc;
+    if (!hasDocument) {
         return (
             <div
                 className={`flex-1 flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed transition-colors ${isDraggingOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white'}`}
@@ -418,12 +540,12 @@ const PdfViewer: React.FC = () => {
                 onDrop={handleDrop}
             >
                 <FileUp size={48} className="text-gray-300" />
-                <p className="text-gray-500 font-medium">PDF 파일을 드래그하거나 버튼을 클릭하세요</p>
+                <p className="text-gray-500 font-medium">PDF/PNG/PPT 파일을 드래그하거나 버튼을 클릭하세요</p>
                 <button
                     onClick={handleFileOpen}
                     className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"
                 >
-                    PDF 파일 열기
+                    파일 열기
                 </button>
             </div>
         );
