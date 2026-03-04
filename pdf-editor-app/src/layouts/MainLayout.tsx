@@ -118,9 +118,15 @@ const MainLayout: React.FC = () => {
                     <Panel defaultSize={50} className="flex flex-col min-w-0 bg-[#f8fafc]">
                         <div className="flex-1 p-6 overflow-hidden animate-slide-up">
                             <div className="h-full flex flex-col min-h-0 bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-200/60 overflow-hidden relative">
-                                {activeTab === 'pdf' && <PdfViewer />}
-                                {activeTab === 'web' && <WebViewer />}
-                                {activeTab === 'code' && <CodeViewer />}
+                                <div className={activeTab === 'pdf' ? 'flex-1 flex flex-col min-h-0' : 'hidden'}>
+                                    <PdfViewer />
+                                </div>
+                                <div className={activeTab === 'web' ? 'flex-1 flex flex-col min-h-0' : 'hidden'}>
+                                    <WebViewer />
+                                </div>
+                                <div className={activeTab === 'code' ? 'flex-1 flex flex-col min-h-0' : 'hidden'}>
+                                    <CodeViewer />
+                                </div>
                             </div>
                         </div>
                     </Panel>

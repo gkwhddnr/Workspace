@@ -9,7 +9,7 @@ import { jsPDF } from 'jspdf';
 pdfjsLib.GlobalWorkerOptions.workerSrc = window.location.origin + '/pdf.worker.min.js';
 
 const PdfViewer: React.FC = () => {
-    const { currentFileName, setCurrentFile, textBlocks, setTextBlocks } = useAppStore();
+    const { currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTab } = useAppStore();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -32,6 +32,10 @@ const PdfViewer: React.FC = () => {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [inputPos, setInputPos] = useState<{ x: number; y: number } | null>(null);
     const [tempText, setTempText] = useState('');
+
+    // 다른 이름으로 저장 다이얼로그 상태
+    const [isSaveAsDialogOpen, setIsSaveAsDialogOpen] = useState(false);
+    const [saveAsName, setSaveAsName] = useState('');
 
     const { activeTool, toolSettings } = useAppStore();
 
@@ -127,7 +131,6 @@ const PdfViewer: React.FC = () => {
             setPdfDoc(doc);
             setNumPages(doc.numPages);
             setCurrentPage(1);
-            setCurrentFile(file.name, file.name);
             await loadPage(doc, 1, scale);
         } catch (error) {
             console.error('Error loading PDF:', error);
@@ -146,7 +149,6 @@ const PdfViewer: React.FC = () => {
                     setImageDoc(img);
                     setNumPages(1);
                     setCurrentPage(1);
-                    setCurrentFile(file.name, file.name);
                     await renderImage(img, scale);
                 } finally {
                     URL.revokeObjectURL(url);
@@ -198,12 +200,46 @@ const PdfViewer: React.FC = () => {
     };
 
     const handleFileOpen = async () => {
+        const anyWindow = window as any;
+        const electronAPI = anyWindow?.electronAPI;
+
+        // Electron 환경: 네이티브 파일 열기 다이얼로그 사용
+        if (electronAPI?.openFileDialog) {
+            try {
+                const result = await electronAPI.openFileDialog({
+                    filters: [
+                        { name: 'PDF / 이미지 / PPT', extensions: ['pdf', 'png', 'ppt', 'pptx'] },
+                    ],
+                });
+                if (result?.canceled) return;
+
+                const { fileName, filePath, data, mimeType } = result;
+
+                // data is already a Uint8Array (or Buffer) when coming from invoke
+                const blob = new Blob([data], { type: mimeType || 'application/pdf' });
+                const file = new File([blob], fileName, { type: mimeType || 'application/pdf' });
+
+                setCurrentFile(filePath, fileName);
+                await loadAnyDocument(file);
+                return;
+            } catch (error) {
+                console.error('Electron 파일 열기 오류:', error);
+                alert(`파일을 여는 동안 오류가 발생했습니다:\n${error instanceof Error ? error.message : String(error)}`);
+                return;
+            }
+        }
+
+        // 브라우저 환경 / Electron API 미사용: 기존 input 방식
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = '.pdf,.png,.ppt,.pptx';
         input.onchange = async (e) => {
             const file = (e.target as HTMLInputElement).files?.[0];
-            if (file) await loadAnyDocument(file);
+            if (file) {
+                const path = (file as any).path || file.name;
+                setCurrentFile(path, file.name);
+                await loadAnyDocument(file);
+            }
         };
         input.click();
     };
@@ -212,7 +248,11 @@ const PdfViewer: React.FC = () => {
         e.preventDefault();
         setIsDraggingOver(false);
         const file = e.dataTransfer.files[0];
-        if (file) await loadAnyDocument(file);
+        if (file) {
+            const path = (file as any).path || file.name;
+            setCurrentFile(path, file.name);
+            await loadAnyDocument(file);
+        }
     };
 
     const getPos = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -284,14 +324,45 @@ const PdfViewer: React.FC = () => {
         drawAllAnnotations(ctx);
     }, [textAnnotations, history, historyIndex, isDrawing, drawAllAnnotations]);
 
+    // Global keyboard shortcuts (undo/redo, page navigation)
     useEffect(() => {
         const handleKey = (e: KeyboardEvent) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); handleUndo(); }
-            if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); handleRedo(); }
+            // Only when PDF 탭이 활성화된 경우에만 동작
+            if (activeTab !== 'pdf') return;
+
+            const target = e.target as HTMLElement | null;
+            const tagName = target?.tagName.toLowerCase();
+            if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) {
+                return;
+            }
+
+            // Undo / Redo
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                e.preventDefault();
+                handleUndo();
+                return;
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+                e.preventDefault();
+                handleRedo();
+                return;
+            }
+
+            // Page navigation with arrow keys
+            if (!e.ctrlKey && !e.metaKey && !e.altKey && (pdfDoc || imageDoc) && numPages > 0) {
+                if (e.key === 'ArrowRight' && currentPage < numPages) {
+                    e.preventDefault();
+                    setCurrentPage((prev) => Math.min(numPages, prev + 1));
+                } else if (e.key === 'ArrowLeft' && currentPage > 1) {
+                    e.preventDefault();
+                    setCurrentPage((prev) => Math.max(1, prev - 1));
+                }
+            }
         };
+
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [handleUndo, handleRedo]);
+    }, [handleUndo, handleRedo, activeTab, pdfDoc, imageDoc, currentPage, numPages]);
 
     useEffect(() => {
         if (pdfDoc) {
@@ -472,10 +543,11 @@ const PdfViewer: React.FC = () => {
 
     const isInputActive = inputPos !== null;
 
-    const handleSave = async () => {
+    // 공통: 현재 캔버스 상태를 PDF Blob으로 변환
+    const createEditedPdfBlob = () => {
         const canvas = canvasRef.current;
         const overlay = overlayCanvasRef.current;
-        if (!canvas || !overlay) return;
+        if (!canvas || !overlay) return null;
 
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = canvas.width;
@@ -493,35 +565,137 @@ const PdfViewer: React.FC = () => {
         });
 
         pdf.addImage(imgData, 'JPEG', 0, 0, canvas.width, canvas.height);
+        return pdf.output('blob');
+    };
 
-        // Sanitize and prepare filename
-        const baseName = currentFileName ? currentFileName.replace(/\.pdf$/i, '') : 'document';
-        const finalFileName = `edited_${baseName}.pdf`.replace(/[\\/:*?"<>|]/g, '_');
+    const blobToBase64 = (blob: Blob): Promise<string> => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const dataUrl = reader.result as string;
+                const base64 = dataUrl.split(',')[1] || '';
+                resolve(base64);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    };
 
-        // Robust download trigger replaced with upload to backend
-        const blob = pdf.output('blob');
+    // 1) 저장: 현재 불러온 파일 위치에 그대로 덮어쓰기
+    const handleSave = async () => {
+        const blob = createEditedPdfBlob();
+        if (!blob) return;
 
-        const formData = new FormData();
-        formData.append('file', blob, finalFileName);
-        formData.append('filename', finalFileName);
+        const anyWindow = window as any;
+        const electronAPI = anyWindow?.electronAPI;
 
-        try {
-            const response = await fetch('http://localhost:8080/api/pdf/save', {
-                method: 'POST',
-                body: formData,
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                console.log('Saved to backend successfully:', data);
-                alert(`성공적으로 저장되었습니다: ${data.savedFileName}\n(다운로드 폴더)`);
-            } else {
-                console.error('Failed to save to backend');
-                alert('저장에 실패했습니다.');
+        // Electron + 원본 경로가 있는 경우: 해당 경로에 바로 덮어쓰기
+        if (electronAPI?.autoSave && currentFilePath) {
+            try {
+                const base64 = await blobToBase64(blob);
+                const result = await electronAPI.autoSave({ filePath: currentFilePath, data: base64 });
+                if (result?.success) {
+                    alert('원본 파일에 성공적으로 저장되었습니다.');
+                } else {
+                    console.error('AutoSave 실패:', result);
+                    alert('저장에 실패했습니다.');
+                }
+            } catch (error) {
+                console.error('AutoSave 오류:', error);
+                alert('저장 중 오류가 발생했습니다.');
             }
-        } catch (error) {
-            console.error('Error saving to backend:', error);
-            alert('서버 연결 오류가 발생했습니다.');
+            return;
+        }
+
+        // Electron 이 아니거나 경로를 모를 때: 파일 이름만 동일한 새 파일 다운로드(백업용)
+        const baseName = currentFileName ? currentFileName.replace(/\.pdf$/i, '') : 'document';
+        const finalFileName = `${baseName}.pdf`.replace(/[\\/:*?"<>|]/g, '_');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = finalFileName;
+        a.click();
+        URL.revokeObjectURL(url);
+        alert('원본 경로를 알 수 없어 새 파일로 저장했습니다.');
+    };
+
+    // 2) 다른 이름으로 저장: 다이얼로그를 열어 새 파일명 입력 후 같은 폴더에 새로 저장
+    const openSaveAsDialog = () => {
+        const base = currentFileName || 'document.pdf';
+        const normalized = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
+        setSaveAsName(normalized);
+        setIsSaveAsDialogOpen(true);
+    };
+
+    const confirmSaveAs = async () => {
+        const blob = createEditedPdfBlob();
+        if (!blob) return;
+
+        let name = saveAsName.trim();
+        if (!name) {
+            alert('파일 이름을 입력하세요.');
+            return;
+        }
+        if (!name.toLowerCase().endsWith('.pdf')) {
+            name += '.pdf';
+        }
+
+        const anyWindow = window as any;
+        const electronAPI = anyWindow?.electronAPI;
+
+        // 1순위: 원본 파일과 같은 폴더에 새 이름으로 저장
+        if (electronAPI?.writeFile && currentFilePath) {
+            try {
+                const base64 = await blobToBase64(blob);
+                const lastSlash = Math.max(
+                    currentFilePath.lastIndexOf('\\'),
+                    currentFilePath.lastIndexOf('/')
+                );
+                const dir = lastSlash >= 0 ? currentFilePath.slice(0, lastSlash + 1) : '';
+                const targetPath = dir + name;
+
+                const result = await electronAPI.writeFile({ filePath: targetPath, data: base64 });
+                if (result?.success) {
+                    setCurrentFile(targetPath, name);
+                    alert(`다른 이름으로 저장되었습니다:\n${targetPath}`);
+                    setIsSaveAsDialogOpen(false);
+                    return;
+                } else {
+                    console.error('writeFile 실패:', result);
+                    alert('저장에 실패했습니다.');
+                }
+            } catch (error) {
+                console.error('writeFile 오류:', error);
+                alert('저장 중 오류가 발생했습니다.');
+            }
+        } else if (electronAPI?.saveFileDialog) {
+            // 2순위: 사용자가 직접 위치를 선택하는 저장 다이얼로그
+            try {
+                const base64 = await blobToBase64(blob);
+                const result = await electronAPI.saveFileDialog({
+                    defaultName: name,
+                    data: base64,
+                    fileType: 'pdf',
+                });
+                if (!result?.canceled && result?.success) {
+                    setCurrentFile(result.filePath, name);
+                    alert(`다른 이름으로 저장되었습니다:\n${result.filePath}`);
+                    setIsSaveAsDialogOpen(false);
+                    return;
+                }
+            } catch (error) {
+                console.error('saveFileDialog 오류:', error);
+                alert('저장 중 오류가 발생했습니다.');
+            }
+        } else {
+            // 브라우저 환경: 단순 다운로드
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = name.replace(/[\\/:*?"<>|]/g, '_');
+            a.click();
+            URL.revokeObjectURL(url);
+            alert('브라우저 환경에서는 다운로드 폴더로 저장됩니다.');
         }
     };
 
@@ -567,8 +741,17 @@ const PdfViewer: React.FC = () => {
                 <button onClick={handleUndo} title="Ctrl+Z" className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-700 transition-colors">↩ 취소</button>
                 <button onClick={handleRedo} title="Ctrl+Y" className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-700 transition-colors">↪ 복구</button>
                 <span className="text-xs text-gray-400">|</span>
-                <button onClick={handleSave} className="flex items-center gap-1 text-xs px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors shadow-sm">
-                    <Save size={14} /> 다운로드
+                <button
+                    onClick={handleSave}
+                    className="flex items-center gap-1 text-xs px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors shadow-sm"
+                >
+                    <Save size={14} /> 저장
+                </button>
+                <button
+                    onClick={openSaveAsDialog}
+                    className="flex items-center gap-1 text-xs px-3 py-1 bg-indigo-500 hover:bg-indigo-600 text-white rounded transition-colors shadow-sm"
+                >
+                    <Save size={14} /> 다른 이름으로 저장
                 </button>
                 {currentFileName && <span className="ml-auto text-xs text-gray-500 truncate max-w-[200px]">{currentFileName}</span>}
             </div>
@@ -616,6 +799,39 @@ const PdfViewer: React.FC = () => {
                     )}
                 </div>
             </div>
+
+            {/* 다른 이름으로 저장 다이얼로그 */}
+            {isSaveAsDialogOpen && (
+                <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-300">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 border border-slate-200 animate-in zoom-in-95 duration-200">
+                        <h3 className="text-lg font-bold text-slate-900 mb-4">다른 이름으로 저장</h3>
+                        <p className="text-sm text-slate-500 mb-4">새 파일 이름을 입력하세요. 원본 파일과 같은 폴더에 저장됩니다.</p>
+                        <input
+                            type="text"
+                            value={saveAsName}
+                            onChange={(e) => setSaveAsName(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && confirmSaveAs()}
+                            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-6 text-slate-900"
+                            placeholder="파일명 입력"
+                            autoFocus
+                        />
+                        <div className="flex justify-end gap-3">
+                            <button
+                                onClick={() => setIsSaveAsDialogOpen(false)}
+                                className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-100 transition-colors"
+                            >
+                                취소
+                            </button>
+                            <button
+                                onClick={confirmSaveAs}
+                                className="px-5 py-2.5 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-500/20 transition-all hover:-translate-y-0.5"
+                            >
+                                저장하기
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

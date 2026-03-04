@@ -29,43 +29,83 @@ const AiPanel: React.FC = () => {
         setIsLoading(true);
 
         try {
-            // Simulated AI Agent responses for demo - moving away from strict API key requirement
-            const response = await axios.post(
-                'https://api.openai.com/v1/chat/completions',
-                {
-                    model: 'gpt-3.5-turbo',
-                    messages: [
-                        {
-                            role: 'system',
-                            content: `당신은 ${aiAgent} AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다. 
-                                현재 사용자의 작업 컨텍스트:
-                                - 현재 탭: ${activeTab}
-                                - 열린 파일: ${currentFileName || '없음'}
-                                - 웹 서퍼 주소: ${webUrl}
-                                - 코드 에디터 언어: ${codeLanguage}
-                                사용자의 의도를 파악하여 전문적인 도움을 제공해 주세요.`
+            const openaiKey = (import.meta as any).env?.VITE_OPENAI_API_KEY;
+            const googleKey = (import.meta as any).env?.VITE_GOOGLE_API_KEY;
+
+            if (aiAgent === 'gemini') {
+                if (!googleKey) throw new Error('Google API 키가 설정되지 않았습니다. .env 파일을 확인해 주세요.');
+
+                const googleModel = (import.meta as any).env?.VITE_AI_MODEL || 'gemini-1.5-flash-latest';
+
+                // Gemini API Call
+                const response = await axios.post(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:generateContent?key=${googleKey}`,
+                    {
+                        system_instruction: {
+                            parts: [{ text: `당신은 Gemini AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다. 현재 사용자의 작업 컨텍스트: 현재 탭: ${activeTab}, 열린 파일: ${currentFileName || '없음'}, 웹 서퍼 주소: ${webUrl}, 코드 에디터 언어: ${codeLanguage}.` }]
                         },
-                        ...aiMessages.map((m: any) => ({ role: m.role, content: m.content })),
-                        { role: 'user', content: text },
-                    ],
-                    max_tokens: 1000,
-                },
-                {
-                    headers: {
-                        Authorization: `Bearer ${(import.meta as any).env?.VITE_OPENAI_API_KEY || ''}`,
-                        'Content-Type': 'application/json',
+                        contents: [
+                            ...aiMessages.map((m: any) => ({
+                                role: m.role === 'assistant' ? 'model' : 'user',
+                                parts: [{ text: m.content }]
+                            })),
+                            { role: 'user', parts: [{ text: text }] }
+                        ]
+                    }
+                );
+                const reply = response.data.candidates[0].content.parts[0].text;
+                addAiMessage('assistant', reply);
+            } else if (aiAgent === 'chatgpt') {
+                if (!openaiKey) throw new Error('OpenAI API 키가 설정되지 않았습니다. .env 파일을 확인해 주세요.');
+
+                const response = await axios.post(
+                    'https://api.openai.com/v1/chat/completions',
+                    {
+                        model: 'gpt-3.5-turbo',
+                        messages: [
+                            {
+                                role: 'system',
+                                content: `당신은 ${aiAgent} AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다. 
+                                    현재 사용자의 작업 컨텍스트:
+                                    - 현재 탭: ${activeTab}
+                                    - 열린 파일: ${currentFileName || '없음'}
+                                    - 웹 서퍼 주소: ${webUrl}
+                                    - 코드 에디터 언어: ${codeLanguage}`
+                            },
+                            ...aiMessages.map((m: any) => ({ role: m.role, content: m.content })),
+                            { role: 'user', content: text },
+                        ],
                     },
-                }
-            );
-            const reply = response.data.choices[0].message.content;
-            addAiMessage('assistant', reply);
+                    {
+                        headers: {
+                            Authorization: `Bearer ${openaiKey}`,
+                            'Content-Type': 'application/json',
+                        },
+                    }
+                );
+                const reply = response.data.choices[0].message.content;
+                addAiMessage('assistant', reply);
+            } else {
+                // Other agents or demo mode
+                setTimeout(() => {
+                    addAiMessage('assistant', `현재 ${aiAgent} 에이전트는 데모 모드입니다. 상세 구현이 필요합니다.`);
+                    setIsLoading(false);
+                }, 1000);
+                return;
+            }
         } catch (error: any) {
-            const msg = error?.response?.data?.error?.message;
+            let msg = error?.response?.data?.error?.message || error.message;
+
+            // Provider-specific error refinement
+            if (aiAgent === 'chatgpt' && (msg.includes('quota') || msg.includes('billing'))) {
+                msg = 'OpenAI API 사용 한도(Quota)를 초과했거나 결제가 필요합니다. (보통 최소 $5 이상의 충전이 필요합니다.)';
+            } else if (aiAgent === 'gemini' && (msg.includes('quota') || msg.includes('limit'))) {
+                msg = 'Gemini API 사용 한도를 초과했습니다. 잠시 후 다시 시도해 주세요. (무료 티어는 분당 요청 수 제한이 있습니다.)';
+            }
+
             addAiMessage(
                 'assistant',
-                msg
-                    ? `[${aiAgent}] 오류: ${msg}`
-                    : `⚠️ ${aiAgent} 서버에 연결할 수 없습니다. 현재는 데모 모드로 응답합니다.`
+                `[${aiAgent}] 오류: ${msg || '서버에 연결할 수 없습니다.'}`
             );
         } finally {
             setIsLoading(false);
