@@ -3,6 +3,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { useAppStore } from '../../store/useAppStore';
 import { FileUp, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Save } from 'lucide-react';
 import { jsPDF } from 'jspdf';
+import { PDFDocument } from 'pdf-lib';
 
 // pdfjs worker setup
 // pdfjs worker setup - using absolute local path for maximum reliability
@@ -32,6 +33,12 @@ const PdfViewer: React.FC = () => {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [inputPos, setInputPos] = useState<{ x: number; y: number } | null>(null);
     const [tempText, setTempText] = useState('');
+
+    // Per-page annotation storage
+    const [pageHistories, setPageHistories] = useState<Record<number, ImageData[]>>({});
+    const [pageHistoryIndices, setPageHistoryIndices] = useState<Record<number, number>>({});
+    const [pageTextAnnotations, setPageTextAnnotations] = useState<Record<number, any[]>>({});
+    const [originalData, setOriginalData] = useState<Uint8Array | null>(null);
 
     // 다른 이름으로 저장 다이얼로그 상태
     const [isSaveAsDialogOpen, setIsSaveAsDialogOpen] = useState(false);
@@ -102,13 +109,6 @@ const PdfViewer: React.FC = () => {
             }).filter(b => b.text.trim().length > 0);
 
             setTextBlocks(blocks);
-
-            // Reset overlay canvas history for new page
-            setHistory([]);
-            setHistoryIndex(-1);
-            // Clear current overlay
-            const canvas = overlayCanvasRef.current;
-            if (canvas) canvas.getContext('2d')!.clearRect(0, 0, canvas.width, canvas.height);
         },
         [renderPage, setTextBlocks]
     );
@@ -117,7 +117,16 @@ const PdfViewer: React.FC = () => {
         try {
             console.log('Loading PDF file:', file.name, file.size);
             const arrayBuffer = await file.arrayBuffer();
-            const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+            const uint8Array = new Uint8Array(arrayBuffer);
+
+            // pdf.js might detach the buffer, so we store a separate copy for pdf-lib
+            setOriginalData(uint8Array.slice());
+
+            const loadingTask = pdfjsLib.getDocument({
+                data: uint8Array,
+                // Preventing buffer detachment if possible, though slice is safer
+                isEvalSupported: false
+            });
 
             loadingTask.onProgress = (progress: { loaded: number; total: number }) => {
                 console.log(`Loading progress: ${Math.round((progress.loaded / progress.total) * 100)}%`);
@@ -214,11 +223,15 @@ const PdfViewer: React.FC = () => {
                 if (result?.canceled) return;
 
                 const { fileName, filePath, data, mimeType } = result;
+                // console.log('Opened file data info:', { ... }); // Cleaned up
 
                 // data is already a Uint8Array (or Buffer) when coming from invoke
-                const blob = new Blob([data], { type: mimeType || 'application/pdf' });
+                const uint8 = new Uint8Array(data);
+                const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
                 const file = new File([blob], fileName, { type: mimeType || 'application/pdf' });
 
+                // Electron buffer will also be detached if transferred, so slice it
+                setOriginalData(uint8.slice());
                 setCurrentFile(filePath, fileName);
                 await loadAnyDocument(file);
                 return;
@@ -266,12 +279,19 @@ const PdfViewer: React.FC = () => {
         if (!canvas) return;
         const ctx = canvas.getContext('2d')!;
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
         setHistory((prev) => {
-            const newHistory = prev.slice(0, historyIndex + 1);
+            const newHistory = (prev || []).slice(0, historyIndex + 1);
             newHistory.push(imageData);
             return newHistory;
         });
-        setHistoryIndex((prev) => prev + 1);
+
+        const newIdx = historyIndex + 1;
+        setHistoryIndex(newIdx);
+
+        // Update the per-page map immediately for saving
+        setPageHistories(ph => ({ ...ph, [currentPage]: [imageData] }));
+        setPageHistoryIndices(idx => ({ ...idx, [currentPage]: 0 }));
     };
 
     const handleUndo = useCallback(() => {
@@ -287,7 +307,8 @@ const PdfViewer: React.FC = () => {
         const newIndex = historyIndex - 1;
         ctx.putImageData(history[newIndex], 0, 0);
         setHistoryIndex(newIndex);
-    }, [history, historyIndex]);
+        setPageHistoryIndices(idx => ({ ...idx, [currentPage]: newIndex }));
+    }, [history, historyIndex, currentPage]);
 
     const handleRedo = useCallback(() => {
         if (historyIndex >= history.length - 1) return;
@@ -297,7 +318,8 @@ const PdfViewer: React.FC = () => {
         const newIndex = historyIndex + 1;
         ctx.putImageData(history[newIndex], 0, 0);
         setHistoryIndex(newIndex);
-    }, [history, historyIndex]);
+        setPageHistoryIndices(idx => ({ ...idx, [currentPage]: newIndex }));
+    }, [history, historyIndex, currentPage]);
 
     const drawAllAnnotations = useCallback((ctx: CanvasRenderingContext2D) => {
         textAnnotations.forEach(ann => {
@@ -327,7 +349,6 @@ const PdfViewer: React.FC = () => {
     // Global keyboard shortcuts (undo/redo, page navigation)
     useEffect(() => {
         const handleKey = (e: KeyboardEvent) => {
-            // Only when PDF 탭이 활성화된 경우에만 동작
             if (activeTab !== 'pdf') return;
 
             const target = e.target as HTMLElement | null;
@@ -336,7 +357,6 @@ const PdfViewer: React.FC = () => {
                 return;
             }
 
-            // Undo / Redo
             if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
                 e.preventDefault();
                 handleUndo();
@@ -348,7 +368,6 @@ const PdfViewer: React.FC = () => {
                 return;
             }
 
-            // Page navigation with arrow keys
             if (!e.ctrlKey && !e.metaKey && !e.altKey && (pdfDoc || imageDoc) && numPages > 0) {
                 if (e.key === 'ArrowRight' && currentPage < numPages) {
                     e.preventDefault();
@@ -367,10 +386,45 @@ const PdfViewer: React.FC = () => {
     useEffect(() => {
         if (pdfDoc) {
             loadPage(pdfDoc, currentPage, scale);
-        } else if (imageDoc) {
+        }
+    }, [pdfDoc, currentPage, scale, loadPage]);
+
+    const lastPageRef = useRef(currentPage);
+
+    useEffect(() => {
+        const prevPage = lastPageRef.current;
+
+        if (prevPage !== currentPage) {
+            setPageHistories(prev => {
+                const canvas = overlayCanvasRef.current;
+                if (!canvas) return prev;
+                const ctx = canvas.getContext('2d')!;
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                return { ...prev, [prevPage]: [imageData] };
+            });
+            setPageHistoryIndices(prev => ({ ...prev, [prevPage]: 0 }));
+            setPageTextAnnotations(prev => ({ ...prev, [prevPage]: textAnnotations }));
+        }
+
+        const savedHistory = pageHistories[currentPage] || [];
+        const savedIndex = pageHistoryIndices[currentPage] ?? -1;
+        const savedText = pageTextAnnotations[currentPage] || [];
+
+        // Clear global history when switching pages to save memory
+        // Restoration happens via the saved latest snapshot in savedHistory
+        setHistory(savedHistory);
+        setHistoryIndex(savedIndex);
+        setTextAnnotations(savedText);
+
+        lastPageRef.current = currentPage;
+    }, [currentPage]);
+
+    // Support non-PDF images if needed
+    useEffect(() => {
+        if (imageDoc) {
             renderImage(imageDoc, scale);
         }
-    }, [currentPage, scale, pdfDoc, imageDoc, loadPage, renderImage]);
+    }, [imageDoc, scale, renderImage]);
 
     const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
         if (activeTool === 'select' || activeTool === 'text') return;
@@ -477,57 +531,76 @@ const PdfViewer: React.FC = () => {
         const canvas = overlayCanvasRef.current!;
         const ctx = canvas.getContext('2d')!;
 
-        // Hit detection for existing annotations
+        // Hit detection for existing annotations with generous padding (10px)
         const hit = textAnnotations.find(ann => {
-            ctx.font = `${ann.fontSize}px ${ann.fontFamily}`;
+            const fontSize = Number(ann.fontSize) || 20;
+            ctx.font = `${fontSize}px ${ann.fontFamily || 'Outfit, sans-serif'}`;
             const metrics = ctx.measureText(ann.text);
             const width = metrics.width;
-            const height = ann.fontSize;
-            return pos.x >= ann.x && pos.x <= ann.x + width &&
-                pos.y >= ann.y - height && pos.y <= ann.y;
+            const height = fontSize;
+            const padding = 10;
+
+            const ax = Number(ann.x);
+            const ay = Number(ann.y);
+
+            return pos.x >= ax - padding && pos.x <= ax + width + padding &&
+                pos.y >= ay - height - padding && pos.y <= ay + padding;
         });
 
         if (hit) {
             setEditingId(hit.id);
             setTempText(hit.text);
-            setInputPos({ x: hit.x, y: hit.y - hit.fontSize });
+            const fontSize = Number(hit.fontSize) || 20;
+            setInputPos({ x: Number(hit.x), y: Number(hit.y) - fontSize });
         } else {
             setEditingId(null);
             setTempText('');
-            setInputPos({ x: pos.x, y: pos.y - toolSettings.fontSize });
+            const fontSize = Number(toolSettings.fontSize) || 20;
+            setInputPos({ x: pos.x, y: pos.y - fontSize });
         }
     };
 
     const handleInputComplete = () => {
         if (!inputPos) return;
 
+        let finalAnnotations = textAnnotations;
         if (tempText.trim() === '') {
             if (editingId) {
-                setTextAnnotations(prev => prev.filter(a => a.id !== editingId));
+                finalAnnotations = textAnnotations.filter(a => a.id !== editingId);
+                setTextAnnotations(finalAnnotations);
             }
         } else {
             if (editingId) {
-                setTextAnnotations(prev => prev.map(a =>
+                finalAnnotations = textAnnotations.map(a =>
                     a.id === editingId ? { ...a, text: tempText } : a
-                ));
+                );
+                setTextAnnotations(finalAnnotations);
             } else {
+                const fsNum = Number(toolSettings.fontSize) || 20;
                 const newAnn = {
                     id: Date.now().toString(),
                     text: tempText,
                     x: inputPos.x,
-                    y: inputPos.y + toolSettings.fontSize,
-                    fontSize: toolSettings.fontSize,
-                    color: toolSettings.color,
-                    fontFamily: toolSettings.fontFamily
+                    y: inputPos.y + fsNum,
+                    fontSize: fsNum,
+                    color: toolSettings.color || '#000000',
+                    fontFamily: toolSettings.fontFamily || 'Outfit, sans-serif'
                 };
-                setTextAnnotations(prev => [...prev, newAnn]);
+                finalAnnotations = [...textAnnotations, newAnn];
             }
         }
 
+        // Update local state
+        setTextAnnotations(finalAnnotations);
+
+        // Reset editing states BEFORE updating page map to avoid race conditions
+        const backupPos = inputPos; // Keep for mapping if needed
         setInputPos(null);
         setEditingId(null);
         setTempText('');
-        // No need to save to history here because textAnnotations is reactive
+
+        // Update per-page state map
+        setPageTextAnnotations(prev => ({ ...prev, [currentPage]: finalAnnotations }));
     };
 
     const handleInputKeyDown = (e: React.KeyboardEvent) => {
@@ -543,29 +616,90 @@ const PdfViewer: React.FC = () => {
 
     const isInputActive = inputPos !== null;
 
-    // 공통: 현재 캔버스 상태를 PDF Blob으로 변환
-    const createEditedPdfBlob = () => {
-        const canvas = canvasRef.current;
-        const overlay = overlayCanvasRef.current;
-        if (!canvas || !overlay) return null;
+    // 공통: 현재 캔버스 상태를 PDF Blob으로 변환 (전체 페이지 합치기)
+    const createEditedPdfBlob = async () => {
+        if (!originalData) return null;
 
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = canvas.width;
-        tempCanvas.height = canvas.height;
-        const tempCtx = tempCanvas.getContext('2d')!;
+        try {
+            // alert('저장 중...');
+            // alert('PDF 병합 중... 잠시만 기다려 주세요.'); // UI cleanup: remove noisy alert
+            // 원본 PDF 로드 (pdf-lib)
+            const pdfDocLib = await PDFDocument.load(originalData, { ignoreEncryption: true });
+            const totalPages = pdfDocLib.getPageCount();
 
-        tempCtx.drawImage(canvas, 0, 0);
-        tempCtx.drawImage(overlay, 0, 0);
+            // pdf.js 문서 (렌더링용)
+            if (!pdfDoc) {
+                alert('오류: PDF 렌더러가 준비되지 않았습니다.');
+                return null;
+            }
 
-        const imgData = tempCanvas.toDataURL('image/jpeg', 1.0);
-        const pdf = new jsPDF({
-            orientation: canvas.width > canvas.height ? 'landscape' : 'portrait',
-            unit: 'px',
-            format: [canvas.width, canvas.height]
-        });
+            // 수정된 페이지들을 찾아 덮어쓰기
+            for (let i = 1; i <= totalPages; i++) {
+                const hasDrawing = pageHistories[i] && pageHistories[i].length > 0;
+                const hasText = pageTextAnnotations[i] && pageTextAnnotations[i].length > 0;
 
-        pdf.addImage(imgData, 'JPEG', 0, 0, canvas.width, canvas.height);
-        return pdf.output('blob');
+                if (hasDrawing || hasText) {
+                    const page = await pdfDoc.getPage(i);
+                    const viewport = page.getViewport({ scale: 2.0 }); // 고화질 렌더링
+
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = viewport.width;
+                    tempCanvas.height = viewport.height;
+                    const tempCtx = tempCanvas.getContext('2d')!;
+
+                    // 1. 원본 페이지 렌더링
+                    await page.render({ canvasContext: tempCtx, viewport }).promise;
+
+                    // 2. 오버레이 렌더링 (그림)
+                    const pageHistory = pageHistories[i];
+                    const pageHistoryIdx = pageHistoryIndices[i];
+                    if (pageHistory && pageHistoryIdx >= 0) {
+                        // ImageData는 특정 해상도용이므로 스케일 조정이 필요할 수 있음
+                        // 여기서는 단순화를 위해 현재 스케일로 다시 렌더링하거나 drawImage 사용
+                        // (실제로는 vector 데이터 저장 방식이 더 좋으나 현재 구조 유지)
+                        const overlayCanvas = document.createElement('canvas');
+                        overlayCanvas.width = pageHistory[pageHistoryIdx].width;
+                        overlayCanvas.height = pageHistory[pageHistoryIdx].height;
+                        overlayCanvas.getContext('2d')!.putImageData(pageHistory[pageHistoryIdx], 0, 0);
+
+                        tempCtx.drawImage(overlayCanvas, 0, 0, viewport.width, viewport.height);
+                    }
+
+                    // 3. 오버레이 렌더링 (텍스트)
+                    const pageTexts = pageTextAnnotations[i];
+                    if (pageTexts) {
+                        pageTexts.forEach(ann => {
+                            // 텍스트 위치도 viewport 스케일에 맞춰 조정 (scale 2.0 기준)
+                            const scaleRatio = 2.0 / scale;
+                            tempCtx.font = `${ann.fontSize * scaleRatio}px ${ann.fontFamily}`;
+                            tempCtx.fillStyle = ann.color;
+                            tempCtx.fillText(ann.text, ann.x * scaleRatio, ann.y * scaleRatio);
+                        });
+                    }
+
+                    // 4. pdf-lib 페이지 이미지를 JPEG로 변환하여 덮어쓰기
+                    const imgData = tempCanvas.toDataURL('image/jpeg', 0.95);
+                    const image = await pdfDocLib.embedJpg(imgData);
+
+                    const pdfPage = pdfDocLib.getPage(i - 1);
+                    const { width, height } = pdfPage.getSize();
+                    pdfPage.drawImage(image, {
+                        x: 0,
+                        y: 0,
+                        width: width,
+                        height: height,
+                    });
+                }
+            }
+
+            const pdfBytes = await pdfDocLib.save();
+            // alert('PDF 병합 완료. 파일을 저장합니다.'); // UI cleanup
+            return new Blob([pdfBytes as any], { type: 'application/pdf' });
+        } catch (error) {
+            console.error('PDF 병합 오류:', error);
+            alert('PDF 병합 중 오류가 발생했습니다: ' + (error instanceof Error ? error.message : String(error)));
+            return null;
+        }
     };
 
     const blobToBase64 = (blob: Blob): Promise<string> => {
@@ -583,8 +717,12 @@ const PdfViewer: React.FC = () => {
 
     // 1) 저장: 현재 불러온 파일 위치에 그대로 덮어쓰기
     const handleSave = async () => {
-        const blob = createEditedPdfBlob();
-        if (!blob) return;
+        // alert('저장을 시작합니다 (기존 파일 덮어쓰기)...'); // UI cleanup
+        const blob = await createEditedPdfBlob();
+        if (!blob) {
+            // alert('PDF 생성 실패');
+            return;
+        }
 
         const anyWindow = window as any;
         const electronAPI = anyWindow?.electronAPI;
@@ -595,10 +733,10 @@ const PdfViewer: React.FC = () => {
                 const base64 = await blobToBase64(blob);
                 const result = await electronAPI.autoSave({ filePath: currentFilePath, data: base64 });
                 if (result?.success) {
-                    alert('원본 파일에 성공적으로 저장되었습니다.');
+                    alert('저장 완료');
                 } else {
                     console.error('AutoSave 실패:', result);
-                    alert('저장에 실패했습니다.');
+                    alert('저장 실패');
                 }
             } catch (error) {
                 console.error('AutoSave 오류:', error);
@@ -628,8 +766,12 @@ const PdfViewer: React.FC = () => {
     };
 
     const confirmSaveAs = async () => {
-        const blob = createEditedPdfBlob();
-        if (!blob) return;
+        // alert('다른 이름으로 저장을 시작합니다...'); // UI cleanup
+        const blob = await createEditedPdfBlob();
+        if (!blob) {
+            // alert('PDF 생성 실패 (다른 이름으로 저장)');
+            return;
+        }
 
         let name = saveAsName.trim();
         if (!name) {
@@ -657,12 +799,12 @@ const PdfViewer: React.FC = () => {
                 const result = await electronAPI.writeFile({ filePath: targetPath, data: base64 });
                 if (result?.success) {
                     setCurrentFile(targetPath, name);
-                    alert(`다른 이름으로 저장되었습니다:\n${targetPath}`);
+                    alert(`저장 완료`);
                     setIsSaveAsDialogOpen(false);
                     return;
                 } else {
                     console.error('writeFile 실패:', result);
-                    alert('저장에 실패했습니다.');
+                    alert('저장 실패');
                 }
             } catch (error) {
                 console.error('writeFile 오류:', error);
@@ -679,7 +821,7 @@ const PdfViewer: React.FC = () => {
                 });
                 if (!result?.canceled && result?.success) {
                     setCurrentFile(result.filePath, name);
-                    alert(`다른 이름으로 저장되었습니다:\n${result.filePath}`);
+                    alert(`저장 완료`);
                     setIsSaveAsDialogOpen(false);
                     return;
                 }
