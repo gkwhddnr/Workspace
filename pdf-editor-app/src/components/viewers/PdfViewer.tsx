@@ -20,7 +20,7 @@ const PdfViewer: React.FC = () => {
     const [docType, setDocType] = useState<'pdf' | 'image' | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
     const [numPages, setNumPages] = useState(0);
-    const [scale, setScale] = useState(1.0);
+    const [scale, setScale] = useState(1.5);
     const [isDrawing, setIsDrawing] = useState(false);
     const [history, setHistory] = useState<ImageData[]>([]);
     const [historyIndex, setHistoryIndex] = useState(-1);
@@ -44,6 +44,11 @@ const PdfViewer: React.FC = () => {
     const [isSaveAsDialogOpen, setIsSaveAsDialogOpen] = useState(false);
     const [saveAsName, setSaveAsName] = useState('');
 
+    // Text Box Interaction State
+    const [isDraggingBox, setIsDraggingBox] = useState(false);
+    const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+    const [resizingType, setResizingType] = useState<'width' | 'height' | 'both' | null>(null);
+
     const { activeTool, toolSettings } = useAppStore();
 
     const renderImage = useCallback(
@@ -52,16 +57,25 @@ const PdfViewer: React.FC = () => {
             if (!canvas) return;
             const ctx = canvas.getContext('2d')!;
 
+            const dpr = window.devicePixelRatio || 1;
             const width = Math.max(1, Math.round(img.naturalWidth * s));
             const height = Math.max(1, Math.round(img.naturalHeight * s));
 
-            canvas.width = width;
-            canvas.height = height;
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+
             if (overlayCanvasRef.current) {
-                overlayCanvasRef.current.width = width;
-                overlayCanvasRef.current.height = height;
+                const overlay = overlayCanvasRef.current;
+                overlay.width = width * dpr;
+                overlay.height = height * dpr;
+                overlay.style.width = `${width}px`;
+                overlay.style.height = `${height}px`;
+                overlay.getContext('2d')!.scale(dpr, dpr);
             }
 
+            ctx.scale(dpr, dpr);
             ctx.clearRect(0, 0, width, height);
             ctx.drawImage(img, 0, 0, width, height);
 
@@ -79,13 +93,23 @@ const PdfViewer: React.FC = () => {
             const canvas = canvasRef.current;
             if (!canvas) return;
             const ctx = canvas.getContext('2d')!;
-            const viewport = page.getViewport({ scale: s });
+            const dpr = window.devicePixelRatio || 1;
+            const viewport = page.getViewport({ scale: s * dpr });
+
             canvas.height = viewport.height;
             canvas.width = viewport.width;
+            canvas.style.height = `${viewport.height / dpr}px`;
+            canvas.style.width = `${viewport.width / dpr}px`;
+
             if (overlayCanvasRef.current) {
-                overlayCanvasRef.current.height = viewport.height;
-                overlayCanvasRef.current.width = viewport.width;
+                const overlay = overlayCanvasRef.current;
+                overlay.height = viewport.height;
+                overlay.width = viewport.width;
+                overlay.style.height = `${viewport.height / dpr}px`;
+                overlay.style.width = `${viewport.width / dpr}px`;
+                overlay.getContext('2d')!.scale(dpr, dpr);
             }
+
             await page.render({ canvasContext: ctx, viewport }).promise;
         },
         []
@@ -321,11 +345,41 @@ const PdfViewer: React.FC = () => {
         setPageHistoryIndices(idx => ({ ...idx, [currentPage]: newIndex }));
     }, [history, historyIndex, currentPage]);
 
+    const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
+        const lines = text.split('\n');
+        let currentY = y;
+        for (let i = 0; i < lines.length; i++) {
+            let line = '';
+            const chars = Array.from(lines[i]);
+            for (let j = 0; j < chars.length; j++) {
+                const testLine = line + chars[j];
+                const metrics = ctx.measureText(testLine);
+                const testWidth = metrics.width;
+                if (testWidth > maxWidth && j > 0) {
+                    ctx.fillText(line, x, currentY);
+                    line = chars[j];
+                    currentY += lineHeight;
+                } else {
+                    line = testLine;
+                }
+            }
+            ctx.fillText(line, x, currentY);
+            currentY += lineHeight;
+        }
+    };
+
     const drawAllAnnotations = useCallback((ctx: CanvasRenderingContext2D) => {
         textAnnotations.forEach(ann => {
-            ctx.font = `${ann.fontSize}px ${ann.fontFamily}`;
-            ctx.fillStyle = ann.color;
-            ctx.fillText(ann.text, ann.x, ann.y);
+            const fontSize = Number(ann.fontSize) || 20;
+            ctx.font = `${fontSize}px ${ann.fontFamily || 'Outfit, sans-serif'}`;
+            ctx.fillStyle = ann.color || '#000000';
+
+            if (ann.width) {
+                wrapText(ctx, ann.text, ann.x, ann.y, ann.width, fontSize * 1.2);
+            } else {
+                // Legacy support for single line
+                ctx.fillText(ann.text, ann.x, ann.y);
+            }
         });
     }, [textAnnotations]);
 
@@ -395,14 +449,8 @@ const PdfViewer: React.FC = () => {
         const prevPage = lastPageRef.current;
 
         if (prevPage !== currentPage) {
-            setPageHistories(prev => {
-                const canvas = overlayCanvasRef.current;
-                if (!canvas) return prev;
-                const ctx = canvas.getContext('2d')!;
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                return { ...prev, [prevPage]: [imageData] };
-            });
-            setPageHistoryIndices(prev => ({ ...prev, [prevPage]: 0 }));
+            setPageHistories(prev => ({ ...prev, [prevPage]: history }));
+            setPageHistoryIndices(prev => ({ ...prev, [prevPage]: historyIndex }));
             setPageTextAnnotations(prev => ({ ...prev, [prevPage]: textAnnotations }));
         }
 
@@ -534,14 +582,20 @@ const PdfViewer: React.FC = () => {
         // Hit detection for existing annotations with generous padding (10px)
         const hit = textAnnotations.find(ann => {
             const fontSize = Number(ann.fontSize) || 20;
-            ctx.font = `${fontSize}px ${ann.fontFamily || 'Outfit, sans-serif'}`;
-            const metrics = ctx.measureText(ann.text);
-            const width = metrics.width;
-            const height = fontSize;
-            const padding = 10;
-
             const ax = Number(ann.x);
             const ay = Number(ann.y);
+            const padding = 10;
+
+            let width, height;
+            if (ann.width && ann.height) {
+                width = Number(ann.width);
+                height = Number(ann.height);
+            } else {
+                ctx.font = `${fontSize}px ${ann.fontFamily || 'Outfit, sans-serif'}`;
+                const metrics = ctx.measureText(ann.text);
+                width = metrics.width;
+                height = fontSize;
+            }
 
             return pos.x >= ax - padding && pos.x <= ax + width + padding &&
                 pos.y >= ay - height - padding && pos.y <= ay + padding;
@@ -560,21 +614,25 @@ const PdfViewer: React.FC = () => {
         }
     };
 
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
     const handleInputComplete = () => {
         if (!inputPos) return;
+
+        const textarea = textareaRef.current;
+        const width = textarea ? textarea.offsetWidth : (editingId ? (textAnnotations.find(a => a.id === editingId)?.width || 300) : 300);
+        const height = textarea ? textarea.offsetHeight : (editingId ? (textAnnotations.find(a => a.id === editingId)?.height || 100) : 100);
 
         let finalAnnotations = textAnnotations;
         if (tempText.trim() === '') {
             if (editingId) {
                 finalAnnotations = textAnnotations.filter(a => a.id !== editingId);
-                setTextAnnotations(finalAnnotations);
             }
         } else {
             if (editingId) {
                 finalAnnotations = textAnnotations.map(a =>
-                    a.id === editingId ? { ...a, text: tempText } : a
+                    a.id === editingId ? { ...a, text: tempText, x: inputPos.x, y: inputPos.y + (Number(a.fontSize) || 20), width, height } : a
                 );
-                setTextAnnotations(finalAnnotations);
             } else {
                 const fsNum = Number(toolSettings.fontSize) || 20;
                 const newAnn = {
@@ -584,7 +642,9 @@ const PdfViewer: React.FC = () => {
                     y: inputPos.y + fsNum,
                     fontSize: fsNum,
                     color: toolSettings.color || '#000000',
-                    fontFamily: toolSettings.fontFamily || 'Outfit, sans-serif'
+                    fontFamily: toolSettings.fontFamily || 'Outfit, sans-serif',
+                    width: width,
+                    height: height
                 };
                 finalAnnotations = [...textAnnotations, newAnn];
             }
@@ -593,8 +653,7 @@ const PdfViewer: React.FC = () => {
         // Update local state
         setTextAnnotations(finalAnnotations);
 
-        // Reset editing states BEFORE updating page map to avoid race conditions
-        const backupPos = inputPos; // Keep for mapping if needed
+        // Reset editing states
         setInputPos(null);
         setEditingId(null);
         setTempText('');
@@ -603,8 +662,66 @@ const PdfViewer: React.FC = () => {
         setPageTextAnnotations(prev => ({ ...prev, [currentPage]: finalAnnotations }));
     };
 
+    const handleBoxMouseDown = (e: React.MouseEvent) => {
+        // Only trigger drag if clicking the container/border, not the textarea or handles
+        if (e.target !== e.currentTarget) return;
+
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+
+        setIsDraggingBox(true);
+        // Drag offset is mouse position relative to box corners
+        setDragOffset({
+            x: (e.clientX - rect.left) - (inputPos?.x || 0),
+            y: (e.clientY - rect.top) - (inputPos?.y || 0)
+        });
+    };
+
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+
+            if (isDraggingBox && inputPos) {
+                setInputPos({
+                    x: (e.clientX - rect.left) - dragOffset.x,
+                    y: (e.clientY - rect.top) - dragOffset.y
+                });
+            } else if (resizingType && textareaRef.current) {
+                const tRect = textareaRef.current.getBoundingClientRect();
+                if (resizingType === 'width' || resizingType === 'both') {
+                    const newWidth = Math.max(50, e.clientX - tRect.left);
+                    textareaRef.current.style.width = `${newWidth}px`;
+                }
+                if (resizingType === 'height' || resizingType === 'both') {
+                    const newHeight = Math.max(30, e.clientY - tRect.top);
+                    textareaRef.current.style.height = `${newHeight}px`;
+                }
+            }
+        };
+
+        const handleMouseUp = () => {
+            setIsDraggingBox(false);
+            setResizingType(null);
+        };
+
+        if (isDraggingBox || resizingType) {
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseup', handleMouseUp);
+        }
+
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [isDraggingBox, resizingType, dragOffset, inputPos]);
+
     const handleInputKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        // Only treat Shift+Enter or Ctrl+Enter? Actually user wants Enter to be 열리고 (open) and not close?
+        // Let's make Enter just a newline now.
+        if (e.key === 'Enter' && e.ctrlKey) {
             e.preventDefault();
             handleInputComplete();
         } else if (e.key === 'Escape') {
@@ -669,11 +786,19 @@ const PdfViewer: React.FC = () => {
                     const pageTexts = pageTextAnnotations[i];
                     if (pageTexts) {
                         pageTexts.forEach(ann => {
-                            // 텍스트 위치도 viewport 스케일에 맞춰 조정 (scale 2.0 기준)
                             const scaleRatio = 2.0 / scale;
-                            tempCtx.font = `${ann.fontSize * scaleRatio}px ${ann.fontFamily}`;
-                            tempCtx.fillStyle = ann.color;
-                            tempCtx.fillText(ann.text, ann.x * scaleRatio, ann.y * scaleRatio);
+                            const fs = (Number(ann.fontSize) || 20) * scaleRatio;
+                            tempCtx.font = `${fs}px ${ann.fontFamily || 'Outfit, sans-serif'}`;
+                            tempCtx.fillStyle = ann.color || '#000000';
+
+                            const ax = Number(ann.x) * scaleRatio;
+                            const ay = Number(ann.y) * scaleRatio;
+
+                            if (ann.width) {
+                                wrapText(tempCtx, ann.text, ax, ay, ann.width * scaleRatio, fs * 1.2);
+                            } else {
+                                tempCtx.fillText(ann.text, ax, ay);
+                            }
                         });
                     }
 
@@ -915,27 +1040,58 @@ const PdfViewer: React.FC = () => {
                     {/* Floating Text Input */}
                     {isInputActive && inputPos && (
                         <div
-                            className="absolute z-[100] animate-in fade-in zoom-in duration-200"
+                            className="absolute z-[100] animate-in fade-in zoom-in duration-200 p-2 border-2 border-dashed border-blue-400/50 bg-blue-50/10 rounded-lg cursor-move"
                             style={{
-                                left: inputPos.x,
-                                top: inputPos.y,
+                                left: inputPos.x - 8, // Offset for padding
+                                top: inputPos.y - 8,
                             }}
+                            onMouseDown={handleBoxMouseDown}
                         >
-                            <textarea
-                                autoFocus
-                                value={tempText}
-                                onChange={(e) => setTempText(e.target.value)}
-                                onKeyDown={handleInputKeyDown}
-                                onBlur={handleInputComplete}
-                                className="bg-white/90 border-2 border-blue-500 rounded shadow-2xl p-2 outline-none resize-both min-w-[120px] min-h-[40px] text-slate-800"
-                                style={{
-                                    fontSize: `${toolSettings.fontSize}px`,
-                                    fontFamily: toolSettings.fontFamily,
-                                    color: toolSettings.color,
-                                }}
-                            />
-                            <div className="bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-b-sm absolute -bottom-4 right-0 uppercase tracking-tighter">
-                                Enter to Finish
+                            <div className="relative group">
+                                <textarea
+                                    ref={textareaRef}
+                                    autoFocus
+                                    value={tempText}
+                                    onChange={(e) => setTempText(e.target.value)}
+                                    onKeyDown={handleInputKeyDown}
+                                    className="bg-white/95 border-2 border-blue-500 rounded shadow-2xl p-2 outline-none text-slate-800 block cursor-text select-text"
+                                    style={{
+                                        fontSize: `${toolSettings.fontSize}px`,
+                                        fontFamily: toolSettings.fontFamily,
+                                        color: toolSettings.color,
+                                        width: editingId ? (textAnnotations.find(a => a.id === editingId)?.width || 300) : 300,
+                                        height: editingId ? (textAnnotations.find(a => a.id === editingId)?.height || 100) : 100,
+                                        resize: 'none' // We'll use custom handles
+                                    }}
+                                />
+                                {/* Explicit Completion Button */}
+                                <button
+                                    onMouseDown={(e) => { e.stopPropagation(); handleInputComplete(); }}
+                                    className="absolute -top-3 -right-3 bg-green-600 hover:bg-green-700 text-white w-8 h-8 rounded-full shadow-lg border-2 border-white flex items-center justify-center transition-all hover:scale-110 z-[110]"
+                                    title="작업 완료"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                    </svg>
+                                </button>
+                                {/* Resize Handles */}
+                                <div
+                                    className="absolute -right-1 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-400/30 rounded-r"
+                                    onMouseDown={(e) => { e.stopPropagation(); setResizingType('width'); }}
+                                />
+                                <div
+                                    className="absolute -bottom-1 left-0 right-0 h-2 cursor-ns-resize hover:bg-blue-400/30 rounded-b"
+                                    onMouseDown={(e) => { e.stopPropagation(); setResizingType('height'); }}
+                                />
+                                <div
+                                    className="absolute -right-2 -bottom-2 w-5 h-5 cursor-nwse-resize flex items-center justify-center bg-blue-600 rounded-full shadow-lg border-2 border-white hover:scale-110 transition-transform z-10"
+                                    onMouseDown={(e) => { e.stopPropagation(); setResizingType('both'); }}
+                                >
+                                    <div className="w-1.5 h-1.5 border-r-2 border-b-2 border-white rotate-[-45deg] translate-x-[-1px] translate-y-[-1px]" />
+                                </div>
+                            </div>
+                            <div className="bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-b-sm absolute -bottom-4 right-2 uppercase tracking-tighter shadow-md">
+                                Ctrl+Enter to Finish | Drag Border to Move
                             </div>
                         </div>
                     )}
