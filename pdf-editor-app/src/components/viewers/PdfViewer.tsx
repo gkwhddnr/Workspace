@@ -549,13 +549,56 @@ const PdfViewer: React.FC = () => {
             ctx.strokeStyle = toolSettings.color;
             ctx.lineWidth = toolSettings.strokeWidth;
 
+            // Auto-fitting logic
+            let minX = Math.min(startPos.x, pos.x);
+            let minY = Math.min(startPos.y, pos.y);
+            let maxX = Math.max(startPos.x, pos.x);
+            let maxY = Math.max(startPos.y, pos.y);
+
+            const dragRect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+
+            // Find intersecting text blocks
+            const intersectingBlocks = textBlocks.filter(b => {
+                const bx = b.rect[0];
+                const by = b.rect[1];
+                const bw = b.rect[2];
+                const bh = b.rect[3];
+                // Check intersection
+                return !(bx > dragRect.x + dragRect.w ||
+                    bx + bw < dragRect.x ||
+                    by > dragRect.y + dragRect.h ||
+                    by + bh < dragRect.y);
+            });
+
+            if (intersectingBlocks.length > 0) {
+                minX = Math.min(...intersectingBlocks.map(b => b.rect[0]));
+                minY = Math.min(...intersectingBlocks.map(b => b.rect[1]));
+                maxX = Math.max(...intersectingBlocks.map(b => b.rect[0] + b.rect[2]));
+                maxY = Math.max(...intersectingBlocks.map(b => b.rect[1] + b.rect[3]));
+
+                // Add a small padding for visual comfort
+                const padding = 4;
+                minX -= padding;
+                minY -= padding;
+                maxX += padding;
+                maxY += padding;
+            }
+
+            const finalW = maxX - minX;
+            const finalH = maxY - minY;
+
             if (activeTool === 'rect') {
-                ctx.rect(startPos.x, startPos.y, pos.x - startPos.x, pos.y - startPos.y);
+                ctx.rect(minX, minY, finalW, finalH);
             } else if (activeTool === 'circle') {
-                const radius = Math.sqrt(
-                    Math.pow(pos.x - startPos.x, 2) + Math.pow(pos.y - startPos.y, 2)
-                );
-                ctx.arc(startPos.x, startPos.y, radius, 0, 2 * Math.PI);
+                // Draw ellipse matching the bounding box
+                const centerX = minX + finalW / 2;
+                const centerY = minY + finalH / 2;
+                const radiusX = finalW / 2;
+                const radiusY = finalH / 2;
+                // Only draw if radius is valid
+                if (radiusX > 0 && radiusY > 0) {
+                    ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+                }
             }
             ctx.stroke();
         }
@@ -685,9 +728,25 @@ const PdfViewer: React.FC = () => {
             const rect = canvas.getBoundingClientRect();
 
             if (isDraggingBox && inputPos) {
+                const rawX = (e.clientX - rect.left) - dragOffset.x;
+                const rawY = (e.clientY - rect.top) - dragOffset.y;
+
+                // PDF Text Snapping Logic
+                const snapThreshold = 15; // pixels
+                let bestY = rawY;
+                let minDiff = Infinity;
+
+                textBlocks.forEach(b => {
+                    const diff = Math.abs(rawY - b.rect[1]);
+                    if (diff < snapThreshold && diff < minDiff) {
+                        minDiff = diff;
+                        bestY = b.rect[1] - 4; // Slight offset to align textarea text visually with PDF text
+                    }
+                });
+
                 setInputPos({
-                    x: (e.clientX - rect.left) - dragOffset.x,
-                    y: (e.clientY - rect.top) - dragOffset.y
+                    x: rawX,
+                    y: bestY
                 });
             } else if (resizingType && textareaRef.current) {
                 const tRect = textareaRef.current.getBoundingClientRect();
@@ -716,7 +775,7 @@ const PdfViewer: React.FC = () => {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [isDraggingBox, resizingType, dragOffset, inputPos]);
+    }, [isDraggingBox, resizingType, dragOffset, inputPos, textBlocks]);
 
     const handleInputKeyDown = (e: React.KeyboardEvent) => {
         // Only treat Shift+Enter or Ctrl+Enter? Actually user wants Enter to be 열리고 (open) and not close?
