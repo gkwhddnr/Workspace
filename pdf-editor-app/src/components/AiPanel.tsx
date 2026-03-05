@@ -120,9 +120,9 @@ const AiPanel: React.FC = () => {
     };
 
     return (
-        <div className="flex-1 flex flex-col min-h-0 bg-white">
+        <div className="flex-1 flex flex-col min-h-0 bg-transparent">
             {/* Header */}
-            <div className="h-14 border-b border-slate-100 flex items-center px-5 bg-gradient-to-r from-indigo-50/50 to-white shrink-0">
+            <div className="h-14 border-b theme-border-subtle flex items-center px-5 theme-bg-header shrink-0 shadow-sm z-10">
                 <div className="flex items-center gap-2.5">
                     <div className="p-1.5 bg-indigo-600 rounded-lg shadow-md">
                         <Bot size={16} className="text-white" />
@@ -137,11 +137,11 @@ const AiPanel: React.FC = () => {
                 </div>
 
                 {/* Agent Switcher */}
-                <div className="ml-4 flex items-center bg-slate-100/80 p-0.5 rounded-lg border border-slate-200/50">
+                <div className="ml-4 flex items-center theme-bg-panel p-0.5 rounded-lg border theme-border">
                     <select
                         value={aiAgent}
                         onChange={(e) => setAiAgent(e.target.value as any)}
-                        className="text-[10px] font-bold bg-transparent px-2 py-1 outline-none appearance-none cursor-pointer text-slate-600 hover:text-indigo-600 transition-colors"
+                        className="text-[10px] font-bold bg-transparent px-2 py-1 outline-none appearance-none cursor-pointer theme-text-muted hover:text-indigo-600 transition-colors"
                     >
                         {AGENTS.map(agent => (
                             <option key={agent.id} value={agent.id}>{agent.label}</option>
@@ -153,7 +153,7 @@ const AiPanel: React.FC = () => {
                     <button
                         onClick={clearAiMessages}
                         title="대화 초기화"
-                        className="p-2 hover:bg-red-50 rounded-xl text-slate-400 hover:text-red-500 transition-all"
+                        className="p-2 theme-tool-hover rounded-xl theme-text-muted hover:text-red-500 transition-all"
                     >
                         <Trash2 size={14} />
                     </button>
@@ -161,10 +161,10 @@ const AiPanel: React.FC = () => {
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-[#fcfdfe]">
+            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-transparent">
                 {aiMessages.map((msg: any, idx: number) => (
                     <div key={idx} className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''} animate-fade-in`}>
-                        <div className={`shrink-0 w-8 h-8 rounded-xl flex items-center justify-center shadow-sm ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-indigo-600'}`}>
+                        <div className={`shrink-0 w-8 h-8 rounded-xl flex items-center justify-center shadow-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white' : 'theme-bg-panel border theme-border text-indigo-500'}`}>
                             {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
                         </div>
                         <div className="flex flex-col gap-1 max-w-[85%]">
@@ -173,9 +173,9 @@ const AiPanel: React.FC = () => {
                                     {msg.agent}
                                 </span>
                             )}
-                            <div className={`text-[11px] leading-relaxed px-4 py-2.5 rounded-2xl shadow-sm ${msg.role === 'user'
-                                ? 'bg-blue-600 text-white rounded-tr-none'
-                                : 'bg-white text-slate-700 border border-slate-100 rounded-tl-none font-medium'
+                            <div className={`text-[11px] leading-relaxed px-4 py-3 rounded-2xl shadow-sm ${msg.role === 'user'
+                                ? 'bg-indigo-600 text-white rounded-tr-none'
+                                : 'theme-bg-panel theme-text-main border theme-border rounded-tl-none font-medium'
                                 }`}>
                                 {msg.content}
                             </div>
@@ -186,15 +186,15 @@ const AiPanel: React.FC = () => {
             </div>
 
             {/* Input */}
-            <div className="p-3 border-t bg-white shrink-0">
-                <div className="flex items-end gap-2 bg-gray-100 rounded-xl p-2">
+            <div className="p-3 border-t theme-border-subtle theme-bg-glass shrink-0">
+                <div className="flex items-end gap-2 theme-bg-panel border theme-border rounded-xl p-2 shadow-inner">
                     <textarea
                         rows={2}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
                         placeholder="메시지를 입력하세요... (Enter로 전송)"
-                        className="flex-1 bg-transparent text-xs text-gray-700 resize-none focus:outline-none min-h-0 leading-relaxed"
+                        className="flex-1 bg-transparent theme-text-main text-xs resize-none focus:outline-none min-h-0 leading-relaxed placeholder:theme-text-muted"
                     />
                     <button
                         onClick={handleSend}

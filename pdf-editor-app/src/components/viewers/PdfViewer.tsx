@@ -400,7 +400,7 @@ const PdfViewer: React.FC = () => {
         drawAllAnnotations(ctx);
     }, [textAnnotations, history, historyIndex, isDrawing, drawAllAnnotations]);
 
-    // Global keyboard shortcuts (undo/redo, page navigation)
+    // Global keyboard shortcuts (undo/redo, page navigation, open file)
     useEffect(() => {
         const handleKey = (e: KeyboardEvent) => {
             if (activeTab !== 'pdf') return;
@@ -419,6 +419,13 @@ const PdfViewer: React.FC = () => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
                 e.preventDefault();
                 handleRedo();
+                return;
+            }
+
+            // Ctrl + O for File Open
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
+                e.preventDefault();
+                handleFileOpen();
                 return;
             }
 
@@ -1024,6 +1031,32 @@ const PdfViewer: React.FC = () => {
             alert('브라우저 환경에서는 다운로드 폴더로 저장됩니다.');
         }
     };
+    // Save Shortcuts (Ctrl+S, Ctrl+Shift+S)
+    useEffect(() => {
+        const handleSaveShortcut = (e: KeyboardEvent) => {
+            // Ignore if we are currently editing a text annotation
+            if (editingId) return;
+
+            // Ignore if focus is in an input field (like AI panel or other text areas)
+            const target = e.target as HTMLElement | null;
+            const tagName = target?.tagName.toLowerCase();
+            if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) {
+                return;
+            }
+
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                e.preventDefault(); // Prevent browser save
+                if (e.shiftKey) {
+                    openSaveAsDialog();
+                } else {
+                    handleSave();
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleSaveShortcut);
+        return () => window.removeEventListener('keydown', handleSaveShortcut);
+    }, [handleSave, openSaveAsDialog, editingId]);
 
     const changePage = (delta: number) => {
         const newPage = Math.max(1, Math.min(numPages, currentPage + delta));
@@ -1052,37 +1085,107 @@ const PdfViewer: React.FC = () => {
     }
 
     return (
-        <div className="flex-1 flex flex-col gap-2 min-h-0">
-            <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
-                <button onClick={handleFileOpen} className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-700 transition-colors">파일 열기</button>
-                <span className="text-xs text-gray-400">|</span>
-                <button onClick={() => changePage(-1)} disabled={currentPage <= 1} className="p-1 hover:bg-gray-100 rounded disabled:opacity-40"><ChevronLeft size={16} /></button>
-                <span className="text-xs text-gray-700 min-w-[80px] text-center">{currentPage} / {numPages}</span>
-                <button onClick={() => changePage(1)} disabled={currentPage >= numPages} className="p-1 hover:bg-gray-100 rounded disabled:opacity-40"><ChevronRight size={16} /></button>
-                <span className="text-xs text-gray-400">|</span>
-                <button onClick={() => setScale((s) => Math.max(0.5, s - 0.1))} className="p-1 hover:bg-gray-100 rounded"><ZoomOut size={16} /></button>
-                <span className="text-xs text-gray-600 min-w-[50px] text-center">{(scale * 100).toFixed(0)}%</span>
-                <button onClick={() => setScale((s) => Math.min(3, s + 0.1))} className="p-1 hover:bg-gray-100 rounded"><ZoomIn size={16} /></button>
-                <span className="text-xs text-gray-400">|</span>
-                <button onClick={handleUndo} title="Ctrl+Z" className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-700 transition-colors">↩ 취소</button>
-                <button onClick={handleRedo} title="Ctrl+Y" className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-700 transition-colors">↪ 복구</button>
-                <span className="text-xs text-gray-400">|</span>
-                <button
-                    onClick={handleSave}
-                    className="flex items-center gap-1 text-xs px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors shadow-sm"
-                >
-                    <Save size={14} /> 저장
-                </button>
-                <button
-                    onClick={openSaveAsDialog}
-                    className="flex items-center gap-1 text-xs px-3 py-1 bg-indigo-500 hover:bg-indigo-600 text-white rounded transition-colors shadow-sm"
-                >
-                    <Save size={14} /> 다른 이름으로 저장
-                </button>
-                {currentFileName && <span className="ml-auto text-xs text-gray-500 truncate max-w-[200px]">{currentFileName}</span>}
+        <div className="flex flex-col h-full bg-transparent">
+            {/* ── Toolbar Area ── */}
+            <div className="flex items-center justify-between px-6 py-3 border-b theme-border-subtle shrink-0">
+                {/* Left: Files / Controls */}
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={handleFileOpen}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50/50 hover:bg-indigo-100/50 text-indigo-600 rounded-lg text-xs font-bold transition-colors border border-indigo-100"
+                        title="파일 열기 (Ctrl+O)"
+                    >
+                        <FileUp size={14} />
+                        <span>파일열기</span>
+                    </button>
+                    <div className="h-4 w-px bg-slate-200/50" />
+
+                    {/* Pagination */}
+                    <div className="flex items-center gap-2 theme-bg-panel px-2 py-1 rounded-lg border theme-border">
+                        <button
+                            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                            disabled={currentPage <= 1 || !docType}
+                            className="p-1 theme-tool-hover rounded disabled:opacity-30 theme-text-main"
+                        >
+                            <ChevronLeft size={16} />
+                        </button>
+                        <span className="text-xs font-semibold theme-text-muted min-w-[3rem] text-center">
+                            {docType ? `${currentPage} / ${numPages}` : '- / -'}
+                        </span>
+                        <button
+                            onClick={() => setCurrentPage((p) => Math.min(numPages, p + 1))}
+                            disabled={currentPage >= numPages || !docType}
+                            className="p-1 theme-tool-hover rounded disabled:opacity-30 theme-text-main"
+                        >
+                            <ChevronRight size={16} />
+                        </button>
+                    </div>
+
+                    <div className="h-4 w-px bg-slate-200/50" />
+
+                    {/* Zoom */}
+                    <div className="flex items-center gap-2 theme-bg-panel px-2 py-1 rounded-lg border theme-border">
+                        <button
+                            onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}
+                            disabled={!docType}
+                            className="p-1 theme-tool-hover rounded disabled:opacity-30 theme-text-main"
+                        >
+                            <ZoomOut size={16} />
+                        </button>
+                        <span className="text-xs font-semibold theme-text-muted min-w-[3rem] text-center">
+                            {Math.round(scale * 100)}%
+                        </span>
+                        <button
+                            onClick={() => setScale((s) => Math.min(3.0, s + 0.2))}
+                            disabled={!docType}
+                            className="p-1 theme-tool-hover rounded disabled:opacity-30 theme-text-main"
+                        >
+                            <ZoomIn size={16} />
+                        </button>
+                    </div>
+                    <div className="h-4 w-px bg-slate-200/50" />
+
+                    {/* History */}
+                    <div className="flex items-center gap-1 theme-bg-panel px-1 py-1 rounded-lg border theme-border">
+                        <button
+                            onClick={handleUndo}
+                            disabled={historyIndex < 0}
+                            className="px-2 py-1 rounded text-[10px] font-bold theme-text-main theme-tool-hover disabled:opacity-30 transition-colors"
+                        >
+                            <span className="flex items-center gap-1"><span className="text-[14px]">↶</span> 취소</span>
+                        </button>
+                        <div className="w-px h-3 bg-slate-200/50" />
+                        <button
+                            onClick={handleRedo}
+                            disabled={historyIndex >= history.length - 1}
+                            className="px-2 py-1 rounded text-[10px] font-bold theme-text-main theme-tool-hover disabled:opacity-30 transition-colors"
+                        >
+                            <span className="flex items-center gap-1"><span className="text-[14px]">↷</span> 복구</span>
+                        </button>
+                    </div>
+                </div>
+
+                {/* Right: Save Controls & Info */}
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={handleSave}
+                        className="flex items-center gap-1.5 px-3 py-1.5 theme-btn-primary rounded-lg text-xs font-bold transition-colors"
+                    >
+                        <Save size={14} />
+                        <span>저장</span>
+                    </button>
+                    <button
+                        onClick={openSaveAsDialog}
+                        className="flex items-center gap-1.5 px-3 py-1.5 theme-btn-secondary rounded-lg text-xs font-bold transition-colors"
+                    >
+                        <Save size={14} />
+                        <span>다른 이름으로 저장</span>
+                    </button>
+                    {currentFileName && <span className="ml-auto text-xs text-gray-500 truncate max-w-[200px]">{currentFileName}</span>}
+                </div>
             </div>
 
-            <div ref={containerRef} className="flex-1 overflow-auto bg-gray-200 rounded-lg flex items-start justify-center p-4">
+            <div ref={containerRef} className="flex-1 overflow-auto bg-gray-200 rounded-lg flex items-start justify-center p-4 dark-pdf-filter">
                 <div className="relative shadow-xl">
                     <canvas ref={canvasRef} className="block" />
                     <canvas

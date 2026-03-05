@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 export type ActiveTab = 'pdf' | 'web' | 'code';
 export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser';
+export type ThemeMode = 'white' | 'translucent' | 'dark' | 'custom';
 
 interface ToolSettings {
     color: string;
@@ -16,6 +17,10 @@ interface AppState {
     isRightPanelOpen: boolean;
     toggleLeftPanel: () => void;
     toggleRightPanel: () => void;
+
+    // Theme (CSS Variables)
+    themeMode: ThemeMode;
+    setThemeMode: (mode: ThemeMode) => void;
 
     // Tab Management
     activeTab: ActiveTab;
@@ -58,6 +63,13 @@ export const useAppStore = create<AppState>((set) => ({
     isRightPanelOpen: true,
     toggleLeftPanel: () => set((s) => ({ isLeftPanelOpen: !s.isLeftPanelOpen })),
     toggleRightPanel: () => set((s) => ({ isRightPanelOpen: !s.isRightPanelOpen })),
+
+    // Theme defaults
+    themeMode: 'translucent',
+    setThemeMode: (mode) => {
+        set({ themeMode: mode });
+        document.body.setAttribute('data-theme', mode);
+    },
 
     // Tab defaults
     activeTab: 'pdf',
