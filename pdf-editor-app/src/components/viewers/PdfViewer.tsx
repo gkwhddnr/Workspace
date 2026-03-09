@@ -1063,6 +1063,64 @@ const PdfViewer: React.FC = () => {
         setCurrentPage(newPage);
     };
 
+    // Trackpad Pinch, Ctrl+Wheel, and Touchscreen Pinch Event Listener
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        const handleWheel = (e: WheelEvent) => {
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault(); // 브라우저 전체 확대 방지
+                // 부드러운 확대/축소 비율 계산 (트랙패드의 미세한 deltaY와 마우스 휠의 큰 deltaY 모두 대응)
+                const factor = Math.exp(-e.deltaY / 300);
+                setScale(prev => Math.min(3.0, Math.max(0.2, prev * factor)));
+            }
+        };
+
+        let initialPinchDistance = 0;
+        let initialPinchScale = 1;
+
+        const handleTouchStart = (e: TouchEvent) => {
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                initialPinchDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                setScale(prev => {
+                    initialPinchScale = prev;
+                    return prev;
+                });
+            }
+        };
+
+        const handleTouchMove = (e: TouchEvent) => {
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                const currentDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+
+                if (initialPinchDistance > 0) {
+                    const factor = currentDistance / initialPinchDistance;
+                    setScale(Math.min(3.0, Math.max(0.2, initialPinchScale * factor)));
+                }
+            }
+        };
+
+        // passive: false로 등록해야 e.preventDefault() 호출 가능
+        container.addEventListener('wheel', handleWheel, { passive: false });
+        container.addEventListener('touchstart', handleTouchStart, { passive: false });
+        container.addEventListener('touchmove', handleTouchMove, { passive: false });
+
+        return () => {
+            container.removeEventListener('wheel', handleWheel);
+            container.removeEventListener('touchstart', handleTouchStart);
+            container.removeEventListener('touchmove', handleTouchMove);
+        };
+    }, []);
+
     const hasDocument = !!pdfDoc || !!imageDoc;
     if (!hasDocument) {
         return (
