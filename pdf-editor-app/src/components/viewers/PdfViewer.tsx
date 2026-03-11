@@ -13,6 +13,7 @@ const PdfViewer: React.FC = () => {
     const { currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTab } = useAppStore();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+    const guideCanvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
     const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
@@ -47,6 +48,39 @@ const PdfViewer: React.FC = () => {
     // Text Box Interaction State
     const [isDraggingBox, setIsDraggingBox] = useState(false);
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+    const [guideLineY, setGuideLineY] = useState<number | null>(null); // Horizontal dashed line
+    const [guideLineX, setGuideLineX] = useState<number | null>(null); // Vertical dashed line
+
+    // Effect to render alignment guides on a separate canvas
+    useEffect(() => {
+        const canvas = guideCanvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (guideLineY === null && guideLineX === null) return;
+
+        ctx.save();
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = 'rgba(37, 99, 235, 0.7)'; // Brighter blue for guides
+        ctx.lineWidth = 1;
+
+        if (guideLineY !== null) {
+            ctx.beginPath();
+            ctx.moveTo(0, guideLineY);
+            ctx.lineTo(canvas.width, guideLineY);
+            ctx.stroke();
+        }
+        if (guideLineX !== null) {
+            ctx.beginPath();
+            ctx.moveTo(guideLineX, 0);
+            ctx.lineTo(guideLineX, canvas.height);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }, [guideLineX, guideLineY, scale]); // Re-render when guides or scale changes
     const [resizingType, setResizingType] = useState<'width' | 'height' | 'both' | null>(null);
 
     const { activeTool, toolSettings } = useAppStore();
@@ -73,6 +107,14 @@ const PdfViewer: React.FC = () => {
                 overlay.style.width = `${width}px`;
                 overlay.style.height = `${height}px`;
                 overlay.getContext('2d')!.scale(dpr, dpr);
+            }
+
+            if (guideCanvasRef.current) {
+                const guide = guideCanvasRef.current;
+                guide.width = width * dpr;
+                guide.height = height * dpr;
+                guide.style.width = `${width}px`;
+                guide.style.height = `${height}px`;
             }
 
             ctx.scale(dpr, dpr);
@@ -108,6 +150,14 @@ const PdfViewer: React.FC = () => {
                 overlay.style.height = `${viewport.height / dpr}px`;
                 overlay.style.width = `${viewport.width / dpr}px`;
                 overlay.getContext('2d')!.scale(dpr, dpr);
+            }
+
+            if (guideCanvasRef.current) {
+                const guide = guideCanvasRef.current;
+                guide.height = viewport.height;
+                guide.width = viewport.width;
+                guide.style.height = `${viewport.height / dpr}px`;
+                guide.style.width = `${viewport.width / dpr}px`;
             }
 
             await page.render({ canvasContext: ctx, viewport }).promise;
@@ -529,22 +579,42 @@ const PdfViewer: React.FC = () => {
         if (activeTool === 'pen' || activeTool === 'eraser' || (activeTool === 'highlight' && highlightAsStroke)) {
             ctx.lineTo(pos.x, pos.y);
             ctx.stroke();
-        } else if (activeTool === 'highlight') {
-            // Find nearby text block
+        } else if (activeTool === 'highlight' && startPos) {
+            if (historyIndex >= 0 && history[historyIndex]) {
+                ctx.putImageData(history[historyIndex], 0, 0);
+            } else {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+
+            let minX = Math.min(startPos.x, pos.x);
+            let maxX = Math.max(startPos.x, pos.x);
+            let minY = Math.min(startPos.y, pos.y);
+            let maxY = Math.max(startPos.y, pos.y);
+
+            // Find overlapping text block to snap Y range
             const block = textBlocks.find(b =>
                 pos.x >= b.rect[0] && pos.x <= b.rect[0] + b.rect[2] &&
                 pos.y >= b.rect[1] && pos.y <= b.rect[1] + b.rect[3]
             );
 
             if (block) {
-                const blockIndex = textBlocks.indexOf(block);
-                if (!highlightedInStroke.has(blockIndex)) {
-                    ctx.fillStyle = toolSettings.color;
-                    ctx.globalAlpha = 0.3;
-                    ctx.fillRect(block.rect[0], block.rect[1], block.rect[2], block.rect[3]);
-                    setHighlightedInStroke(prev => new Set(prev).add(blockIndex));
+                minY = block.rect[1] - 1;
+                maxY = block.rect[1] + block.rect[3] + 1;
+                // Intelligent Edge Snapping: If close to start/end of block, snap X
+                const threshold = 15;
+                if (Math.abs(minX - block.rect[0]) < threshold) minX = block.rect[0];
+                if (Math.abs(maxX - (block.rect[0] + block.rect[2])) < threshold) maxX = block.rect[0] + block.rect[2];
+                
+                // If extremely short drag, assume full block highlight
+                if (Math.abs(maxX - minX) < 10) {
+                    minX = block.rect[0];
+                    maxX = block.rect[0] + block.rect[2];
                 }
             }
+
+            ctx.fillStyle = toolSettings.color;
+            ctx.globalAlpha = 0.35;
+            ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
         } else if ((activeTool === 'rect' || activeTool === 'circle' || activeTool.includes('arrow')) && startPos) {
             if (historyIndex >= 0 && history[historyIndex]) {
                 ctx.putImageData(history[historyIndex], 0, 0);
@@ -578,17 +648,61 @@ const PdfViewer: React.FC = () => {
             });
 
             if (intersectingBlocks.length > 0) {
-                minX = Math.min(...intersectingBlocks.map(b => b.rect[0]));
+                // Keep X boundaries from drag (user's precise control)
+                // Snap Y boundaries to text (vertical alignment)
                 minY = Math.min(...intersectingBlocks.map(b => b.rect[1]));
-                maxX = Math.max(...intersectingBlocks.map(b => b.rect[0] + b.rect[2]));
                 maxY = Math.max(...intersectingBlocks.map(b => b.rect[1] + b.rect[3]));
 
-                // Add a small padding for visual comfort
-                const padding = 4;
-                minX -= padding;
+                // Add a small padding for visual comfort (vertical only)
+                const padding = 2;
                 minY -= padding;
-                maxX += padding;
                 maxY += padding;
+                setGuideLineY(minY + padding); // Show guideline for rectangles/circles too
+                
+                // Horizontal Edge Snapping for shapes/highlighters
+                const snapXThreshold = 15;
+                intersectingBlocks.forEach(b => {
+                    if (Math.abs(minX - b.rect[0]) < snapXThreshold) {
+                        minX = b.rect[0];
+                        setGuideLineX(minX);
+                    }
+                    if (Math.abs(maxX - (b.rect[0] + b.rect[2])) < snapXThreshold) {
+                        maxX = b.rect[0] + b.rect[2];
+                        setGuideLineX(maxX);
+                    }
+                });
+            } else {
+                // Phantom Line Snapping for empty areas
+                const snapThreshold = 10;
+                const uniqueBaselines = Array.from(new Set(textBlocks.map(b => b.rect[1])));
+                let snapped = false;
+                for (const baseline of uniqueBaselines) {
+                    if (Math.abs(minY - baseline) < snapThreshold) {
+                        const height = maxY - minY;
+                        minY = baseline;
+                        maxY = minY + height;
+                        setGuideLineY(minY);
+                        snapped = true;
+                        break;
+                    }
+                }
+                
+                // Phantom Edge Snapping (Margins)
+                const margins = Array.from(new Set([
+                    ...textBlocks.map(b => b.rect[0]),
+                    ...textBlocks.map(b => b.rect[0] + b.rect[2])
+                ]));
+                for (const margin of margins) {
+                    if (Math.abs(minX - margin) < snapThreshold) {
+                        const width = maxX - minX;
+                        minX = margin;
+                        maxX = minX + width;
+                        setGuideLineX(minX);
+                        break;
+                    }
+                }
+
+                if (!snapped) setGuideLineY(null);
             }
 
             const finalW = maxX - minX;
@@ -603,17 +717,37 @@ const PdfViewer: React.FC = () => {
                 ctx.ellipse(centerX, centerY, finalW / 2, finalH / 2, 0, 0, 2 * Math.PI);
             } else if (activeTool.startsWith('arrow-')) {
                 const headlen = 10 + toolSettings.strokeWidth * 2;
-                let angle = Math.atan2(pos.y - startPos.y, pos.x - startPos.x);
                 let fromX = startPos.x;
                 let fromY = startPos.y;
                 let toX = pos.x;
                 let toY = pos.y;
 
+                // Snap Arrow to text edges
+                const snapThreshold = 20;
+                textBlocks.forEach(b => {
+                    const edges = [
+                        { x: b.rect[0], y: b.rect[1] + b.rect[3]/2 }, // Left
+                        { x: b.rect[0] + b.rect[2], y: b.rect[1] + b.rect[3]/2 }, // Right
+                        { x: b.rect[0] + b.rect[2]/2, y: b.rect[1] }, // Top
+                        { x: b.rect[0] + b.rect[2]/2, y: b.rect[1] + b.rect[3] } // Bottom
+                    ];
+                    edges.forEach(edge => {
+                        if (Math.hypot(toX - edge.x, toY - edge.y) < snapThreshold) {
+                            toX = edge.x;
+                            toY = edge.y;
+                            setGuideLineX(toX);
+                            setGuideLineY(toY);
+                        }
+                    });
+                });
+
+                let angle = Math.atan2(toY - fromY, toX - fromX);
+
                 // Fixed direction arrows if user drags in a specific way OR just use the tool type
-                if (activeTool === 'arrow-right') { toX = Math.max(fromX + 10, pos.x); toY = fromY; angle = 0; }
-                else if (activeTool === 'arrow-left') { toX = Math.min(fromX - 10, pos.x); toY = fromY; angle = Math.PI; }
-                else if (activeTool === 'arrow-up') { toX = fromX; toY = Math.min(fromY - 10, pos.y); angle = -Math.PI / 2; }
-                else if (activeTool === 'arrow-down') { toX = fromX; toY = Math.max(fromY + 10, pos.y); angle = Math.PI / 2; }
+                if (activeTool === 'arrow-right') { toX = Math.max(fromX + 10, toX); toY = fromY; angle = 0; }
+                else if (activeTool === 'arrow-left') { toX = Math.min(fromX - 10, toX); toY = fromY; angle = Math.PI; }
+                else if (activeTool === 'arrow-up') { toX = fromX; toY = Math.min(fromY - 10, toY); angle = -Math.PI / 2; }
+                else if (activeTool === 'arrow-down') { toX = fromX; toY = Math.max(fromY + 10, toY); angle = Math.PI / 2; }
 
                 ctx.moveTo(fromX, fromY);
                 ctx.lineTo(toX, toY);
@@ -635,6 +769,8 @@ const PdfViewer: React.FC = () => {
         setIsDrawing(false);
         saveToHistory();
         setStartPos(null);
+        setGuideLineY(null);
+        setGuideLineX(null);
         const ctx = overlayCanvasRef.current?.getContext('2d')!;
         ctx.beginPath();
         ctx.globalAlpha = 1.0; // Reset alpha
@@ -757,21 +893,89 @@ const PdfViewer: React.FC = () => {
                 const rawX = (e.clientX - rect.left) - dragOffset.x;
                 const rawY = (e.clientY - rect.top) - dragOffset.y;
 
-                // PDF Text Snapping Logic
+                // PDF Text Snapping Logic (including phantom baselines)
                 const snapThreshold = 15; // pixels
                 let bestY = rawY;
-                let minDiff = Infinity;
+                let bestX = rawX;
+                let minDiffY = Infinity;
+                let minDiffX = Infinity;
+                let foundSnapY = false;
+                let foundSnapX = false;
 
+                // 1. Text Block Snapping (Active areas)
                 textBlocks.forEach(b => {
-                    const diff = Math.abs(rawY - b.rect[1]);
-                    if (diff < snapThreshold && diff < minDiff) {
-                        minDiff = diff;
-                        bestY = b.rect[1] - 4; // Slight offset to align textarea text visually with PDF text
+                    const diffY = Math.abs(rawY - b.rect[1]);
+                    if (diffY < snapThreshold && diffY < minDiffY) {
+                        minDiffY = diffY;
+                        bestY = b.rect[1] - 4; 
+                        foundSnapY = true;
+                    }
+                    const diffXLeft = Math.abs(rawX - b.rect[0]);
+                    const diffXRight = Math.abs(rawX - (b.rect[0] + b.rect[2]));
+                    if (diffXLeft < snapThreshold && diffXLeft < minDiffX) {
+                        minDiffX = diffXLeft;
+                        bestX = b.rect[0];
+                        foundSnapX = true;
+                    }
+                    if (diffXRight < snapThreshold && diffXRight < minDiffX) {
+                        minDiffX = diffXRight;
+                        bestX = b.rect[0] + b.rect[2];
+                        foundSnapX = true;
                     }
                 });
 
+                // 2. Phantom Snapping (Margins and Baselines)
+                if (!foundSnapY) {
+                    const uniqueBaselines = Array.from(new Set(textBlocks.map(b => b.rect[1])));
+                    uniqueBaselines.forEach(baseline => {
+                        const diff = Math.abs(rawY - baseline);
+                        if (diff < snapThreshold && diff < minDiffY) {
+                            minDiffY = diff;
+                            bestY = baseline - 4;
+                            foundSnapY = true;
+                        }
+                    });
+                }
+                if (!foundSnapX) {
+                    const margins = Array.from(new Set([
+                        ...textBlocks.map(b => b.rect[0]),
+                        ...textBlocks.map(b => b.rect[0] + b.rect[2])
+                    ]));
+                    margins.forEach(margin => {
+                        const diff = Math.abs(rawX - margin);
+                        if (diff < snapThreshold && diff < minDiffX) {
+                            minDiffX = diff;
+                            bestX = margin;
+                            foundSnapX = true;
+                        }
+                    });
+                }
+
+                // 3. Collision Avoidance (Soft Repel / Smart Spacing)
+                // If the box overlaps or is too close to a block, push it slightly
+                const padding = 10;
+                textBlocks.forEach(b => {
+                    const boxW = textareaRef.current?.offsetWidth || 300;
+                    const boxH = textareaRef.current?.offsetHeight || 100;
+                    // Check if box (at bestX, bestY) overlaps block b
+                    const overlaps = !(bestX > b.rect[0] + b.rect[2] + padding ||
+                                     bestX + boxW < b.rect[0] - padding ||
+                                     bestY > b.rect[1] + b.rect[3] + padding ||
+                                     bestY + boxH < b.rect[1] - padding);
+                    
+                    if (overlaps) {
+                        // If it overlaps, try to snap to the right or bottom edge neatly
+                        if (Math.abs(bestX - (b.rect[0] + b.rect[2] + padding)) < 30) {
+                            bestX = b.rect[0] + b.rect[2] + padding;
+                        }
+                    }
+                });
+
+                setGuideLineY(foundSnapY ? bestY + 4 : null);
+                setGuideLineX(foundSnapX ? bestX : null);
+
                 setInputPos({
-                    x: rawX,
+                    x: bestX,
                     y: bestY
                 });
             } else if (resizingType && textareaRef.current) {
@@ -790,6 +994,8 @@ const PdfViewer: React.FC = () => {
         const handleMouseUp = () => {
             setIsDraggingBox(false);
             setResizingType(null);
+            setGuideLineY(null); 
+            setGuideLineX(null);
         };
 
         if (isDraggingBox || resizingType) {
@@ -1278,6 +1484,12 @@ const PdfViewer: React.FC = () => {
                         onMouseUp={endDraw}
                         onMouseLeave={endDraw}
                         onClick={handleTextClick}
+                    />
+                    {/* Dedicated Interaction Guide Canvas */}
+                    <canvas
+                        ref={guideCanvasRef}
+                        className="absolute top-0 left-0 pointer-events-none"
+                        style={{ width: (canvasRef.current?.width || 0) / (window.devicePixelRatio || 1), height: (canvasRef.current?.height || 0) / (window.devicePixelRatio || 1) }}
                     />
 
                     {/* Floating Text Input */}
