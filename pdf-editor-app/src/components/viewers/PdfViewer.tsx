@@ -498,10 +498,10 @@ const PdfViewer: React.FC = () => {
         const highlightAsStroke = activeTool === 'highlight' && (docType === 'image' || textBlocks.length === 0);
 
         if (activeTool === 'eraser') {
-            // 진짜 지우개(투명 처리): 이미지 위에서도 자연스럽게 동작
-            ctx.globalCompositeOperation = 'destination-out';
+            // 진짜 지우개(투명 처리) 대신 화이트아웃(배경 덮어쓰기)으로 변경하여 PDF 원본 내용도 '지울' 수 있게 함
+            ctx.globalCompositeOperation = 'source-over';
             ctx.globalAlpha = 1.0;
-            ctx.strokeStyle = 'rgba(0,0,0,1)';
+            ctx.strokeStyle = '#FFFFFF'; // 배경색(보통 흰색)으로 덮음
             ctx.lineWidth = toolSettings.strokeWidth * 10;
         } else if (activeTool === 'highlight') {
             ctx.globalAlpha = 0.35;
@@ -545,7 +545,7 @@ const PdfViewer: React.FC = () => {
                     setHighlightedInStroke(prev => new Set(prev).add(blockIndex));
                 }
             }
-        } else if ((activeTool === 'rect' || activeTool === 'circle') && startPos) {
+        } else if ((activeTool === 'rect' || activeTool === 'circle' || activeTool.includes('arrow')) && startPos) {
             if (historyIndex >= 0 && history[historyIndex]) {
                 ctx.putImageData(history[historyIndex], 0, 0);
             } else {
@@ -600,12 +600,31 @@ const PdfViewer: React.FC = () => {
                 // Draw ellipse matching the bounding box
                 const centerX = minX + finalW / 2;
                 const centerY = minY + finalH / 2;
-                const radiusX = finalW / 2;
-                const radiusY = finalH / 2;
-                // Only draw if radius is valid
-                if (radiusX > 0 && radiusY > 0) {
-                    ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
-                }
+                ctx.ellipse(centerX, centerY, finalW / 2, finalH / 2, 0, 0, 2 * Math.PI);
+            } else if (activeTool.startsWith('arrow-')) {
+                const headlen = 10 + toolSettings.strokeWidth * 2;
+                let angle = Math.atan2(pos.y - startPos.y, pos.x - startPos.x);
+                let fromX = startPos.x;
+                let fromY = startPos.y;
+                let toX = pos.x;
+                let toY = pos.y;
+
+                // Fixed direction arrows if user drags in a specific way OR just use the tool type
+                if (activeTool === 'arrow-right') { toX = Math.max(fromX + 10, pos.x); toY = fromY; angle = 0; }
+                else if (activeTool === 'arrow-left') { toX = Math.min(fromX - 10, pos.x); toY = fromY; angle = Math.PI; }
+                else if (activeTool === 'arrow-up') { toX = fromX; toY = Math.min(fromY - 10, pos.y); angle = -Math.PI / 2; }
+                else if (activeTool === 'arrow-down') { toX = fromX; toY = Math.max(fromY + 10, pos.y); angle = Math.PI / 2; }
+
+                ctx.moveTo(fromX, fromY);
+                ctx.lineTo(toX, toY);
+                
+                // Draw arrowhead
+                ctx.stroke(); // Draw line first
+                ctx.beginPath();
+                ctx.moveTo(toX, toY);
+                ctx.lineTo(toX - headlen * Math.cos(angle - Math.PI / 6), toY - headlen * Math.sin(angle - Math.PI / 6));
+                ctx.moveTo(toX, toY);
+                ctx.lineTo(toX - headlen * Math.cos(angle + Math.PI / 6), toY - headlen * Math.sin(angle + Math.PI / 6));
             }
             ctx.stroke();
         }
@@ -1065,15 +1084,17 @@ const PdfViewer: React.FC = () => {
 
     // Trackpad Pinch, Ctrl+Wheel, and Touchscreen Pinch Event Listener
     useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
-
         const handleWheel = (e: WheelEvent) => {
-            if (e.ctrlKey || e.metaKey) {
-                e.preventDefault(); // 브라우저 전체 확대 방지
-                // 부드러운 확대/축소 비율 계산 (트랙패드의 미세한 deltaY와 마우스 휠의 큰 deltaY 모두 대응)
+            const container = containerRef.current;
+            if (!container) return;
+            const rect = container.getBoundingClientRect();
+            const isInContainer = e.clientX >= rect.left && e.clientX <= rect.right &&
+                                 e.clientY >= rect.top && e.clientY <= rect.bottom;
+
+            if (isInContainer && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault(); 
                 const factor = Math.exp(-e.deltaY / 300);
-                setScale(prev => Math.min(3.0, Math.max(0.2, prev * factor)));
+                setScale(prev => Math.min(4.0, Math.max(0.1, prev * factor)));
             }
         };
 
@@ -1082,44 +1103,46 @@ const PdfViewer: React.FC = () => {
 
         const handleTouchStart = (e: TouchEvent) => {
             if (e.touches.length === 2) {
-                e.preventDefault();
-                initialPinchDistance = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
-                );
-                setScale(prev => {
-                    initialPinchScale = prev;
-                    return prev;
-                });
+                const container = containerRef.current;
+                if (!container) return;
+                const rect = container.getBoundingClientRect();
+                const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+
+                if (centerX >= rect.left && centerX <= rect.right &&
+                    centerY >= rect.top && centerY <= rect.bottom) {
+                    e.preventDefault();
+                    initialPinchDistance = Math.hypot(
+                        e.touches[0].clientX - e.touches[1].clientX,
+                        e.touches[0].clientY - e.touches[1].clientY
+                    );
+                    initialPinchScale = scale;
+                }
             }
         };
 
         const handleTouchMove = (e: TouchEvent) => {
-            if (e.touches.length === 2) {
+            if (e.touches.length === 2 && initialPinchDistance > 0) {
                 e.preventDefault();
                 const currentDistance = Math.hypot(
                     e.touches[0].clientX - e.touches[1].clientX,
                     e.touches[0].clientY - e.touches[1].clientY
                 );
-
-                if (initialPinchDistance > 0) {
-                    const factor = currentDistance / initialPinchDistance;
-                    setScale(Math.min(3.0, Math.max(0.2, initialPinchScale * factor)));
-                }
+                const factor = currentDistance / initialPinchDistance;
+                setScale(Math.min(4.0, Math.max(0.1, initialPinchScale * factor)));
             }
         };
 
-        // passive: false로 등록해야 e.preventDefault() 호출 가능
-        container.addEventListener('wheel', handleWheel, { passive: false });
-        container.addEventListener('touchstart', handleTouchStart, { passive: false });
-        container.addEventListener('touchmove', handleTouchMove, { passive: false });
+        window.addEventListener('wheel', handleWheel, { passive: false });
+        window.addEventListener('touchstart', handleTouchStart, { passive: false });
+        window.addEventListener('touchmove', handleTouchMove, { passive: false });
 
         return () => {
-            container.removeEventListener('wheel', handleWheel);
-            container.removeEventListener('touchstart', handleTouchStart);
-            container.removeEventListener('touchmove', handleTouchMove);
+            window.removeEventListener('wheel', handleWheel);
+            window.removeEventListener('touchstart', handleTouchStart);
+            window.removeEventListener('touchmove', handleTouchMove);
         };
-    }, []);
+    }, [scale]);
 
     const hasDocument = !!pdfDoc || !!imageDoc;
     if (!hasDocument) {
@@ -1262,7 +1285,7 @@ const PdfViewer: React.FC = () => {
                         <div
                             className="absolute z-[100] animate-in fade-in zoom-in duration-200 p-2 border-2 border-dashed border-blue-400/50 bg-blue-50/10 rounded-lg cursor-move"
                             style={{
-                                left: inputPos.x - 8, // Offset for padding
+                                left: inputPos.x - 8,
                                 top: inputPos.y - 8,
                             }}
                             onMouseDown={handleBoxMouseDown}
@@ -1272,22 +1295,35 @@ const PdfViewer: React.FC = () => {
                                     ref={textareaRef}
                                     autoFocus
                                     value={tempText}
-                                    onChange={(e) => setTempText(e.target.value)}
+                                    onChange={(e) => {
+                                        setTempText(e.target.value);
+                                        // Auto-expand logic based on content
+                                        if (textareaRef.current) {
+                                            textareaRef.current.style.width = 'auto'; // Reset to measure
+                                            textareaRef.current.style.width = `${Math.max(100, textareaRef.current.scrollWidth + 10)}px`;
+                                            textareaRef.current.style.height = 'auto';
+                                            textareaRef.current.style.height = `${Math.max(40, textareaRef.current.scrollHeight)}px`;
+                                        }
+                                    }}
                                     onKeyDown={handleInputKeyDown}
-                                    className="bg-white/95 border-2 border-blue-500 rounded shadow-2xl p-2 outline-none text-slate-800 block cursor-text select-text"
+                                    className="bg-white/95 border-2 border-blue-500 rounded shadow-2xl p-2 outline-none text-slate-800 block cursor-text select-text overflow-hidden whitespace-pre-wrap"
                                     style={{
                                         fontSize: `${toolSettings.fontSize}px`,
                                         fontFamily: toolSettings.fontFamily,
                                         color: toolSettings.color,
-                                        width: editingId ? (textAnnotations.find(a => a.id === editingId)?.width || 300) : 300,
-                                        height: editingId ? (textAnnotations.find(a => a.id === editingId)?.height || 100) : 100,
-                                        resize: 'none' // We'll use custom handles
+                                        width: editingId ? (textAnnotations.find(a => a.id === editingId)?.width || 120) : '120px',
+                                        height: editingId ? (textAnnotations.find(a => a.id === editingId)?.height || 40) : '40px',
+                                        resize: 'none',
+                                        minWidth: '100px',
+                                        minHeight: '40px'
                                     }}
                                 />
-                                {/* Explicit Completion Button */}
+                                {/* Explicit Completion Button - Positioned smartly */}
                                 <button
                                     onMouseDown={(e) => { e.stopPropagation(); handleInputComplete(); }}
-                                    className="absolute -top-3 -right-3 bg-green-600 hover:bg-green-700 text-white w-8 h-8 rounded-full shadow-lg border-2 border-white flex items-center justify-center transition-all hover:scale-110 z-[110]"
+                                    className={`absolute bg-green-600 hover:bg-green-700 text-white w-8 h-8 rounded-full shadow-lg border-2 border-white flex items-center justify-center transition-all hover:scale-110 z-[110] 
+                                        ${inputPos && (inputPos.x + (textareaRef.current?.offsetWidth || 300) > (canvasRef.current?.width || 0) / (window.devicePixelRatio || 1) - 60) 
+                                            ? '-left-3 -top-3' : '-right-3 -top-3'}`}
                                     title="작업 완료"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -1310,7 +1346,7 @@ const PdfViewer: React.FC = () => {
                                     <div className="w-1.5 h-1.5 border-r-2 border-b-2 border-white rotate-[-45deg] translate-x-[-1px] translate-y-[-1px]" />
                                 </div>
                             </div>
-                            <div className="bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-b-sm absolute -bottom-4 right-2 uppercase tracking-tighter shadow-md">
+                            <div className="bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-b-sm absolute -bottom-4 left-2 uppercase tracking-tighter shadow-md">
                                 Ctrl+Enter to Finish | Drag Border to Move
                             </div>
                         </div>

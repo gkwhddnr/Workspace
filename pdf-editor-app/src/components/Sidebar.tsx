@@ -2,7 +2,8 @@ import React from 'react';
 import { useAppStore, DrawingTool } from '../store/useAppStore';
 import {
     MousePointer2, Pencil, Type, Square, Circle, Eraser,
-    Palette, Minus, Plus, Highlighter
+    Palette, Minus, Plus, Highlighter,
+    ArrowUp, ArrowDown, ArrowLeft, ArrowRight
 } from 'lucide-react';
 
 const tools: { id: DrawingTool; label: string; shortcut: string; icon: React.ReactNode }[] = [
@@ -13,6 +14,10 @@ const tools: { id: DrawingTool; label: string; shortcut: string; icon: React.Rea
     { id: 'rect', label: '사각형', shortcut: 'Q', icon: <Square size={16} /> },
     { id: 'circle', label: '원', shortcut: 'C', icon: <Circle size={16} /> },
     { id: 'eraser', label: '지우개', shortcut: 'E', icon: <Eraser size={16} /> },
+    { id: 'arrow-up', label: '위 화살표', shortcut: 'U', icon: <ArrowUp size={16} /> },
+    { id: 'arrow-down', label: '아래 화살표', shortcut: 'D', icon: <ArrowDown size={16} /> },
+    { id: 'arrow-left', label: '왼쪽 화살표', shortcut: 'L', icon: <ArrowLeft size={16} /> },
+    { id: 'arrow-right', label: '오른쪽 화살표', shortcut: 'R', icon: <ArrowRight size={16} /> },
 ];
 
 const PRESET_COLORS = [
