@@ -9,6 +9,27 @@ import { PDFDocument } from 'pdf-lib';
 // pdfjs worker setup - using absolute local path for maximum reliability
 pdfjsLib.GlobalWorkerOptions.workerSrc = window.location.origin + '/pdf.worker.min.js';
 
+// --- Math Helpers for Hit Testing ---
+export const distancePointToSegment = (px: number, py: number, x1: number, y1: number, x2: number, y2: number) => {
+    const l2 = (x1 - x2) ** 2 + (y1 - y2) ** 2;
+    if (l2 === 0) return Math.hypot(px - x1, py - y1);
+    let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
+};
+
+// Helper for L-shape elbow calculation
+const getElbowPoint = (startP: {x: number, y: number}, endP: {x: number, y: number}, type: string) => {
+    switch (type) {
+        case 'arrow-l-1': // Horizontal then Vertical (┌ or └ depending on start/end)
+            return { x: endP.x, y: startP.y }; 
+        case 'arrow-l-2': // Vertical then Horizontal (┐ or ┘)
+            return { x: startP.x, y: endP.y };
+        default:
+            return { x: endP.x, y: startP.y };
+    }
+}
+
 interface DrawingAnnotation {
     id: string;
     type: DrawingTool;
@@ -58,6 +79,10 @@ const PdfViewer: React.FC = () => {
 
     const [pageTextAnnotations, setPageTextAnnotations] = useState<Record<number, any[]>>({});
     const [originalData, setOriginalData] = useState<Uint8Array | null>(null);
+
+    // Arrow Resizing / Object Selection State
+    const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
+    const [draggingDrawingHandle, setDraggingDrawingHandle] = useState<'start' | 'end' | 'body' | null>(null);
 
     // 다른 이름으로 저장 다이얼로그 상태
     const [isSaveAsDialogOpen, setIsSaveAsDialogOpen] = useState(false);
@@ -178,7 +203,8 @@ const PdfViewer: React.FC = () => {
                 overlay.width = viewport.width;
                 overlay.style.height = `${viewport.height / dpr}px`;
                 overlay.style.width = `${viewport.width / dpr}px`;
-                overlay.getContext('2d')!.scale(dpr, dpr);
+                // Use setTransform instead of scale to prevent cumulative DPR accumulation on zoom changes
+                overlay.getContext('2d')!.setTransform(dpr, 0, 0, dpr, 0, 0);
             }
 
             if (guideCanvasRef.current) {
@@ -479,14 +505,26 @@ const PdfViewer: React.FC = () => {
                 const cy = (ry + rh / 2) * s;
                 ctx.ellipse(cx, cy, (rw / 2) * s, (rh / 2) * s, 0, 0, 2 * Math.PI);
                 ctx.stroke();
+                ctx.stroke();
             } else if (draw.type.startsWith('arrow-') && draw.points.length >= 2) {
                 const from = draw.points[0];
                 const to = draw.points[1];
                 const headlen = (10 + draw.strokeWidth * 2) * s;
-                const angle = draw.angle ?? Math.atan2((to.y - from.y), (to.x - from.x));
+                let angle = draw.angle ?? Math.atan2((to.y - from.y), (to.x - from.x));
 
+                ctx.beginPath();
                 ctx.moveTo(from.x * s, from.y * s);
-                ctx.lineTo(to.x * s, to.y * s);
+
+                if (draw.type.startsWith('arrow-l-')) {
+                    const elbow = getElbowPoint(from, to, draw.type);
+                    ctx.lineTo(elbow.x * s, elbow.y * s);
+                    ctx.lineTo(to.x * s, to.y * s);
+                    
+                    // recalculate angle based on the last segment (elbow to end)
+                    angle = Math.atan2((to.y - elbow.y), (to.x - elbow.x));
+                } else {
+                    ctx.lineTo(to.x * s, to.y * s);
+                }
                 ctx.stroke();
 
                 ctx.beginPath();
@@ -517,7 +555,31 @@ const PdfViewer: React.FC = () => {
                 ctx.fillText(ann.text, ann.x, ann.y);
             }
         });
-    }, [textAnnotations, drawings, scale, renderVectors]);
+
+        // 3. Draw Selection Handles for Active Arrow
+        if (selectedDrawingId) {
+            const selected = drawings.find(d => d.id === selectedDrawingId);
+            if (selected && selected.type.startsWith('arrow-') && selected.points.length >= 2) {
+                const p1 = selected.points[0];
+                const p2 = selected.points[1];
+                ctx.fillStyle = '#3b82f6'; // blue-500
+                ctx.strokeStyle = '#ffffff'; // white border
+                ctx.lineWidth = 2;
+                
+                // Draw start handle
+                ctx.beginPath();
+                ctx.arc(p1.x * scale, p1.y * scale, 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                // Draw end handle
+                ctx.beginPath();
+                ctx.arc(p2.x * scale, p2.y * scale, 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            }
+        }
+    }, [textAnnotations, drawings, scale, renderVectors, selectedDrawingId]);
 
     // Redraw whenever annotations change, drawings change, or in-progress drawing updates
     useEffect(() => {
@@ -525,7 +587,9 @@ const PdfViewer: React.FC = () => {
         if (!canvas) return;
         const ctx = canvas.getContext('2d')!;
 
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // clearRect must use CSS dimensions (with DPR transform applied), not physical pixels
+        const dpr = window.devicePixelRatio || 1;
+        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
 
         // 1. Draw all annotations (vectors + text)
         drawAllAnnotations(ctx);
@@ -621,10 +685,90 @@ const PdfViewer: React.FC = () => {
     }, [imageDoc, scale, renderImage]);
 
     const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (activeTool === 'select' || activeTool === 'text') return;
-        setIsDrawing(true);
         const pos = getPos(e);
         const normalizedPos = { x: pos.x / scale, y: pos.y / scale };
+
+        // Selection & Hit-Testing Logic
+        if (activeTool === 'select') {
+            // First check if clicking an already selected arrow's handles
+            if (selectedDrawingId) {
+                const selected = drawings.find(d => d.id === selectedDrawingId);
+                if (selected && selected.type.startsWith('arrow-') && selected.points.length >= 2) {
+                    const startP = { x: selected.points[0].x * scale, y: selected.points[0].y * scale };
+                    const endP = { x: selected.points[1].x * scale, y: selected.points[1].y * scale };
+                    
+                    if (Math.hypot(pos.x - startP.x, pos.y - startP.y) <= 12) {
+                        setDraggingDrawingHandle('start');
+                        setIsDrawing(true);
+                        setStartPos(pos);
+                        return;
+                    }
+                    if (Math.hypot(pos.x - endP.x, pos.y - endP.y) <= 12) {
+                        setDraggingDrawingHandle('end');
+                        setIsDrawing(true);
+                        setStartPos(pos);
+                        return;
+                    }
+                    // Check arrow body
+                    let isHittingBody = false;
+                    if (selected.type.startsWith('arrow-l-')) {
+                        const elbow = getElbowPoint(startP, endP, selected.type);
+                        const dist1 = distancePointToSegment(pos.x, pos.y, startP.x, startP.y, elbow.x, elbow.y);
+                        const dist2 = distancePointToSegment(pos.x, pos.y, elbow.x, elbow.y, endP.x, endP.y);
+                        isHittingBody = dist1 <= Math.max(10, selected.strokeWidth * scale) || dist2 <= Math.max(10, selected.strokeWidth * scale);
+                    } else {
+                        isHittingBody = distancePointToSegment(pos.x, pos.y, startP.x, startP.y, endP.x, endP.y) <= Math.max(10, selected.strokeWidth * scale);
+                    }
+
+                    if (isHittingBody) {
+                        setDraggingDrawingHandle('body');
+                        setIsDrawing(true);
+                        setStartPos(pos);
+                        return;
+                    }
+                }
+            }
+
+            // Clicked outside existing handles, try to select a new drawing
+            // Reverse loop to pick topmost drawing
+            for (let i = drawings.length - 1; i >= 0; i--) {
+                const d = drawings[i];
+                if (d.type.startsWith('arrow-') && d.points.length >= 2) {
+                    const startP = { x: d.points[0].x * scale, y: d.points[0].y * scale };
+                    const endP = { x: d.points[1].x * scale, y: d.points[1].y * scale };
+                    
+                    let isHittingBody = false;
+                    if (d.type.startsWith('arrow-l-')) {
+                        const elbow = getElbowPoint(startP, endP, d.type);
+                        const dist1 = distancePointToSegment(pos.x, pos.y, startP.x, startP.y, elbow.x, elbow.y);
+                        const dist2 = distancePointToSegment(pos.x, pos.y, elbow.x, elbow.y, endP.x, endP.y);
+                        isHittingBody = dist1 <= Math.max(10, d.strokeWidth * scale) || dist2 <= Math.max(10, d.strokeWidth * scale);
+                    } else {
+                        isHittingBody = distancePointToSegment(pos.x, pos.y, startP.x, startP.y, endP.x, endP.y) <= Math.max(10, d.strokeWidth * scale);
+                    }
+
+                    if (isHittingBody) {
+                        setSelectedDrawingId(d.id);
+                        setDraggingDrawingHandle('body');
+                        setIsDrawing(true);
+                        setStartPos(pos);
+                        setCanvasRevision(prev => prev + 1); // trigger redraw for handles
+                        return;
+                    }
+                }
+            }
+
+            // Clicked empty space
+            setSelectedDrawingId(null);
+            setDraggingDrawingHandle(null);
+            setCanvasRevision(prev => prev + 1);
+            return;
+        }
+
+        if (activeTool === 'text') return;
+
+        setSelectedDrawingId(null);
+        setIsDrawing(true);
         setStartPos(pos);
         setHighlightedInStroke(new Set());
 
@@ -648,9 +792,71 @@ const PdfViewer: React.FC = () => {
     };
 
     const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!isDrawing || !currentDrawing) return;
+        if (!isDrawing) return;
         const pos = getPos(e);
-        const normalizedPos = { x: pos.x / scale, y: pos.y / scale };
+        let normalizedPos = { x: pos.x / scale, y: pos.y / scale };
+
+        // Helper for endpoint magnetic snapping
+        const hitTestEndpointsForSnap = (px: number, py: number, ignoreId: string | null = null) => {
+            const snapThreshold = 15 / scale;
+            let closestPt: { x: number, y: number } | null = null;
+            let minDist = Infinity;
+            
+            drawings.forEach(d => {
+                if (d.id === ignoreId) return;
+                if (d.type.startsWith('arrow-') && d.points.length >= 2) {
+                    [d.points[0], d.points[1]].forEach(pt => {
+                        const dist = Math.hypot(pt.x - px, pt.y - py);
+                        if (dist < snapThreshold && dist < minDist) {
+                            minDist = dist;
+                            closestPt = { ...pt };
+                        }
+                    });
+                }
+            });
+            return closestPt;
+        };
+
+        if (activeTool === 'select' && selectedDrawingId && draggingDrawingHandle && startPos) {
+            setDrawings(prev => prev.map(d => {
+                if (d.id !== selectedDrawingId) return d;
+                const newD = { ...d };
+                const dx = (pos.x - startPos.x) / scale;
+                const dy = (pos.y - startPos.y) / scale;
+                
+                if (draggingDrawingHandle === 'start') {
+                    const rawNewStart = { x: d.points[0].x + dx, y: d.points[0].y + dy };
+                    const snapped = hitTestEndpointsForSnap(rawNewStart.x, rawNewStart.y, d.id);
+                    newD.points = [snapped || rawNewStart, d.points[1]];
+                } else if (draggingDrawingHandle === 'end') {
+                    const rawNewEnd = { x: d.points[1].x + dx, y: d.points[1].y + dy };
+                    const snapped = hitTestEndpointsForSnap(rawNewEnd.x, rawNewEnd.y, d.id);
+                    newD.points = [d.points[0], snapped || rawNewEnd];
+                    // Update angle for arrow head (straight arrows only, L-shape gets it dynamically in render)
+                    if (!d.type.startsWith('arrow-l-')) {
+                        newD.angle = Math.atan2(newD.points[1].y - newD.points[0].y, newD.points[1].x - newD.points[0].x);
+                    }
+                } else if (draggingDrawingHandle === 'body') {
+                    newD.points = [
+                        { x: d.points[0].x + dx, y: d.points[0].y + dy },
+                        { x: d.points[1].x + dx, y: d.points[1].y + dy }
+                    ];
+                }
+                return newD;
+            }));
+            setStartPos(pos); // Update start pos for continuous diff
+            return;
+        }
+
+        if (!currentDrawing) return;
+
+        // Snapping while initially drawing a brand new arrow
+        if (currentDrawing.type.startsWith('arrow-')) {
+            const snapped = hitTestEndpointsForSnap(normalizedPos.x, normalizedPos.y, currentDrawing.id);
+            if (snapped) {
+                normalizedPos = snapped;
+            }
+        }
 
         const highlightAsStroke = activeTool === 'highlight' && (docType === 'image' || textBlocks.length === 0);
 
@@ -665,20 +871,55 @@ const PdfViewer: React.FC = () => {
             let minY = Math.min(startPos.y, pos.y);
             let maxY = Math.max(startPos.y, pos.y);
 
-            const block = textBlocks.find(b =>
+            const startBlock = textBlocks.find(b =>
+                startPos.x >= b.rect[0] && startPos.x <= b.rect[0] + b.rect[2] &&
+                startPos.y >= b.rect[1] && startPos.y <= b.rect[1] + b.rect[3]
+            );
+
+            const endBlock = textBlocks.find(b =>
                 pos.x >= b.rect[0] && pos.x <= b.rect[0] + b.rect[2] &&
                 pos.y >= b.rect[1] && pos.y <= b.rect[1] + b.rect[3]
             );
 
-            if (block) {
-                minY = block.rect[1] - 1;
-                maxY = block.rect[1] + block.rect[3] + 1;
-                const threshold = 15;
-                if (Math.abs(minX - block.rect[0]) < threshold) minX = block.rect[0];
-                if (Math.abs(maxX - (block.rect[0] + block.rect[2])) < threshold) maxX = block.rect[0] + block.rect[2];
-                if (Math.abs(maxX - minX) < 10) {
-                    minX = block.rect[0];
-                    maxX = block.rect[0] + block.rect[2];
+            const leftBlock = minX === startPos.x ? startBlock : endBlock;
+            const rightBlock = maxX === startPos.x ? startBlock : endBlock;
+
+            if (leftBlock || rightBlock) {
+                // Y bounds
+                const yVals: number[] = [];
+                if (leftBlock) { yVals.push(leftBlock.rect[1], leftBlock.rect[1] + leftBlock.rect[3]); }
+                if (rightBlock) { yVals.push(rightBlock.rect[1], rightBlock.rect[1] + rightBlock.rect[3]); }
+                if (yVals.length > 0) {
+                    minY = Math.min(...yVals) - 1;
+                    maxY = Math.max(...yVals) + 1;
+                }
+
+                const threshold = 20;
+
+                // Snap left edge to leftBlock's left edge
+                if (leftBlock) {
+                    // Always cover from the very first character if started inside
+                    const isLeftInside = (minX === startPos.x && startBlock) || (minX === pos.x && endBlock);
+                    if (isLeftInside || Math.abs(minX - leftBlock.rect[0]) < threshold) {
+                        minX = leftBlock.rect[0];
+                    }
+                }
+
+                // Snap right edge to rightBlock's right edge
+                if (rightBlock) {
+                    if (Math.abs(maxX - (rightBlock.rect[0] + rightBlock.rect[2])) < threshold) {
+                        maxX = rightBlock.rect[0] + rightBlock.rect[2];
+                    }
+                }
+
+                if (Math.abs(maxX - minX) < 5) {
+                    if (leftBlock) {
+                        minX = leftBlock.rect[0];
+                        maxX = leftBlock.rect[0] + leftBlock.rect[2];
+                    } else if (rightBlock) {
+                        minX = rightBlock.rect[0];
+                        maxX = rightBlock.rect[0] + rightBlock.rect[2];
+                    }
                 }
             }
 
@@ -800,6 +1041,14 @@ const PdfViewer: React.FC = () => {
     const endDraw = () => {
         if (!isDrawing) return;
         setIsDrawing(false);
+
+        if (activeTool === 'select' && selectedDrawingId && draggingDrawingHandle) {
+            saveDrawingToHistory(drawings);
+            setDraggingDrawingHandle(null);
+            setStartPos(null);
+            return;
+        }
+
         if (currentDrawing) {
             const nextDrawings = [...drawings, currentDrawing];
             setDrawings(nextDrawings);
@@ -844,12 +1093,15 @@ const PdfViewer: React.FC = () => {
             setEditingId(hit.id);
             setTempText(hit.text);
             const fontSize = Number(hit.fontSize) || 20;
-            setInputPos({ x: Number(hit.x), y: Number(hit.y) - fontSize });
+            // Container renders at top: inputPos.y - 8, textarea text starts at inputPos.y + 8 (two p-2 paddings)
+            // So inputPos.y = hit.y - fontSize - 8 ensures text visually appears at hit.y (the saved baseline)
+            setInputPos({ x: Number(hit.x), y: Number(hit.y) - fontSize - 8 });
         } else {
             setEditingId(null);
             setTempText('');
             const fontSize = Number(toolSettings.fontSize) || 20;
-            setInputPos({ x: pos.x, y: pos.y - fontSize });
+            // Same offset: inputPos.y = pos.y - fontSize - 8 so that ann.y = inputPos.y + fontSize + 8 = pos.y
+            setInputPos({ x: pos.x, y: pos.y - fontSize - 8 });
         }
     };
 
@@ -869,8 +1121,24 @@ const PdfViewer: React.FC = () => {
             }
         } else {
             if (editingId) {
+                // Issue 3: Update text AND current tool style settings (fontSize, color, fontFamily)
+                const editingAnn = textAnnotations.find(a => a.id === editingId);
+                const baseFs = Number(toolSettings.fontSize) || Number(editingAnn?.fontSize) || 20;
+                const baseColor = toolSettings.color || editingAnn?.color || '#000000';
+                const baseFontFamily = toolSettings.fontFamily || editingAnn?.fontFamily || 'Outfit, sans-serif';
                 finalAnnotations = textAnnotations.map(a =>
-                    a.id === editingId ? { ...a, text: tempText, x: inputPos.x, y: inputPos.y + (Number(a.fontSize) || 20), width, height } : a
+                    a.id === editingId ? {
+                        ...a,
+                        text: tempText,
+                        x: inputPos.x,
+                        // ann.y = inputPos.y + fontSize + 8 (8 = container p-2 padding offset)
+                        y: inputPos.y + baseFs + 8,
+                        fontSize: baseFs,
+                        color: baseColor,
+                        fontFamily: baseFontFamily,
+                        width,
+                        height
+                    } : a
                 );
             } else {
                 const fsNum = Number(toolSettings.fontSize) || 20;
@@ -878,7 +1146,7 @@ const PdfViewer: React.FC = () => {
                     id: Date.now().toString(),
                     text: tempText,
                     x: inputPos.x,
-                    y: inputPos.y + fsNum,
+                    y: inputPos.y + fsNum + 8, // +8 for the container p-2 padding offset
                     fontSize: fsNum,
                     color: toolSettings.color || '#000000',
                     fontFamily: toolSettings.fontFamily || 'Outfit, sans-serif',
@@ -936,14 +1204,35 @@ const PdfViewer: React.FC = () => {
                 let foundSnapY = false;
                 let foundSnapX = false;
 
-                // 1. Text Block Snapping (Active areas)
+                // 1. Text Block Snapping (Active areas) with Collision Avoidance
+                const boxWidth = textareaRef.current?.offsetWidth || 120;
+                const boxHeight = textareaRef.current?.offsetHeight || 40;
+                
                 textBlocks.forEach(b => {
-                    const diffY = Math.abs(rawY - b.rect[1]);
-                    if (diffY < snapThreshold && diffY < minDiffY) {
-                        minDiffY = diffY;
-                        bestY = b.rect[1] - 4; 
+                    const blockTop = b.rect[1];
+                    const blockLeft = b.rect[0];
+                    const blockWidth = b.rect[2];
+                    
+                    const diffBaseline = Math.abs(rawY - (blockTop - 4));
+                    if (diffBaseline < snapThreshold && diffBaseline < minDiffY) {
+                        minDiffY = diffBaseline;
+                        bestY = blockTop - 4; 
                         foundSnapY = true;
+                        
+                        // Overlap detection: If on the same baseline, ensure we don't cover the text
+                        const isOverlappingX = (bestX + boxWidth > blockLeft - 10) && (bestX < blockLeft + blockWidth + 10);
+                        if (isOverlappingX) {
+                            if (rawX < blockLeft + blockWidth / 2) {
+                                // Push to the left (avoid collision by placing box before the text block)
+                                bestX = blockLeft - boxWidth - 10;
+                            } else {
+                                // Push to the right
+                                bestX = blockLeft + blockWidth + 10;
+                            }
+                            foundSnapX = true;
+                        }
                     }
+                    
                     const diffXLeft = Math.abs(rawX - b.rect[0]);
                     const diffXRight = Math.abs(rawX - (b.rect[0] + b.rect[2]));
                     if (diffXLeft < snapThreshold && diffXLeft < minDiffX) {
@@ -953,7 +1242,7 @@ const PdfViewer: React.FC = () => {
                     }
                     if (diffXRight < snapThreshold && diffXRight < minDiffX) {
                         minDiffX = diffXRight;
-                        bestX = b.rect[0] + b.rect[2];
+                        bestX = b.rect[0] + b.rect[2] + 10;
                         foundSnapX = true;
                     }
                 });
@@ -1532,26 +1821,38 @@ const PdfViewer: React.FC = () => {
                                     autoFocus
                                     value={tempText}
                                     onChange={(e) => {
-                                        setTempText(e.target.value);
-                                        // Auto-expand logic based on content
+                                        const newText = e.target.value;
+                                        setTempText(newText);
+                                        // Dynamic horizontal expansion using canvas measurement for accuracy
                                         if (textareaRef.current) {
-                                            textareaRef.current.style.width = 'auto'; // Reset to measure
-                                            textareaRef.current.style.width = `${Math.max(100, textareaRef.current.scrollWidth + 10)}px`;
-                                            textareaRef.current.style.height = 'auto';
-                                            textareaRef.current.style.height = `${Math.max(40, textareaRef.current.scrollHeight)}px`;
+                                            const textarea = textareaRef.current;
+                                            // Use a temporary canvas to measure text width precisely
+                                            const measureCanvas = document.createElement('canvas');
+                                            const mCtx = measureCanvas.getContext('2d')!;
+                                            mCtx.font = `${toolSettings.fontSize || 20}px ${toolSettings.fontFamily || 'sans-serif'}`;
+                                            // Find the widest line
+                                            const lines = newText.split('\n');
+                                            const maxLineWidth = Math.max(...lines.map(l => mCtx.measureText(l || ' ').width));
+                                            textarea.style.width = `${Math.max(120, maxLineWidth + 32)}px`; // +32 for padding & border
+                                            // Height: reset and re-measure
+                                            textarea.style.height = 'auto';
+                                            textarea.style.height = `${Math.max(40, textarea.scrollHeight)}px`;
                                         }
                                     }}
                                     onKeyDown={handleInputKeyDown}
-                                    className="bg-white/95 border-2 border-blue-500 rounded shadow-2xl p-2 outline-none text-slate-800 block cursor-text select-text overflow-hidden whitespace-pre-wrap"
+                                    className="bg-white/95 border-2 border-blue-500 rounded shadow-2xl p-2 outline-none text-slate-800 block cursor-text select-text overflow-hidden"
                                     style={{
                                         fontSize: `${toolSettings.fontSize}px`,
                                         fontFamily: toolSettings.fontFamily,
                                         color: toolSettings.color,
-                                        width: editingId ? (textAnnotations.find(a => a.id === editingId)?.width || 120) : '120px',
-                                        height: editingId ? (textAnnotations.find(a => a.id === editingId)?.height || 40) : '40px',
+                                        width: 'auto',
+                                        height: 'auto',
                                         resize: 'none',
-                                        minWidth: '100px',
-                                        minHeight: '40px'
+                                        minWidth: '120px',
+                                        minHeight: '40px',
+                                        whiteSpace: 'pre',  // honour newlines but don't wrap long lines
+                                        overflowWrap: 'normal',
+                                        overflowX: 'hidden',
                                     }}
                                 />
                                 {/* Explicit Completion Button - Positioned smartly */}

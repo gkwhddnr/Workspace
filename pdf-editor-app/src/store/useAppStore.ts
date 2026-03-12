@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 export type ActiveTab = 'pdf' | 'web' | 'code';
-export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right';
+export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2';
 export type ThemeMode = 'white' | 'translucent' | 'dark' | 'custom';
 
 interface ToolSettings {

@@ -71,6 +71,8 @@ const MainLayout: React.FC = () => {
                 else if (key === 'd') setActiveTool('arrow-down');
                 else if (key === 'l') setActiveTool('arrow-left');
                 else if (key === 'r') setActiveTool('arrow-right');
+                else if (key === '1') setActiveTool('arrow-l-1');
+                else if (key === '2') setActiveTool('arrow-l-2');
 
                 // Settings adjustments
                 else if (key === '[') {
