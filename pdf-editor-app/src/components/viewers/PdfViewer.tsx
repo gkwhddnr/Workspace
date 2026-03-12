@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { useAppStore } from '../../store/useAppStore';
+import { useAppStore, DrawingTool } from '../../store/useAppStore';
 import { FileUp, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Save } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { PDFDocument } from 'pdf-lib';
@@ -8,6 +8,18 @@ import { PDFDocument } from 'pdf-lib';
 // pdfjs worker setup
 // pdfjs worker setup - using absolute local path for maximum reliability
 pdfjsLib.GlobalWorkerOptions.workerSrc = window.location.origin + '/pdf.worker.min.js';
+
+interface DrawingAnnotation {
+    id: string;
+    type: DrawingTool;
+    points: { x: number; y: number }[]; // Raw coordinates (normalized to 1.0 scale)
+    color: string;
+    strokeWidth: number;
+    opacity: number;
+    // For shapes
+    rect?: [number, number, number, number]; 
+    angle?: number;
+}
 
 const PdfViewer: React.FC = () => {
     const { currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTab } = useAppStore();
@@ -23,21 +35,26 @@ const PdfViewer: React.FC = () => {
     const [numPages, setNumPages] = useState(0);
     const [scale, setScale] = useState(1.5);
     const [isDrawing, setIsDrawing] = useState(false);
-    const [history, setHistory] = useState<ImageData[]>([]);
-    const [historyIndex, setHistoryIndex] = useState(-1);
-    const [isDraggingOver, setIsDraggingOver] = useState(false);
+    // Vector Annotation State
+    const [drawings, setDrawings] = useState<DrawingAnnotation[]>([]);
+    const [drawingHistory, setDrawingHistory] = useState<DrawingAnnotation[][]>([]);
+    const [drawingHistoryIndex, setDrawingHistoryIndex] = useState(-1);
     const [startPos, setStartPos] = useState<{ x: number; y: number } | null>(null);
     const [highlightedInStroke, setHighlightedInStroke] = useState<Set<number>>(new Set());
+    const [isDraggingOver, setIsDraggingOver] = useState(false);
+    const [currentDrawing, setCurrentDrawing] = useState<DrawingAnnotation | null>(null);
 
+    // Per-page annotation storage
+    const [pageDrawings, setPageDrawings] = useState<Record<number, DrawingAnnotation[]>>({});
+    const [pageDrawingHistories, setPageDrawingHistories] = useState<Record<number, DrawingAnnotation[][]>>({});
+    const [pageDrawingIndices, setPageDrawingIndices] = useState<Record<number, number>>({});
+    
     // Text Annotation State
     const [textAnnotations, setTextAnnotations] = useState<any[]>([]);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [inputPos, setInputPos] = useState<{ x: number; y: number } | null>(null);
     const [tempText, setTempText] = useState('');
 
-    // Per-page annotation storage
-    const [pageHistories, setPageHistories] = useState<Record<number, ImageData[]>>({});
-    const [pageHistoryIndices, setPageHistoryIndices] = useState<Record<number, number>>({});
     const [pageTextAnnotations, setPageTextAnnotations] = useState<Record<number, any[]>>({});
     const [originalData, setOriginalData] = useState<Uint8Array | null>(null);
 
@@ -122,8 +139,9 @@ const PdfViewer: React.FC = () => {
             ctx.drawImage(img, 0, 0, width, height);
 
             setTextBlocks([]); // 이미지에는 PDF 텍스트 블록이 없음
-            setHistory([]);
-            setHistoryIndex(-1);
+            setDrawings([]);
+            setDrawingHistory([]);
+            setDrawingHistoryIndex(-1);
             const overlay = overlayCanvasRef.current;
             if (overlay) overlay.getContext('2d')!.clearRect(0, 0, overlay.width, overlay.height);
         },
@@ -348,52 +366,48 @@ const PdfViewer: React.FC = () => {
         return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     };
 
-    const saveToHistory = () => {
-        const canvas = overlayCanvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d')!;
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-        setHistory((prev) => {
-            const newHistory = (prev || []).slice(0, historyIndex + 1);
-            newHistory.push(imageData);
-            return newHistory;
+    const saveDrawingToHistory = (newDrawings: DrawingAnnotation[]) => {
+        setDrawingHistory(prev => {
+            const next = prev.slice(0, drawingHistoryIndex + 1);
+            next.push([...newDrawings]);
+            return next;
         });
-
-        const newIdx = historyIndex + 1;
-        setHistoryIndex(newIdx);
-
-        // Update the per-page map immediately for saving
-        setPageHistories(ph => ({ ...ph, [currentPage]: [imageData] }));
-        setPageHistoryIndices(idx => ({ ...idx, [currentPage]: 0 }));
+        setDrawingHistoryIndex(prev => prev + 1);
+        
+        // Update per-page state
+        setPageDrawings(prev => ({ ...prev, [currentPage]: newDrawings }));
+        setPageDrawingHistories(prev => {
+            const hist = prev[currentPage] || [];
+            const nextHist = hist.slice(0, (pageDrawingIndices[currentPage] ?? -1) + 1);
+            nextHist.push([...newDrawings]);
+            return { ...prev, [currentPage]: nextHist };
+        });
+        setPageDrawingIndices(prev => ({ ...prev, [currentPage]: (prev[currentPage] ?? -1) + 1 }));
     };
 
     const handleUndo = useCallback(() => {
-        if (historyIndex <= 0) {
-            const canvas = overlayCanvasRef.current;
-            if (canvas) canvas.getContext('2d')!.clearRect(0, 0, canvas.width, canvas.height);
-            setHistoryIndex(-1);
-            return;
-        }
-        const canvas = overlayCanvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d')!;
-        const newIndex = historyIndex - 1;
-        ctx.putImageData(history[newIndex], 0, 0);
-        setHistoryIndex(newIndex);
-        setPageHistoryIndices(idx => ({ ...idx, [currentPage]: newIndex }));
-    }, [history, historyIndex, currentPage]);
+        if (drawingHistoryIndex < 0) return;
+        
+        const newIdx = drawingHistoryIndex - 1;
+        const previousState = newIdx >= 0 ? drawingHistory[newIdx] : [];
+        
+        setDrawings(previousState);
+        setDrawingHistoryIndex(newIdx);
+        setPageDrawings(prev => ({ ...prev, [currentPage]: previousState }));
+        setPageDrawingIndices(prev => ({ ...prev, [currentPage]: newIdx }));
+    }, [drawingHistory, drawingHistoryIndex, currentPage]);
 
     const handleRedo = useCallback(() => {
-        if (historyIndex >= history.length - 1) return;
-        const canvas = overlayCanvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d')!;
-        const newIndex = historyIndex + 1;
-        ctx.putImageData(history[newIndex], 0, 0);
-        setHistoryIndex(newIndex);
-        setPageHistoryIndices(idx => ({ ...idx, [currentPage]: newIndex }));
-    }, [history, historyIndex, currentPage]);
+        if (drawingHistoryIndex >= drawingHistory.length - 1) return;
+        
+        const newIdx = drawingHistoryIndex + 1;
+        const nextState = drawingHistory[newIdx];
+        
+        setDrawings(nextState);
+        setDrawingHistoryIndex(newIdx);
+        setPageDrawings(prev => ({ ...prev, [currentPage]: nextState }));
+        setPageDrawingIndices(prev => ({ ...prev, [currentPage]: newIdx }));
+    }, [drawingHistory, drawingHistoryIndex, currentPage]);
 
     const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
         const lines = text.split('\n');
@@ -418,7 +432,65 @@ const PdfViewer: React.FC = () => {
         }
     };
 
+    const renderVectors = useCallback((ctx: CanvasRenderingContext2D, drawingList: DrawingAnnotation[], s: number) => {
+        ctx.save();
+        drawingList.forEach(draw => {
+            ctx.beginPath();
+            ctx.strokeStyle = draw.color;
+            ctx.fillStyle = draw.color;
+            ctx.lineWidth = draw.strokeWidth * s;
+            ctx.globalAlpha = draw.opacity;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            if (draw.type === 'pen' || draw.type === 'eraser' || (draw.type === 'highlight' && draw.points.length > 2)) {
+                if (draw.type === 'eraser') {
+                    ctx.globalAlpha = 1.0;
+                    ctx.strokeStyle = '#FFFFFF';
+                }
+                draw.points.forEach((p, i) => {
+                    if (i === 0) ctx.moveTo(p.x * s, p.y * s);
+                    else ctx.lineTo(p.x * s, p.y * s);
+                });
+                ctx.stroke();
+            } else if (draw.type === 'highlight' && draw.rect) {
+                const [rx, ry, rw, rh] = draw.rect;
+                ctx.fillRect(rx * s, ry * s, rw * s, rh * s);
+            } else if (draw.type === 'rect' && draw.rect) {
+                const [rx, ry, rw, rh] = draw.rect;
+                ctx.strokeRect(rx * s, ry * s, rw * s, rh * s);
+            } else if (draw.type === 'circle' && draw.rect) {
+                const [rx, ry, rw, rh] = draw.rect;
+                const cx = (rx + rw / 2) * s;
+                const cy = (ry + rh / 2) * s;
+                ctx.ellipse(cx, cy, (rw / 2) * s, (rh / 2) * s, 0, 0, 2 * Math.PI);
+                ctx.stroke();
+            } else if (draw.type.startsWith('arrow-') && draw.points.length >= 2) {
+                const from = draw.points[0];
+                const to = draw.points[1];
+                const headlen = (10 + draw.strokeWidth * 2) * s;
+                const angle = draw.angle ?? Math.atan2((to.y - from.y), (to.x - from.x));
+
+                ctx.moveTo(from.x * s, from.y * s);
+                ctx.lineTo(to.x * s, to.y * s);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(to.x * s, to.y * s);
+                ctx.lineTo((to.x * s) - headlen * Math.cos(angle - Math.PI / 6), (to.y * s) - headlen * Math.sin(angle - Math.PI / 6));
+                ctx.moveTo(to.x * s, to.y * s);
+                ctx.lineTo((to.x * s) - headlen * Math.cos(angle + Math.PI / 6), (to.y * s) - headlen * Math.sin(angle + Math.PI / 6));
+                ctx.stroke();
+            }
+        });
+        ctx.restore();
+    }, []);
+
     const drawAllAnnotations = useCallback((ctx: CanvasRenderingContext2D) => {
+        // 1. Draw Vector Drawings
+        renderVectors(ctx, drawings, scale);
+
+        // 2. Draw Text Annotations
         textAnnotations.forEach(ann => {
             const fontSize = Number(ann.fontSize) || 20;
             ctx.font = `${fontSize}px ${ann.fontFamily || 'Outfit, sans-serif'}`;
@@ -433,22 +505,25 @@ const PdfViewer: React.FC = () => {
         });
     }, [textAnnotations]);
 
-    // Redraw whenever annotations change or history changes
+    // Redraw whenever annotations change, drawings change, or in-progress drawing updates
     useEffect(() => {
         const canvas = overlayCanvasRef.current;
-        if (!canvas || isDrawing) return;
+        if (!canvas) return;
         const ctx = canvas.getContext('2d')!;
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // 1. Draw pixel-based history (pen, eraser, shapes)
-        if (historyIndex >= 0 && history[historyIndex]) {
-            ctx.putImageData(history[historyIndex], 0, 0);
+        // 1. Draw completed vector drawings
+        renderVectors(ctx, drawings, scale);
+
+        // 2. Draw current in-progress drawing (for real-time feedback)
+        if (currentDrawing) {
+            renderVectors(ctx, [currentDrawing], scale);
         }
 
-        // 2. Overlay text annotations
+        // 3. Overlay text annotations
         drawAllAnnotations(ctx);
-    }, [textAnnotations, history, historyIndex, isDrawing, drawAllAnnotations]);
+    }, [textAnnotations, drawings, currentDrawing, scale, drawAllAnnotations, renderVectors]);
 
     // Global keyboard shortcuts (undo/redo, page navigation, open file)
     useEffect(() => {
@@ -506,19 +581,20 @@ const PdfViewer: React.FC = () => {
         const prevPage = lastPageRef.current;
 
         if (prevPage !== currentPage) {
-            setPageHistories(prev => ({ ...prev, [prevPage]: history }));
-            setPageHistoryIndices(prev => ({ ...prev, [prevPage]: historyIndex }));
+            setPageDrawings(prev => ({ ...prev, [prevPage]: drawings }));
+            setPageDrawingHistories(prev => ({ ...prev, [prevPage]: drawingHistory }));
+            setPageDrawingIndices(prev => ({ ...prev, [prevPage]: drawingHistoryIndex }));
             setPageTextAnnotations(prev => ({ ...prev, [prevPage]: textAnnotations }));
         }
 
-        const savedHistory = pageHistories[currentPage] || [];
-        const savedIndex = pageHistoryIndices[currentPage] ?? -1;
+        const savedDrawings = pageDrawings[currentPage] || [];
+        const savedHistory = pageDrawingHistories[currentPage] || [];
+        const savedIndex = pageDrawingIndices[currentPage] ?? -1;
         const savedText = pageTextAnnotations[currentPage] || [];
 
-        // Clear global history when switching pages to save memory
-        // Restoration happens via the saved latest snapshot in savedHistory
-        setHistory(savedHistory);
-        setHistoryIndex(savedIndex);
+        setDrawings(savedDrawings);
+        setDrawingHistory(savedHistory);
+        setDrawingHistoryIndex(savedIndex);
         setTextAnnotations(savedText);
 
         lastPageRef.current = currentPage;
@@ -535,63 +611,47 @@ const PdfViewer: React.FC = () => {
         if (activeTool === 'select' || activeTool === 'text') return;
         setIsDrawing(true);
         const pos = getPos(e);
+        const normalizedPos = { x: pos.x / scale, y: pos.y / scale };
         setStartPos(pos);
         setHighlightedInStroke(new Set());
 
-        const canvas = overlayCanvasRef.current!;
-        const ctx = canvas.getContext('2d')!;
-        ctx.beginPath();
-        ctx.moveTo(pos.x, pos.y);
-
-        ctx.globalCompositeOperation = 'source-over';
-
-        const highlightAsStroke = activeTool === 'highlight' && (docType === 'image' || textBlocks.length === 0);
+        const newDrawing: DrawingAnnotation = {
+            id: Date.now().toString(),
+            type: activeTool,
+            points: [normalizedPos],
+            color: toolSettings.color,
+            strokeWidth: toolSettings.strokeWidth,
+            opacity: activeTool === 'highlight' ? 0.35 : 1.0
+        };
 
         if (activeTool === 'eraser') {
-            // 진짜 지우개(투명 처리) 대신 화이트아웃(배경 덮어쓰기)으로 변경하여 PDF 원본 내용도 '지울' 수 있게 함
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.globalAlpha = 1.0;
-            ctx.strokeStyle = '#FFFFFF'; // 배경색(보통 흰색)으로 덮음
-            ctx.lineWidth = toolSettings.strokeWidth * 10;
+            newDrawing.color = '#FFFFFF';
+            newDrawing.strokeWidth = toolSettings.strokeWidth * 10;
         } else if (activeTool === 'highlight') {
-            ctx.globalAlpha = 0.35;
-            ctx.strokeStyle = toolSettings.color;
-            ctx.lineWidth = toolSettings.strokeWidth * 10;
-            // highlightAsStroke 여부는 draw()에서 처리
-        } else {
-            ctx.globalAlpha = 1.0;
-            ctx.strokeStyle = toolSettings.color;
-            ctx.lineWidth = toolSettings.strokeWidth;
+            newDrawing.strokeWidth = toolSettings.strokeWidth * 10;
         }
 
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
+        setCurrentDrawing(newDrawing);
     };
 
     const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!isDrawing) return;
-        const canvas = overlayCanvasRef.current!;
-        const ctx = canvas.getContext('2d')!;
+        if (!isDrawing || !currentDrawing) return;
         const pos = getPos(e);
+        const normalizedPos = { x: pos.x / scale, y: pos.y / scale };
 
         const highlightAsStroke = activeTool === 'highlight' && (docType === 'image' || textBlocks.length === 0);
 
         if (activeTool === 'pen' || activeTool === 'eraser' || (activeTool === 'highlight' && highlightAsStroke)) {
-            ctx.lineTo(pos.x, pos.y);
-            ctx.stroke();
+            setCurrentDrawing(prev => ({
+                ...prev!,
+                points: [...prev!.points, normalizedPos]
+            }));
         } else if (activeTool === 'highlight' && startPos) {
-            if (historyIndex >= 0 && history[historyIndex]) {
-                ctx.putImageData(history[historyIndex], 0, 0);
-            } else {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-            }
-
             let minX = Math.min(startPos.x, pos.x);
             let maxX = Math.max(startPos.x, pos.x);
             let minY = Math.min(startPos.y, pos.y);
             let maxY = Math.max(startPos.y, pos.y);
 
-            // Find overlapping text block to snap Y range
             const block = textBlocks.find(b =>
                 pos.x >= b.rect[0] && pos.x <= b.rect[0] + b.rect[2] &&
                 pos.y >= b.rect[1] && pos.y <= b.rect[1] + b.rect[3]
@@ -600,47 +660,31 @@ const PdfViewer: React.FC = () => {
             if (block) {
                 minY = block.rect[1] - 1;
                 maxY = block.rect[1] + block.rect[3] + 1;
-                // Intelligent Edge Snapping: If close to start/end of block, snap X
                 const threshold = 15;
                 if (Math.abs(minX - block.rect[0]) < threshold) minX = block.rect[0];
                 if (Math.abs(maxX - (block.rect[0] + block.rect[2])) < threshold) maxX = block.rect[0] + block.rect[2];
-                
-                // If extremely short drag, assume full block highlight
                 if (Math.abs(maxX - minX) < 10) {
                     minX = block.rect[0];
                     maxX = block.rect[0] + block.rect[2];
                 }
             }
 
-            ctx.fillStyle = toolSettings.color;
-            ctx.globalAlpha = 0.35;
-            ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
+            setCurrentDrawing(prev => ({
+                ...prev!,
+                rect: [minX / scale, minY / scale, (maxX - minX) / scale, (maxY - minY) / scale]
+            }));
         } else if ((activeTool === 'rect' || activeTool === 'circle' || activeTool.includes('arrow')) && startPos) {
-            if (historyIndex >= 0 && history[historyIndex]) {
-                ctx.putImageData(history[historyIndex], 0, 0);
-            } else {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-            }
-
-            ctx.beginPath();
-            ctx.strokeStyle = toolSettings.color;
-            ctx.lineWidth = toolSettings.strokeWidth;
-
-            // Auto-fitting logic
             let minX = Math.min(startPos.x, pos.x);
             let minY = Math.min(startPos.y, pos.y);
             let maxX = Math.max(startPos.x, pos.x);
             let maxY = Math.max(startPos.y, pos.y);
 
             const dragRect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
-
-            // Find intersecting text blocks
             const intersectingBlocks = textBlocks.filter(b => {
                 const bx = b.rect[0];
                 const by = b.rect[1];
                 const bw = b.rect[2];
                 const bh = b.rect[3];
-                // Check intersection
                 return !(bx > dragRect.x + dragRect.w ||
                     bx + bw < dragRect.x ||
                     by > dragRect.y + dragRect.h ||
@@ -648,18 +692,13 @@ const PdfViewer: React.FC = () => {
             });
 
             if (intersectingBlocks.length > 0) {
-                // Keep X boundaries from drag (user's precise control)
-                // Snap Y boundaries to text (vertical alignment)
                 minY = Math.min(...intersectingBlocks.map(b => b.rect[1]));
                 maxY = Math.max(...intersectingBlocks.map(b => b.rect[1] + b.rect[3]));
-
-                // Add a small padding for visual comfort (vertical only)
                 const padding = 2;
                 minY -= padding;
                 maxY += padding;
-                setGuideLineY(minY + padding); // Show guideline for rectangles/circles too
+                setGuideLineY(minY + padding);
                 
-                // Horizontal Edge Snapping for shapes/highlighters
                 const snapXThreshold = 15;
                 intersectingBlocks.forEach(b => {
                     if (Math.abs(minX - b.rect[0]) < snapXThreshold) {
@@ -672,7 +711,6 @@ const PdfViewer: React.FC = () => {
                     }
                 });
             } else {
-                // Phantom Line Snapping for empty areas
                 const snapThreshold = 10;
                 const uniqueBaselines = Array.from(new Set(textBlocks.map(b => b.rect[1])));
                 let snapped = false;
@@ -686,8 +724,6 @@ const PdfViewer: React.FC = () => {
                         break;
                     }
                 }
-                
-                // Phantom Edge Snapping (Margins)
                 const margins = Array.from(new Set([
                     ...textBlocks.map(b => b.rect[0]),
                     ...textBlocks.map(b => b.rect[0] + b.rect[2])
@@ -701,80 +737,65 @@ const PdfViewer: React.FC = () => {
                         break;
                     }
                 }
-
                 if (!snapped) setGuideLineY(null);
             }
 
             const finalW = maxX - minX;
             const finalH = maxY - minY;
 
-            if (activeTool === 'rect') {
-                ctx.rect(minX, minY, finalW, finalH);
-            } else if (activeTool === 'circle') {
-                // Draw ellipse matching the bounding box
-                const centerX = minX + finalW / 2;
-                const centerY = minY + finalH / 2;
-                ctx.ellipse(centerX, centerY, finalW / 2, finalH / 2, 0, 0, 2 * Math.PI);
-            } else if (activeTool.startsWith('arrow-')) {
-                const headlen = 10 + toolSettings.strokeWidth * 2;
+            setCurrentDrawing(prev => {
+                const headlen = 10 + prev!.strokeWidth * 2;
                 let fromX = startPos.x;
                 let fromY = startPos.y;
                 let toX = pos.x;
                 let toY = pos.y;
+                let angle = 0;
 
-                // Snap Arrow to text edges
-                const snapThreshold = 20;
-                textBlocks.forEach(b => {
-                    const edges = [
-                        { x: b.rect[0], y: b.rect[1] + b.rect[3]/2 }, // Left
-                        { x: b.rect[0] + b.rect[2], y: b.rect[1] + b.rect[3]/2 }, // Right
-                        { x: b.rect[0] + b.rect[2]/2, y: b.rect[1] }, // Top
-                        { x: b.rect[0] + b.rect[2]/2, y: b.rect[1] + b.rect[3] } // Bottom
-                    ];
-                    edges.forEach(edge => {
-                        if (Math.hypot(toX - edge.x, toY - edge.y) < snapThreshold) {
-                            toX = edge.x;
-                            toY = edge.y;
-                            setGuideLineX(toX);
-                            setGuideLineY(toY);
-                        }
+                if (activeTool.startsWith('arrow-')) {
+                    const snapThreshold = 20;
+                    textBlocks.forEach(b => {
+                        const edges = [
+                            { x: b.rect[0], y: b.rect[1] + b.rect[3]/2 }, 
+                            { x: b.rect[0] + b.rect[2], y: b.rect[1] + b.rect[3]/2 }, 
+                            { x: b.rect[0] + b.rect[2]/2, y: b.rect[1] }, 
+                            { x: b.rect[0] + b.rect[2]/2, y: b.rect[1] + b.rect[3] }
+                        ];
+                        edges.forEach(edge => {
+                            if (Math.hypot(toX - edge.x, toY - edge.y) < snapThreshold) {
+                                toX = edge.x; toY = edge.y;
+                                setGuideLineX(toX); setGuideLineY(toY);
+                            }
+                        });
                     });
-                });
+                    angle = Math.atan2(toY - fromY, toX - fromX);
+                    if (activeTool === 'arrow-right') { toX = Math.max(fromX + 10, toX); toY = fromY; angle = 0; }
+                    else if (activeTool === 'arrow-left') { toX = Math.min(fromX - 10, toX); toY = fromY; angle = Math.PI; }
+                    else if (activeTool === 'arrow-up') { toX = fromX; toY = Math.min(fromY - 10, toY); angle = -Math.PI / 2; }
+                    else if (activeTool === 'arrow-down') { toX = fromX; toY = Math.max(fromY + 10, toY); angle = Math.PI / 2; }
+                }
 
-                let angle = Math.atan2(toY - fromY, toX - fromX);
-
-                // Fixed direction arrows if user drags in a specific way OR just use the tool type
-                if (activeTool === 'arrow-right') { toX = Math.max(fromX + 10, toX); toY = fromY; angle = 0; }
-                else if (activeTool === 'arrow-left') { toX = Math.min(fromX - 10, toX); toY = fromY; angle = Math.PI; }
-                else if (activeTool === 'arrow-up') { toX = fromX; toY = Math.min(fromY - 10, toY); angle = -Math.PI / 2; }
-                else if (activeTool === 'arrow-down') { toX = fromX; toY = Math.max(fromY + 10, toY); angle = Math.PI / 2; }
-
-                ctx.moveTo(fromX, fromY);
-                ctx.lineTo(toX, toY);
-                
-                // Draw arrowhead
-                ctx.stroke(); // Draw line first
-                ctx.beginPath();
-                ctx.moveTo(toX, toY);
-                ctx.lineTo(toX - headlen * Math.cos(angle - Math.PI / 6), toY - headlen * Math.sin(angle - Math.PI / 6));
-                ctx.moveTo(toX, toY);
-                ctx.lineTo(toX - headlen * Math.cos(angle + Math.PI / 6), toY - headlen * Math.sin(angle + Math.PI / 6));
-            }
-            ctx.stroke();
+                return {
+                    ...prev!,
+                    rect: [minX / scale, minY / scale, finalW / scale, finalH / scale],
+                    points: [{ x: fromX / scale, y: fromY / scale }, { x: toX / scale, y: toY / scale }],
+                    angle: angle
+                };
+            });
         }
     };
 
     const endDraw = () => {
         if (!isDrawing) return;
         setIsDrawing(false);
-        saveToHistory();
+        if (currentDrawing) {
+            const nextDrawings = [...drawings, currentDrawing];
+            setDrawings(nextDrawings);
+            saveDrawingToHistory(nextDrawings);
+        }
+        setCurrentDrawing(null);
         setStartPos(null);
         setGuideLineY(null);
         setGuideLineX(null);
-        const ctx = overlayCanvasRef.current?.getContext('2d')!;
-        ctx.beginPath();
-        ctx.globalAlpha = 1.0; // Reset alpha
-        ctx.globalCompositeOperation = 'source-over';
     };
 
     const handleTextClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1041,9 +1062,8 @@ const PdfViewer: React.FC = () => {
                 return null;
             }
 
-            // 수정된 페이지들을 찾아 덮어쓰기
             for (let i = 1; i <= totalPages; i++) {
-                const hasDrawing = pageHistories[i] && pageHistories[i].length > 0;
+                const hasDrawing = pageDrawings[i] && pageDrawings[i].length > 0;
                 const hasText = pageTextAnnotations[i] && pageTextAnnotations[i].length > 0;
 
                 if (hasDrawing || hasText) {
@@ -1058,19 +1078,10 @@ const PdfViewer: React.FC = () => {
                     // 1. 원본 페이지 렌더링
                     await page.render({ canvasContext: tempCtx, viewport }).promise;
 
-                    // 2. 오버레이 렌더링 (그림)
-                    const pageHistory = pageHistories[i];
-                    const pageHistoryIdx = pageHistoryIndices[i];
-                    if (pageHistory && pageHistoryIdx >= 0) {
-                        // ImageData는 특정 해상도용이므로 스케일 조정이 필요할 수 있음
-                        // 여기서는 단순화를 위해 현재 스케일로 다시 렌더링하거나 drawImage 사용
-                        // (실제로는 vector 데이터 저장 방식이 더 좋으나 현재 구조 유지)
-                        const overlayCanvas = document.createElement('canvas');
-                        overlayCanvas.width = pageHistory[pageHistoryIdx].width;
-                        overlayCanvas.height = pageHistory[pageHistoryIdx].height;
-                        overlayCanvas.getContext('2d')!.putImageData(pageHistory[pageHistoryIdx], 0, 0);
-
-                        tempCtx.drawImage(overlayCanvas, 0, 0, viewport.width, viewport.height);
+                    // 2. 오버레이 렌더링 (그림 - 벡터 방식)
+                    const pageDrawingsList = pageDrawings[i];
+                    if (pageDrawingsList && pageDrawingsList.length > 0) {
+                        renderVectors(tempCtx, pageDrawingsList, 2.0);
                     }
 
                     // 3. 오버레이 렌더링 (텍스트)
@@ -1436,7 +1447,7 @@ const PdfViewer: React.FC = () => {
                     <div className="flex items-center gap-1 theme-bg-panel px-1 py-1 rounded-lg border theme-border">
                         <button
                             onClick={handleUndo}
-                            disabled={historyIndex < 0}
+                            disabled={drawingHistoryIndex < 0}
                             className="px-2 py-1 rounded text-[10px] font-bold theme-text-main theme-tool-hover disabled:opacity-30 transition-colors"
                         >
                             <span className="flex items-center gap-1"><span className="text-[14px]">↶</span> 취소</span>
@@ -1444,7 +1455,7 @@ const PdfViewer: React.FC = () => {
                         <div className="w-px h-3 bg-slate-200/50" />
                         <button
                             onClick={handleRedo}
-                            disabled={historyIndex >= history.length - 1}
+                            disabled={drawingHistoryIndex >= drawingHistory.length - 1}
                             className="px-2 py-1 rounded text-[10px] font-bold theme-text-main theme-tool-hover disabled:opacity-30 transition-colors"
                         >
                             <span className="flex items-center gap-1"><span className="text-[14px]">↷</span> 복구</span>
