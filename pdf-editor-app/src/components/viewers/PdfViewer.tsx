@@ -43,6 +43,7 @@ const PdfViewer: React.FC = () => {
     const [highlightedInStroke, setHighlightedInStroke] = useState<Set<number>>(new Set());
     const [isDraggingOver, setIsDraggingOver] = useState(false);
     const [currentDrawing, setCurrentDrawing] = useState<DrawingAnnotation | null>(null);
+    const [canvasRevision, setCanvasRevision] = useState(0);
 
     // Per-page annotation storage
     const [pageDrawings, setPageDrawings] = useState<Record<number, DrawingAnnotation[]>>({});
@@ -139,14 +140,24 @@ const PdfViewer: React.FC = () => {
             ctx.drawImage(img, 0, 0, width, height);
 
             setTextBlocks([]); // 이미지에는 PDF 텍스트 블록이 없음
-            setDrawings([]);
-            setDrawingHistory([]);
-            setDrawingHistoryIndex(-1);
             const overlay = overlayCanvasRef.current;
             if (overlay) overlay.getContext('2d')!.clearRect(0, 0, overlay.width, overlay.height);
+            setCanvasRevision(prev => prev + 1);
         },
-        [setTextBlocks]
+        [setTextBlocks, setCanvasRevision]
     );
+
+    const resetDocumentState = useCallback(() => {
+        setDrawings([]);
+        setDrawingHistory([]);
+        setDrawingHistoryIndex(-1);
+        setPageDrawings({});
+        setPageDrawingHistories({});
+        setPageDrawingIndices({});
+        setTextAnnotations([]);
+        setPageTextAnnotations({});
+        setTextBlocks([]);
+    }, []);
 
     const renderPage = useCallback(
         async (page: pdfjsLib.PDFPageProxy, s: number) => {
@@ -179,6 +190,7 @@ const PdfViewer: React.FC = () => {
             }
 
             await page.render({ canvasContext: ctx, viewport }).promise;
+            setCanvasRevision(prev => prev + 1);
         },
         []
     );
@@ -231,6 +243,7 @@ const PdfViewer: React.FC = () => {
             setImageDoc(null);
             setPdfDoc(doc);
             setNumPages(doc.numPages);
+            resetDocumentState();
             setCurrentPage(1);
             await loadPage(doc, 1, scale);
         } catch (error) {
@@ -249,6 +262,7 @@ const PdfViewer: React.FC = () => {
                     setPdfDoc(null);
                     setImageDoc(img);
                     setNumPages(1);
+                    resetDocumentState();
                     setCurrentPage(1);
                     await renderImage(img, scale);
                 } finally {
@@ -503,7 +517,7 @@ const PdfViewer: React.FC = () => {
                 ctx.fillText(ann.text, ann.x, ann.y);
             }
         });
-    }, [textAnnotations]);
+    }, [textAnnotations, drawings, scale, renderVectors]);
 
     // Redraw whenever annotations change, drawings change, or in-progress drawing updates
     useEffect(() => {
@@ -513,17 +527,14 @@ const PdfViewer: React.FC = () => {
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // 1. Draw completed vector drawings
-        renderVectors(ctx, drawings, scale);
+        // 1. Draw all annotations (vectors + text)
+        drawAllAnnotations(ctx);
 
         // 2. Draw current in-progress drawing (for real-time feedback)
         if (currentDrawing) {
             renderVectors(ctx, [currentDrawing], scale);
         }
-
-        // 3. Overlay text annotations
-        drawAllAnnotations(ctx);
-    }, [textAnnotations, drawings, currentDrawing, scale, drawAllAnnotations, renderVectors]);
+    }, [textAnnotations, drawings, currentDrawing, scale, drawAllAnnotations, renderVectors, canvasRevision]);
 
     // Global keyboard shortcuts (undo/redo, page navigation, open file)
     useEffect(() => {
@@ -572,8 +583,10 @@ const PdfViewer: React.FC = () => {
     useEffect(() => {
         if (pdfDoc) {
             loadPage(pdfDoc, currentPage, scale);
+        } else if (imageDoc) {
+            renderImage(imageDoc, scale);
         }
-    }, [pdfDoc, currentPage, scale, loadPage]);
+    }, [pdfDoc, imageDoc, currentPage, scale, loadPage, renderImage]);
 
     const lastPageRef = useRef(currentPage);
 
