@@ -29,43 +29,83 @@ const AiPanel: React.FC = () => {
         setIsLoading(true);
 
         try {
-            // Simulated AI Agent responses for demo - moving away from strict API key requirement
-            const response = await axios.post(
-                'https://api.openai.com/v1/chat/completions',
-                {
-                    model: 'gpt-3.5-turbo',
-                    messages: [
-                        {
-                            role: 'system',
-                            content: `당신은 ${aiAgent} AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다. 
-                                현재 사용자의 작업 컨텍스트:
-                                - 현재 탭: ${activeTab}
-                                - 열린 파일: ${currentFileName || '없음'}
-                                - 웹 서퍼 주소: ${webUrl}
-                                - 코드 에디터 언어: ${codeLanguage}
-                                사용자의 의도를 파악하여 전문적인 도움을 제공해 주세요.`
+            const openaiKey = (import.meta as any).env?.VITE_OPENAI_API_KEY;
+            const googleKey = (import.meta as any).env?.VITE_GOOGLE_API_KEY;
+
+            if (aiAgent === 'gemini') {
+                if (!googleKey) throw new Error('Google API 키가 설정되지 않았습니다. .env 파일을 확인해 주세요.');
+
+                const googleModel = (import.meta as any).env?.VITE_AI_MODEL || 'gemini-1.5-flash-latest';
+
+                // Gemini API Call
+                const response = await axios.post(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:generateContent?key=${googleKey}`,
+                    {
+                        system_instruction: {
+                            parts: [{ text: `당신은 Gemini AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다. 현재 사용자의 작업 컨텍스트: 현재 탭: ${activeTab}, 열린 파일: ${currentFileName || '없음'}, 웹 서퍼 주소: ${webUrl}, 코드 에디터 언어: ${codeLanguage}.` }]
                         },
-                        ...aiMessages.map((m: any) => ({ role: m.role, content: m.content })),
-                        { role: 'user', content: text },
-                    ],
-                    max_tokens: 1000,
-                },
-                {
-                    headers: {
-                        Authorization: `Bearer ${(import.meta as any).env?.VITE_OPENAI_API_KEY || ''}`,
-                        'Content-Type': 'application/json',
+                        contents: [
+                            ...aiMessages.map((m: any) => ({
+                                role: m.role === 'assistant' ? 'model' : 'user',
+                                parts: [{ text: m.content }]
+                            })),
+                            { role: 'user', parts: [{ text: text }] }
+                        ]
+                    }
+                );
+                const reply = response.data.candidates[0].content.parts[0].text;
+                addAiMessage('assistant', reply);
+            } else if (aiAgent === 'chatgpt') {
+                if (!openaiKey) throw new Error('OpenAI API 키가 설정되지 않았습니다. .env 파일을 확인해 주세요.');
+
+                const response = await axios.post(
+                    'https://api.openai.com/v1/chat/completions',
+                    {
+                        model: 'gpt-3.5-turbo',
+                        messages: [
+                            {
+                                role: 'system',
+                                content: `당신은 ${aiAgent} AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다. 
+                                    현재 사용자의 작업 컨텍스트:
+                                    - 현재 탭: ${activeTab}
+                                    - 열린 파일: ${currentFileName || '없음'}
+                                    - 웹 서퍼 주소: ${webUrl}
+                                    - 코드 에디터 언어: ${codeLanguage}`
+                            },
+                            ...aiMessages.map((m: any) => ({ role: m.role, content: m.content })),
+                            { role: 'user', content: text },
+                        ],
                     },
-                }
-            );
-            const reply = response.data.choices[0].message.content;
-            addAiMessage('assistant', reply);
+                    {
+                        headers: {
+                            Authorization: `Bearer ${openaiKey}`,
+                            'Content-Type': 'application/json',
+                        },
+                    }
+                );
+                const reply = response.data.choices[0].message.content;
+                addAiMessage('assistant', reply);
+            } else {
+                // Other agents or demo mode
+                setTimeout(() => {
+                    addAiMessage('assistant', `현재 ${aiAgent} 에이전트는 데모 모드입니다. 상세 구현이 필요합니다.`);
+                    setIsLoading(false);
+                }, 1000);
+                return;
+            }
         } catch (error: any) {
-            const msg = error?.response?.data?.error?.message;
+            let msg = error?.response?.data?.error?.message || error.message;
+
+            // Provider-specific error refinement
+            if (aiAgent === 'chatgpt' && (msg.includes('quota') || msg.includes('billing'))) {
+                msg = 'OpenAI API 사용 한도(Quota)를 초과했거나 결제가 필요합니다. (보통 최소 $5 이상의 충전이 필요합니다.)';
+            } else if (aiAgent === 'gemini' && (msg.includes('quota') || msg.includes('limit'))) {
+                msg = 'Gemini API 사용 한도를 초과했습니다. 잠시 후 다시 시도해 주세요. (무료 티어는 분당 요청 수 제한이 있습니다.)';
+            }
+
             addAiMessage(
                 'assistant',
-                msg
-                    ? `[${aiAgent}] 오류: ${msg}`
-                    : `⚠️ ${aiAgent} 서버에 연결할 수 없습니다. 현재는 데모 모드로 응답합니다.`
+                `[${aiAgent}] 오류: ${msg || '서버에 연결할 수 없습니다.'}`
             );
         } finally {
             setIsLoading(false);
@@ -80,9 +120,9 @@ const AiPanel: React.FC = () => {
     };
 
     return (
-        <div className="flex-1 flex flex-col min-h-0 bg-white">
+        <div className="flex-1 flex flex-col min-h-0 bg-transparent">
             {/* Header */}
-            <div className="h-14 border-b border-slate-100 flex items-center px-5 bg-gradient-to-r from-indigo-50/50 to-white shrink-0">
+            <div className="h-14 border-b theme-border-subtle flex items-center px-5 theme-bg-header shrink-0 shadow-sm z-10">
                 <div className="flex items-center gap-2.5">
                     <div className="p-1.5 bg-indigo-600 rounded-lg shadow-md">
                         <Bot size={16} className="text-white" />
@@ -97,11 +137,11 @@ const AiPanel: React.FC = () => {
                 </div>
 
                 {/* Agent Switcher */}
-                <div className="ml-4 flex items-center bg-slate-100/80 p-0.5 rounded-lg border border-slate-200/50">
+                <div className="ml-4 flex items-center theme-bg-panel p-0.5 rounded-lg border theme-border">
                     <select
                         value={aiAgent}
                         onChange={(e) => setAiAgent(e.target.value as any)}
-                        className="text-[10px] font-bold bg-transparent px-2 py-1 outline-none appearance-none cursor-pointer text-slate-600 hover:text-indigo-600 transition-colors"
+                        className="text-[10px] font-bold bg-transparent px-2 py-1 outline-none appearance-none cursor-pointer theme-text-muted hover:text-indigo-600 transition-colors"
                     >
                         {AGENTS.map(agent => (
                             <option key={agent.id} value={agent.id}>{agent.label}</option>
@@ -113,7 +153,7 @@ const AiPanel: React.FC = () => {
                     <button
                         onClick={clearAiMessages}
                         title="대화 초기화"
-                        className="p-2 hover:bg-red-50 rounded-xl text-slate-400 hover:text-red-500 transition-all"
+                        className="p-2 theme-tool-hover rounded-xl theme-text-muted hover:text-red-500 transition-all"
                     >
                         <Trash2 size={14} />
                     </button>
@@ -121,10 +161,10 @@ const AiPanel: React.FC = () => {
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-[#fcfdfe]">
+            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-transparent">
                 {aiMessages.map((msg: any, idx: number) => (
                     <div key={idx} className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''} animate-fade-in`}>
-                        <div className={`shrink-0 w-8 h-8 rounded-xl flex items-center justify-center shadow-sm ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-indigo-600'}`}>
+                        <div className={`shrink-0 w-8 h-8 rounded-xl flex items-center justify-center shadow-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white' : 'theme-bg-panel border theme-border text-indigo-500'}`}>
                             {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
                         </div>
                         <div className="flex flex-col gap-1 max-w-[85%]">
@@ -133,9 +173,9 @@ const AiPanel: React.FC = () => {
                                     {msg.agent}
                                 </span>
                             )}
-                            <div className={`text-[11px] leading-relaxed px-4 py-2.5 rounded-2xl shadow-sm ${msg.role === 'user'
-                                ? 'bg-blue-600 text-white rounded-tr-none'
-                                : 'bg-white text-slate-700 border border-slate-100 rounded-tl-none font-medium'
+                            <div className={`text-[11px] leading-relaxed px-4 py-3 rounded-2xl shadow-sm ${msg.role === 'user'
+                                ? 'bg-indigo-600 text-white rounded-tr-none'
+                                : 'theme-bg-panel theme-text-main border theme-border rounded-tl-none font-medium'
                                 }`}>
                                 {msg.content}
                             </div>
@@ -146,15 +186,15 @@ const AiPanel: React.FC = () => {
             </div>
 
             {/* Input */}
-            <div className="p-3 border-t bg-white shrink-0">
-                <div className="flex items-end gap-2 bg-gray-100 rounded-xl p-2">
+            <div className="p-3 border-t theme-border-subtle theme-bg-glass shrink-0">
+                <div className="flex items-end gap-2 theme-bg-panel border theme-border rounded-xl p-2 shadow-inner">
                     <textarea
                         rows={2}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
                         placeholder="메시지를 입력하세요... (Enter로 전송)"
-                        className="flex-1 bg-transparent text-xs text-gray-700 resize-none focus:outline-none min-h-0 leading-relaxed"
+                        className="flex-1 bg-transparent theme-text-main text-xs resize-none focus:outline-none min-h-0 leading-relaxed placeholder:theme-text-muted"
                     />
                     <button
                         onClick={handleSend}

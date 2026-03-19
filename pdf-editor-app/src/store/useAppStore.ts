@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 
 export type ActiveTab = 'pdf' | 'web' | 'code';
-export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser';
+export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2';
+export type ThemeMode = 'white' | 'translucent' | 'dark' | 'custom';
 
 interface ToolSettings {
     color: string;
@@ -16,6 +17,12 @@ interface AppState {
     isRightPanelOpen: boolean;
     toggleLeftPanel: () => void;
     toggleRightPanel: () => void;
+
+    // Theme (CSS Variables)
+    themeMode: ThemeMode;
+    setThemeMode: (mode: ThemeMode) => void;
+    customThemeColor: string;
+    setCustomThemeColor: (color: string) => void;
 
     // Tab Management
     activeTab: ActiveTab;
@@ -52,12 +59,88 @@ interface AppState {
     setTextBlocks: (blocks: { text: string; rect: [number, number, number, number] }[]) => void;
 }
 
+const getStoredThemeMode = (): ThemeMode => {
+    const stored = localStorage.getItem('themeMode');
+    return (stored as ThemeMode) || 'translucent';
+};
+
+const getStoredCustomColor = (): string => {
+    return localStorage.getItem('customThemeColor') || '#fceabb';
+};
+
+const calculateLuminance = (hex: string) => {
+    const h = hex.startsWith('#') ? hex : '#' + hex;
+    const r = parseInt(h.slice(1, 3), 16) || 0;
+    const g = parseInt(h.slice(3, 5), 16) || 0;
+    const b = parseInt(h.slice(5, 7), 16) || 0;
+    // Standard relative luminance formula
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+};
+
+const applyCustomThemeVariables = (color: string) => {
+    document.body.style.setProperty('--bg-app', color);
+    const luminance = calculateLuminance(color);
+    if (luminance < 0.5) { // Dark background -> Light text & darker panels
+        document.body.style.setProperty('--text-main', '#f8fafc');
+        document.body.style.setProperty('--text-muted', '#cbd5e1');
+        document.body.style.setProperty('--bg-panel', 'rgba(15, 23, 42, 0.4)');
+        document.body.style.setProperty('--bg-header', 'rgba(15, 23, 42, 0.4)');
+        document.body.style.setProperty('--border-glass', 'rgba(255, 255, 255, 0.15)');
+        document.body.style.setProperty('--border-subtle', 'rgba(255, 255, 255, 0.1)');
+    } else { // Light background -> Dark text & lighter panels
+        document.body.style.setProperty('--text-main', '#1e293b');
+        document.body.style.setProperty('--text-muted', '#64748b');
+        document.body.style.setProperty('--bg-panel', 'rgba(255, 255, 255, 0.5)');
+        document.body.style.setProperty('--bg-header', 'rgba(255, 255, 255, 0.6)');
+        document.body.style.setProperty('--border-glass', 'rgba(255, 255, 255, 0.5)');
+        document.body.style.setProperty('--border-subtle', 'rgba(226, 232, 240, 0.5)');
+    }
+};
+
+const removeCustomThemeVariables = () => {
+    document.body.style.removeProperty('--bg-app');
+    document.body.style.removeProperty('--text-main');
+    document.body.style.removeProperty('--text-muted');
+    document.body.style.removeProperty('--bg-panel');
+    document.body.style.removeProperty('--bg-header');
+    document.body.style.removeProperty('--border-glass');
+    document.body.style.removeProperty('--border-subtle');
+};
+
 export const useAppStore = create<AppState>((set) => ({
     // Layout defaults
     isLeftPanelOpen: true,
     isRightPanelOpen: true,
     toggleLeftPanel: () => set((s) => ({ isLeftPanelOpen: !s.isLeftPanelOpen })),
     toggleRightPanel: () => set((s) => ({ isRightPanelOpen: !s.isRightPanelOpen })),
+
+    // Theme defaults
+    themeMode: getStoredThemeMode(),
+    setThemeMode: (mode) => {
+        set({ themeMode: mode });
+        localStorage.setItem('themeMode', mode);
+        document.body.setAttribute('data-theme', mode);
+        if (mode === 'custom') {
+            applyCustomThemeVariables(useAppStore.getState().customThemeColor);
+        } else {
+            removeCustomThemeVariables();
+        }
+    },
+    customThemeColor: getStoredCustomColor(),
+    setCustomThemeColor: (color) => {
+        let sanitized = color;
+        if (!sanitized.startsWith('#')) {
+            sanitized = '#' + sanitized;
+        }
+        // Remove duplicate '#' if present (e.g., ##FF0000 -> #FF0000)
+        sanitized = '#' + sanitized.replace(/^#+/, '');
+        
+        set({ customThemeColor: sanitized });
+        localStorage.setItem('customThemeColor', sanitized);
+        if (useAppStore.getState().themeMode === 'custom') {
+            applyCustomThemeVariables(sanitized);
+        }
+    },
 
     // Tab defaults
     activeTab: 'pdf',

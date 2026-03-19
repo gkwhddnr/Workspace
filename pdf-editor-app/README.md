@@ -301,8 +301,70 @@ npm run package
 - [x] 설정 페이지
 - [x] 오류 처리
 
-**완성도: 95%** ✨
+
+## 2026.03.19. Update details
+# 🚀 PDF Editor - Refactored with Design Patterns
+
+최신 디자인 패턴을 적용하여 확장성과 유지보수성을 극대화한 PDF 편집 및 코드 에디터 통합 애플리케이션입니다.
+
+## 🏗️ Architecture & Design Patterns
+
+코드의 복잡도를 낮추고 SOLID 원칙을 준수하기 위해 다음과 같은 디자인 패턴이 적용되었습니다.
+
+```mermaid
+graph TD
+    A[PdfViewer.tsx] -->|"ToolFactory.create(tool)"| B[Strategy Pattern]
+    B --> C[Concrete Strategies: Pen, Highlight, Shape, Arrow, Eraser]
+    A -->|"CommandHistory.push(cmd)"| D[Command Pattern]
+    D --> E[AddAnnotationCommand, EraseAnnotationCommand]
+    A --> F[Facade Pattern]
+    F --> G[PdfRenderService, WorkspaceApiService]
+    H[Backend Service] --> I[Template Method Pattern]
+    I --> J[UniqueFileStorage / OverwriteFileStorage]
+```
+
+### 적용된 주요 패턴
+1. **Strategy + Factory Method**: 각 그리기 도구(펜, 형광펜, 화살표 등)를 별도 클래스로 분리하여 `PdfViewer`의 거대한 조건문을 제거했습니다.
+2. **Command Pattern**: Undo/Redo를 배열 스냅샷 방식에서 액션 기반 명령 방식으로 전환하여 메모리 효율을 O(n)으로 개선했습니다.
+3. **Facade**: PDF.js 렌더링과 백엔드 API 통신 복잡도를 `PdfRenderService`와 `WorkspaceApiService` 뒤로 숨겨 UI 코드를 간결하게 유지합니다.
+4. **Template Method (Backend)**: 파일 저장 로직의 공통 구조(디렉토리 생성, 이름 정리, 복사)를 상위 클래스에 두고, 이름 충돌 해결 방식만 하위 클래스에서 정의합니다.
 
 ---
 
-**모든 기능이 정상 작동합니다! 즐겁게 사용하세요! 🚀**
+## ✅ 주요 기능
+
+### 1. PDF & 이미지 편집 🎨
+- **PDF.js 통합**: 실제 PDF 파일 렌더링 및 페이지 탐색 지원
+- **편집 도구**: 펜, 형광펜(텍스트 스냅), 사각형/원, 지능형 화살표(자석 스냅)
+- **논리적 지우개**: 주석만 선택적으로 제거
+- **Undo/Redo**: 페이지별 독립적인 명령 히스토리 관리
+
+### 2. 백엔드 연동 & 지속성 💾
+- **PDF 작업 메모리**: 마지막으로 읽은 페이지 위치를 백엔드(`PdfWorkspace` API)에 저장하여 다시 열 때 자동 복구
+- **파일 저장**: `Downloads` 폴더에 원본 유지 또는 덮어쓰기 방식으로 저장 (Kotlin Spring Boot 기반)
+- **작업 이력**: 저장된 파일 히스토리 조회 기능
+
+### 3. 테마 커스터마이징 🌈
+- **사용자 색상**: RGB/HEX 입력을 통한 배경색 커스터마이징
+- **가독성 자동 조정**: 배경색 밝기를 분석하여 텍스트 색상(Dark/Light) 자동 전환
+- **영구 저장**: 테마 설정 및 색상 `localStorage` 저장
+
+### 4. 코드 에디터 & AI 코파일럿 🤖
+- **Monaco Editor**: 7가지 언어 지원 및 실시간 실행 환경
+- **AI 도구**: 코드 설명, 최적화 제안, 디버깅 가이드 (시뮬레이션 모드 지원)
+
+---
+
+## ⌨️ 핵심 단축키
+
+| 기능 | 단축키 |
+|---|---|
+| **파일 열기** | `Ctrl + O` |
+| **저장 / 다른 이름으로 저장** | `Ctrl + S` / `Ctrl + Shift + S` |
+| **Undo / Redo** | `Ctrl + Z` / `Ctrl + Y` |
+| **코드 에디터 / AI 열기** | `F12` / `Ctrl + Shift + C` |
+| **도구 선택** | `Esc` (선택), `Ctrl + T` (텍스트), `Ctrl + H` (형광펜), `Ctrl + D` (도형) |
+
+
+**완성도: 90%** ✨
+---

@@ -24,7 +24,7 @@ function createWindow() {
 
   // 개발 모드 체크 개선
   const isDev = !app.isPackaged;
-  
+
   if (isDev) {
     console.log('Development mode - Loading from localhost:5173');
     mainWindow.loadURL('http://localhost:5173');
@@ -37,8 +37,22 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
-  
+
   console.log('Window created successfully');
+  checkForOrphanJavaProcesses();
+}
+
+async function checkForOrphanJavaProcesses() {
+  const { exec } = require('child_process');
+  exec('tasklist /FI "IMAGENAME eq java.exe" /V', (err, stdout) => {
+    if (err) return;
+    const lines = stdout.split('\n');
+    const javaProcesses = lines.filter(line => line.toLowerCase().includes('java.exe'));
+    if (javaProcesses.length > 0) {
+      console.warn(`Detected ${javaProcesses.length} running Java processes. This might cause database locks if they are from a previous session.`);
+      // We don't automatically kill them to be safe, but we log it.
+    }
+  });
 }
 
 app.whenReady().then(() => {
@@ -79,21 +93,22 @@ ipcMain.handle('dialog:openFile', async (event, options = {}) => {
   const filePath = result.filePaths[0];
   const fileName = path.basename(filePath);
   const extension = path.extname(filePath).toLowerCase();
-  
+
   try {
     const fileBuffer = await fs.readFile(filePath);
-    const base64 = fileBuffer.toString('base64');
-    
+    console.log(`Success: Read ${filePath} (${fileBuffer.length} bytes)`);
+
     return {
       canceled: false,
       fileName,
       filePath,
       extension,
-      base64,
+      data: fileBuffer, // Electron automatically handles Buffer -> Uint8Array transfer
       size: fileBuffer.length,
       mimeType: getMimeType(extension)
     };
   } catch (error) {
+    console.error(`File Read Error [${filePath}]:`, error);
     throw new Error(`파일 읽기 실패: ${error.message}`);
   }
 });
@@ -115,10 +130,10 @@ ipcMain.handle('dialog:saveFile', async (event, { defaultName, data, fileType })
   try {
     const buffer = Buffer.from(data, 'base64');
     await fs.writeFile(result.filePath, buffer);
-    return { 
-      canceled: false, 
-      success: true, 
-      filePath: result.filePath 
+    return {
+      canceled: false,
+      success: true,
+      filePath: result.filePath
     };
   } catch (error) {
     throw new Error(`파일 저장 실패: ${error.message}`);
@@ -130,18 +145,18 @@ ipcMain.handle('file:autoSave', async (event, { filePath, data }) => {
   if (!filePath) {
     return { success: false, error: 'No file path provided' };
   }
-  
+
   try {
     const buffer = Buffer.from(data, 'base64');
     await fs.writeFile(filePath, buffer);
-    return { 
-      success: true, 
-      timestamp: new Date().toISOString() 
+    return {
+      success: true,
+      timestamp: new Date().toISOString()
     };
   } catch (error) {
-    return { 
-      success: false, 
-      error: error.message 
+    return {
+      success: false,
+      error: error.message
     };
   }
 });
@@ -253,11 +268,11 @@ async function callOpenAI(messages, max_tokens = 1000) {
 async function callClaude(messages, max_tokens = 1000) {
   try {
     const https = require('https');
-    
+
     // Claude API는 system 메시지를 별도로 처리
     const systemMessage = messages.find(m => m.role === 'system');
     const userMessages = messages.filter(m => m.role !== 'system');
-    
+
     const data = JSON.stringify({
       model: process.env.AI_MODEL || 'claude-3-5-sonnet-20241022',
       max_tokens: max_tokens,
@@ -309,11 +324,11 @@ async function callClaude(messages, max_tokens = 1000) {
 async function callGemini(messages, max_tokens = 1000) {
   try {
     const https = require('https');
-    
+
     // Gemini API 형식으로 변환
     const contents = [];
     let systemInstruction = '';
-    
+
     messages.forEach(msg => {
       if (msg.role === 'system') {
         systemInstruction = msg.content;
@@ -324,7 +339,7 @@ async function callGemini(messages, max_tokens = 1000) {
         });
       }
     });
-    
+
     const model = process.env.AI_MODEL || 'gemini-1.5-flash';
     const data = JSON.stringify({
       contents: contents,
@@ -399,46 +414,46 @@ async function callAI(messages, max_tokens = 1000) {
 // MCP AI 요청 (실제 OpenAI API 또는 시뮬레이션)
 ipcMain.handle('ai:request', async (event, { action, payload }) => {
   console.log('AI Request:', action, USE_REAL_AI ? '(Real AI)' : '(Simulation)');
-  
+
   // 지연 (API 호출 시뮬레이션)
   await new Promise(resolve => setTimeout(resolve, USE_REAL_AI ? 200 : 800));
-  
+
   // 실제 AI API 사용 시도
   if (USE_REAL_AI) {
     try {
       let result = null;
-      
+
       switch (action) {
         case 'code_complete':
           result = await handleCodeComplete(payload);
           break;
-        
+
         case 'explain':
           result = await handleExplain(payload);
           break;
-        
+
         case 'optimize':
           result = await handleOptimize(payload);
           break;
-        
+
         case 'debug':
           result = await handleDebug(payload);
           break;
-        
+
         case 'chat':
           result = await handleChat(payload);
           break;
-        
+
         default:
           result = { error: 'Unknown action' };
       }
-      
+
       if (result) return result;
     } catch (error) {
       console.error('Real AI error, falling back to simulation:', error);
     }
   }
-  
+
   // 시뮬레이션 모드 (API 키 없거나 오류 시)
   return handleSimulation(action, payload);
 });
@@ -501,7 +516,7 @@ async function handleOptimize(payload) {
     // 응답에서 코드 블록 추출
     const codeMatch = response.match(/```(?:javascript)?\n([\s\S]*?)\n```/);
     const optimized = codeMatch ? codeMatch[1] : code;
-    
+
     return {
       optimized: optimized,
       suggestions: [
@@ -541,11 +556,11 @@ async function handleDebug(payload) {
 
 async function handleChat(payload) {
   const { message, context, history } = payload;
-  
+
   const messages = [
     { role: 'system', content: '당신은 친절한 코딩 어시스턴트입니다. 한국어로 대답하세요.' }
   ];
-  
+
   // 최근 대화 이력 추가
   if (history && history.length > 0) {
     history.slice(-5).forEach(msg => {
@@ -555,7 +570,7 @@ async function handleChat(payload) {
       });
     });
   }
-  
+
   // 컨텍스트 (현재 코드) 추가
   if (context) {
     messages.push({
@@ -563,10 +578,10 @@ async function handleChat(payload) {
       content: `참고: 현재 작성 중인 코드:\n\`\`\`javascript\n${context}\n\`\`\``
     });
   }
-  
+
   // 현재 메시지
   messages.push({ role: 'user', content: message });
-  
+
   const response = await callAI(messages, 2000);
   return response ? { response } : null;
 }
@@ -577,10 +592,10 @@ function handleSimulation(action, payload) {
   switch (action) {
     case 'code_complete':
       return generateCodeCompletions(payload);
-    
+
     case 'explain':
       return { explanation: generateExplanation(payload.code) };
-    
+
     case 'optimize':
       return {
         optimized: optimizeCode(payload.code),
@@ -590,13 +605,13 @@ function handleSimulation(action, payload) {
           '⚠️ 시뮬레이션 모드: OpenAI API 키를 설정하면 더 나은 제안을 받을 수 있습니다'
         ]
       };
-    
+
     case 'debug':
       return { issues: analyzeCode(payload.code) };
-    
+
     case 'chat':
       return { response: generateChatResponse(payload.message, payload.context) + '\n\n💡 **팁**: OpenAI API 키를 설정하면 실제 AI와 대화할 수 있습니다!' };
-    
+
     default:
       return { error: 'Unknown action' };
   }
@@ -606,13 +621,13 @@ function handleSimulation(action, payload) {
 function generateCodeCompletions(payload) {
   const { code } = payload;
   const completions = [
-    { 
-      text: 'const handleClick = (event) => {\n  event.preventDefault();\n  console.log("Clicked");\n};', 
+    {
+      text: 'const handleClick = (event) => {\n  event.preventDefault();\n  console.log("Clicked");\n};',
       score: 0.95,
       description: '클릭 이벤트 핸들러'
     },
-    { 
-      text: 'async function fetchData(url) {\n  try {\n    const response = await fetch(url);\n    return await response.json();\n  } catch (error) {\n    console.error(error);\n  }\n}', 
+    {
+      text: 'async function fetchData(url) {\n  try {\n    const response = await fetch(url);\n    return await response.json();\n  } catch (error) {\n    console.error(error);\n  }\n}',
       score: 0.88,
       description: '비동기 데이터 페칭'
     },
@@ -622,11 +637,11 @@ function generateCodeCompletions(payload) {
       description: 'React useState Hook'
     }
   ];
-  
+
   if (code && (code.includes('fetch') || code.includes('async'))) {
     return { suggestions: completions.filter(c => c.description.includes('비동기')) };
   }
-  
+
   return { suggestions: completions };
 }
 
@@ -634,9 +649,9 @@ function generateExplanation(code) {
   if (!code || code.trim().length === 0) {
     return '코드가 비어있습니다. 설명할 코드를 입력해주세요.';
   }
-  
+
   let explanation = '📝 이 코드의 주요 기능:\n\n';
-  
+
   if (code.includes('function') || code.includes('=>')) {
     explanation += '• 함수를 정의하고 있습니다\n';
   }
@@ -652,27 +667,27 @@ function generateExplanation(code) {
   if (code.includes('useState') || code.includes('useEffect')) {
     explanation += '• React Hooks를 사용합니다\n';
   }
-  
+
   explanation += '\n✨ 주요 특징:\n';
   explanation += '• ES6+ 문법을 사용합니다\n';
   explanation += '• 모던 JavaScript 패턴을 따릅니다\n';
-  
+
   return explanation;
 }
 
 function optimizeCode(code) {
   if (!code) return code;
-  
+
   let optimized = code;
   optimized = optimized.replace(/var /g, 'const ');
   optimized = optimized.replace(/function\s+(\w+)\s*\(/g, 'const $1 = (');
-  
+
   return optimized;
 }
 
 function analyzeCode(code) {
   const issues = [];
-  
+
   if (!code || code.trim().length === 0) {
     return [{
       line: 1,
@@ -681,7 +696,7 @@ function analyzeCode(code) {
       suggestion: '코드를 입력해주세요'
     }];
   }
-  
+
   if (code.includes('var ')) {
     issues.push({
       line: code.split('\n').findIndex(l => l.includes('var ')) + 1,
@@ -690,7 +705,7 @@ function analyzeCode(code) {
       suggestion: 'const 또는 let을 사용하세요'
     });
   }
-  
+
   if (code.includes('console.log') && code.split('console.log').length > 3) {
     issues.push({
       line: 1,
@@ -699,7 +714,7 @@ function analyzeCode(code) {
       suggestion: '프로덕션 코드에서는 제거하세요'
     });
   }
-  
+
   if (!code.includes('try') && (code.includes('await') || code.includes('fetch'))) {
     issues.push({
       line: 1,
@@ -708,7 +723,7 @@ function analyzeCode(code) {
       suggestion: 'try-catch 블록을 추가하세요'
     });
   }
-  
+
   if (issues.length === 0) {
     return [{
       line: 1,
@@ -717,40 +732,40 @@ function analyzeCode(code) {
       suggestion: '코드가 깔끔해 보입니다! 👍'
     }];
   }
-  
+
   return issues;
 }
 
 function generateChatResponse(message, context) {
   const lowerMessage = message.toLowerCase();
-  
+
   if (lowerMessage.includes('안녕') || lowerMessage.includes('hello')) {
     return '안녕하세요! 👋 코드 작성을 도와드리겠습니다. 어떤 도움이 필요하신가요?';
   }
-  
+
   if (lowerMessage.includes('설명') || lowerMessage.includes('explain')) {
     if (context) {
       return generateExplanation(context);
     }
     return '설명이 필요한 코드를 선택하거나 코드 에디터에 입력해주세요.';
   }
-  
+
   if (lowerMessage.includes('최적화') || lowerMessage.includes('optimize')) {
     return '💡 코드 최적화를 원하시면 "최적화" 퀵 액션 버튼을 클릭해주세요.\n\n주요 최적화 방법:\n• var → const/let\n• 화살표 함수 사용\n• 불필요한 코드 제거';
   }
-  
+
   if (lowerMessage.includes('버그') || lowerMessage.includes('오류') || lowerMessage.includes('error')) {
     return '🐛 버그를 찾으려면 "디버그" 퀵 액션 버튼을 클릭해주세요.\n\n일반적인 오류:\n• 변수 미정의\n• 타입 불일치\n• 에러 처리 누락';
   }
-  
+
   if (lowerMessage.includes('함수') || lowerMessage.includes('function')) {
     return '⚡ 함수 작성 예시:\n\n```javascript\n// 화살표 함수\nconst myFunction = (param) => {\n  return param * 2;\n};\n\n// async 함수\nconst fetchData = async () => {\n  const response = await fetch(url);\n  return response.json();\n};\n```';
   }
-  
+
   if (lowerMessage.includes('react')) {
     return '⚛️ React 개발 팁:\n\n• useState로 상태 관리\n• useEffect로 사이드 이펙트 처리\n• 컴포넌트는 순수 함수로\n• Props를 통한 데이터 전달\n• Key를 사용한 리스트 렌더링';
   }
-  
+
   return `"${message}"에 대한 답변:\n\n제가 도와드릴 수 있는 것들:\n• 코드 설명 및 분석 💡\n• 코드 최적화 제안 ⚡\n• 버그 찾기 🐛\n• 코드 작성 가이드 📝\n\n구체적인 질문을 해주시면 더 정확한 답변을 드릴 수 있습니다!`;
 }
 
@@ -759,14 +774,14 @@ ipcMain.handle('dialog:selectFolder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory']
   });
-  
+
   if (result.canceled) {
     return { canceled: true };
   }
-  
-  return { 
-    canceled: false, 
-    path: result.filePaths[0] 
+
+  return {
+    canceled: false,
+    path: result.filePaths[0]
   };
 });
 
@@ -813,7 +828,7 @@ function getMimeType(extension) {
     '.hwp': 'application/x-hwp',
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   };
-  
+
   return mimeTypes[extension] || 'application/octet-stream';
 }
 

@@ -3,28 +3,140 @@
 @tailwind utilities;
 
 :root {
-  --app-bg: #f8fafc;
-  --panel-bg: rgba(255, 255, 255, 0.85);
-  --glass-border: rgba(255, 255, 255, 0.4);
-  --primary: #4f46e5;
-  --secondary: #7c3aed;
+  /* Default: Translucent (반투명모드) */
+  --bg-app: radial-gradient(circle at top left, #f1f5f9, #f8fafc);
+  --bg-header: rgba(255, 255, 255, 0.8);
+  --bg-panel: rgba(255, 255, 255, 0.4);
+  --bg-glass: rgba(255, 255, 255, 0.80);
+  --border-glass: rgba(255, 255, 255, 0.4);
+  --border-subtle: rgba(226, 232, 240, 0.5);
+  --text-main: #1e293b;
+  --text-muted: #64748b;
+  --bg-tool-hover: rgba(241, 245, 249, 0.8);
+  --bg-button: rgba(241, 245, 249, 0.5);
+  --bg-button-hover: rgba(226, 232, 240, 0.8);
+  --pdf-canvas-filter: none;
+}
+
+[data-theme='white'] {
+  --bg-app: #ffffff;
+  --bg-header: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-glass: #ffffff;
+  --border-glass: #e2e8f0;
+  --border-subtle: #f1f5f9;
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --bg-tool-hover: #f1f5f9;
+  --bg-button: #f8fafc;
+  --bg-button-hover: #f1f5f9;
+  --pdf-canvas-filter: none;
+}
+
+[data-theme='dark'] {
+  --bg-app: radial-gradient(circle at top left, #0f172a, #020617);
+  --bg-header: rgba(15, 23, 42, 0.95);
+  --bg-panel: rgba(15, 23, 42, 0.9);
+  --bg-glass: rgba(30, 41, 59, 0.85);
+  --border-glass: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --bg-tool-hover: rgba(255, 255, 255, 0.1);
+  --bg-button: rgba(255, 255, 255, 0.05);
+  --bg-button-hover: rgba(255, 255, 255, 0.15);
+  --pdf-canvas-filter: invert(0.92) hue-rotate(180deg) brightness(1.05) contrast(1.05);
+}
+
+[data-theme='custom'] {
+  --bg-app: linear-gradient(135deg, #fceabb 0%, #f8b500 100%);
+  --bg-header: rgba(255, 255, 255, 0.4);
+  --bg-panel: rgba(255, 255, 255, 0.3);
+  --bg-glass: rgba(255, 255, 255, 0.7);
+  --border-glass: rgba(255, 255, 255, 0.5);
+  --border-subtle: rgba(255, 255, 255, 0.2);
+  --text-main: #4a4a4a;
+  --text-muted: #7a7a7a;
+  --bg-tool-hover: rgba(255, 255, 255, 0.4);
+  --bg-button: rgba(255, 255, 255, 0.3);
+  --bg-button-hover: rgba(255, 255, 255, 0.6);
+  --pdf-canvas-filter: none;
 }
 
 body {
   margin: 0;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
-  background: radial-gradient(circle at top left, #f1f5f9, #f8fafc);
-  color: #1e293b;
+  background: var(--bg-app);
+  color: var(--text-main);
   overflow: hidden;
   height: 100vh;
+  transition: background 0.5s ease, color 0.5s ease;
 }
 
 @layer components {
+  .theme-bg-panel {
+    background-color: var(--bg-panel);
+    transition: background-color 0.5s ease;
+  }
+
+  .theme-bg-header {
+    background-color: var(--bg-header);
+    transition: background-color 0.5s ease;
+  }
+
+  .theme-bg-glass {
+    background-color: var(--bg-glass);
+    transition: background-color 0.5s ease;
+  }
+
+  .theme-btn {
+    background-color: var(--bg-button);
+    transition: background-color 0.3s ease, transform 0.2s ease;
+  }
+
+  .theme-btn:hover {
+    background-color: var(--bg-button-hover);
+  }
+
+  .theme-border {
+    border-color: var(--border-glass);
+    transition: border-color 0.5s ease;
+  }
+
+  .theme-border-subtle {
+    border-color: var(--border-subtle);
+    transition: border-color 0.5s ease;
+  }
+
+  .theme-text-main {
+    color: var(--text-main);
+    transition: color 0.5s ease;
+  }
+
+  .theme-text-muted {
+    color: var(--text-muted);
+    transition: color 0.5s ease;
+  }
+
   .glass-panel {
-    @apply bg-white/80 backdrop-blur-md border border-white/40 shadow-sm;
+    background-color: var(--bg-glass);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border-glass);
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    transition: background-color 0.5s ease, border-color 0.5s ease;
+  }
+
+  .theme-tool-hover:hover {
+    background-color: var(--bg-tool-hover);
+  }
+
+  .dark-pdf-filter {
+    filter: var(--pdf-canvas-filter);
+    transition: filter 0.5s ease;
   }
 }
+
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
