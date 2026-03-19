@@ -20,6 +20,7 @@ const TABS: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
 
 const MainLayout: React.FC = () => {
     const {
+        themeMode, setThemeMode,
         activeTab, setActiveTab,
         isLeftPanelOpen, toggleLeftPanel,
         isRightPanelOpen, toggleRightPanel,
@@ -27,6 +28,11 @@ const MainLayout: React.FC = () => {
     } = useAppStore();
 
     const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
+
+    // Initialize Theme on Mount
+    useEffect(() => {
+        setThemeMode(themeMode);
+    }, []);
 
     // Global Keyboard Shortcuts
     useEffect(() => {

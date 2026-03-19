@@ -126,6 +126,90 @@ const PdfViewer: React.FC = () => {
     }, [guideLineX, guideLineY, scale]); // Re-render when guides or scale changes
     const [resizingType, setResizingType] = useState<'width' | 'height' | 'both' | null>(null);
     const [pageInput, setPageInput] = useState('1');
+    const [wasErased, setWasErased] = useState(false);
+
+    // Save page memory whenever currentPage changes (with debounce)
+    useEffect(() => {
+        if (currentFileName && docType === 'pdf') {
+            const timeoutId = setTimeout(() => {
+                fetch('/api/pdf/workspace', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: currentFileName, lastViewedPage: currentPage })
+                }).catch(err => console.warn('Failed to save workspace', err));
+            }, 500); // 500ms debounce
+            return () => clearTimeout(timeoutId);
+        }
+    }, [currentPage, currentFileName, docType]);
+
+    const handleEraserHit = useCallback((pos: { x: number, y: number }) => {
+        const radius = (20) / scale; // Eraser radius in normalized coordinates
+        let changed = false;
+
+        setDrawings(prev => {
+            const filtered = prev.filter(d => {
+                // 1. Vector lines (pen, highlight)
+                if (d.type === 'pen' || d.type === 'highlight') {
+                    for (let i = 0; i < d.points.length - 1; i++) {
+                        const dist = distancePointToSegment(pos.x, pos.y, d.points[i].x, d.points[i].y, d.points[i+1].x, d.points[i+1].y);
+                        if (dist < radius) {
+                            changed = true;
+                            return false;
+                        }
+                    }
+                }
+                // 2. Arrows
+                else if (d.type.startsWith('arrow-') && d.points.length >= 2) {
+                    const from = d.points[0];
+                    const to = d.points[1];
+                    let dist = Infinity;
+                    if (d.type.startsWith('arrow-l-')) {
+                        const elbow = getElbowPoint(from, to, d.type);
+                        dist = Math.min(
+                            distancePointToSegment(pos.x, pos.y, from.x, from.y, elbow.x, elbow.y),
+                            distancePointToSegment(pos.x, pos.y, elbow.x, elbow.y, to.x, to.y)
+                        );
+                    } else {
+                        dist = distancePointToSegment(pos.x, pos.y, from.x, from.y, to.x, to.y);
+                    }
+                    if (dist < radius + 5) {
+                        changed = true;
+                        return false;
+                    }
+                }
+                // 3. Rects/Circles
+                else if ((d.type === 'rect' || d.type === 'circle') && d.rect) {
+                    const [rx, ry, rw, rh] = d.rect;
+                    if (pos.x >= rx - radius && pos.x <= rx + rw + radius && pos.y >= ry - radius && pos.y <= ry + rh + radius) {
+                        changed = true;
+                        return false;
+                    }
+                }
+                return true;
+            });
+            if (changed) return filtered;
+            return prev;
+        });
+
+        // 4. Text Annotations
+        setTextAnnotations(prev => {
+            const filtered = prev.filter(ann => {
+                // Approximate bounding box for text
+                const clickRadius = 20;
+                // Since text is not strictly normalized in all older versions, we check both
+                const hit = Math.abs(pos.x * scale - ann.x) < clickRadius && Math.abs(pos.y * scale - ann.y) < clickRadius;
+                if (hit) {
+                    changed = true;
+                    return false;
+                }
+                return true;
+            });
+            if (changed) return filtered;
+            return prev;
+        });
+
+        if (changed) setWasErased(true);
+    }, [scale]);
 
     useEffect(() => {
         setPageInput(currentPage.toString());
@@ -294,8 +378,29 @@ const PdfViewer: React.FC = () => {
             setPdfDoc(doc);
             setNumPages(doc.numPages);
             resetDocumentState();
-            setCurrentPage(1);
-            await loadPage(doc, 1, scale);
+            
+            // Restore last viewed page from Backend Workspace API
+            let targetPage = 1;
+            if (currentFileName) {
+                try {
+                    const res = await fetch(`/api/pdf/workspace?filename=${encodeURIComponent(currentFileName)}`);
+                    if (res.ok) {
+                        const workspace = await res.json();
+                        if (workspace && typeof workspace.lastViewedPage === 'number') {
+                            const memPage = workspace.lastViewedPage;
+                            if (memPage >= 1 && memPage <= doc.numPages) {
+                                targetPage = memPage;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Failed to fetch pdf workspace memory', e);
+                }
+            }
+
+            setCurrentPage(targetPage);
+            setPageInput(targetPage.toString());
+            // loadPage and renderImage are automatically handled by the useEffect that watches pdfDoc, imageDoc, currentPage, scale
         } catch (error) {
             console.error('Error loading PDF:', error);
             alert(`PDF 로드 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
@@ -314,7 +419,6 @@ const PdfViewer: React.FC = () => {
                     setNumPages(1);
                     resetDocumentState();
                     setCurrentPage(1);
-                    await renderImage(img, scale);
                 } finally {
                     URL.revokeObjectURL(url);
                 }
@@ -806,8 +910,11 @@ const PdfViewer: React.FC = () => {
         };
 
         if (activeTool === 'eraser') {
-            newDrawing.color = '#FFFFFF';
-            newDrawing.strokeWidth = toolSettings.strokeWidth * 10;
+            // Logical eraser - handled in draw/startDraw via state modification
+            setIsDrawing(true);
+            setStartPos(pos);
+            handleEraserHit(normalizedPos);
+            return;
         } else if (activeTool === 'highlight') {
             newDrawing.strokeWidth = toolSettings.strokeWidth * 10;
         }
@@ -840,6 +947,12 @@ const PdfViewer: React.FC = () => {
             });
             return closestPt;
         };
+
+        if (activeTool === 'eraser') {
+            handleEraserHit(normalizedPos);
+            setStartPos(pos);
+            return;
+        }
 
         if (activeTool === 'select' && selectedDrawingId && draggingDrawingHandle && startPos) {
             setDrawings(prev => prev.map(d => {
@@ -884,7 +997,7 @@ const PdfViewer: React.FC = () => {
 
         const highlightAsStroke = activeTool === 'highlight' && (docType === 'image' || textBlocks.length === 0);
 
-        if (activeTool === 'pen' || activeTool === 'eraser' || (activeTool === 'highlight' && highlightAsStroke)) {
+        if (activeTool === 'pen' || (activeTool === 'highlight' && highlightAsStroke)) {
             setCurrentDrawing(prev => ({
                 ...prev!,
                 points: [...prev!.points, normalizedPos]
@@ -1075,11 +1188,21 @@ const PdfViewer: React.FC = () => {
             return;
         }
 
+        if (activeTool === 'eraser') {
+            if (wasErased) {
+                saveDrawingToHistory(drawings);
+                setWasErased(false);
+            }
+            setStartPos(null);
+            return;
+        }
+
         if (currentDrawing) {
             const nextDrawings = [...drawings, currentDrawing];
             setDrawings(nextDrawings);
             saveDrawingToHistory(nextDrawings);
         }
+        
         setCurrentDrawing(null);
         setStartPos(null);
         setGuideLineY(null);

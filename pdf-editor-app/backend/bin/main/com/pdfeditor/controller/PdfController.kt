@@ -9,12 +9,18 @@ import org.springframework.core.io.ByteArrayResource
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.web.multipart.MultipartFile
+import com.pdfeditor.model.PdfWorkspace
+import com.pdfeditor.repository.PdfWorkspaceRepository
+import java.time.LocalDateTime
+
+data class WorkspaceRequest(val filename: String, val lastViewedPage: Int)
 
 @RestController
 @RequestMapping("/api/pdf")
 class PdfController(
     private val fileStorageService: FileStorageService,
-    private val officeToPdfService: OfficeToPdfService
+    private val officeToPdfService: OfficeToPdfService,
+    private val pdfWorkspaceRepository: PdfWorkspaceRepository
 ) {
 
     @PostMapping("/save")
@@ -79,6 +85,43 @@ class PdfController(
         return try {
             val history = fileStorageService.getHistory()
             ResponseEntity.ok(history)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ResponseEntity.internalServerError().build()
+        }
+    }
+
+    @GetMapping("/workspace")
+    fun getWorkspace(@RequestParam("filename") filename: String): ResponseEntity<PdfWorkspace> {
+        return try {
+            val workspace = pdfWorkspaceRepository.findByFilename(filename)
+            if (workspace != null) {
+                ResponseEntity.ok(workspace)
+            } else {
+                ResponseEntity.notFound().build()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ResponseEntity.internalServerError().build()
+        }
+    }
+
+    @PostMapping("/workspace")
+    fun saveWorkspace(@RequestBody request: WorkspaceRequest): ResponseEntity<PdfWorkspace> {
+        return try {
+            val existing = pdfWorkspaceRepository.findByFilename(request.filename)
+            val toSave = if (existing != null) {
+                existing.lastViewedPage = request.lastViewedPage
+                existing.updatedAt = LocalDateTime.now()
+                existing
+            } else {
+                PdfWorkspace(
+                    filename = request.filename,
+                    lastViewedPage = request.lastViewedPage
+                )
+            }
+            val saved = pdfWorkspaceRepository.save(toSave)
+            ResponseEntity.ok(saved)
         } catch (e: Exception) {
             e.printStackTrace()
             ResponseEntity.internalServerError().build()
