@@ -4,29 +4,27 @@ import { useAppStore, DrawingTool } from '../../store/useAppStore';
 import { FileUp, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Save } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { PDFDocument } from 'pdf-lib';
+// ── Design Pattern imports ──────────────────────────────────────────────────
+import { ToolFactory } from '../../tools/ToolFactory';
+import { CommandHistory } from '../../commands/CommandHistory';
+import { AddAnnotationCommand } from '../../commands/AddAnnotationCommand';
+import { EraseAnnotationCommand } from '../../commands/EraseAnnotationCommand';
+import { workspaceApiService } from '../../services/WorkspaceApiService';
+import { pdfRenderService } from '../../services/PdfRenderService';
 
 // pdfjs worker setup
 // pdfjs worker setup - using absolute local path for maximum reliability
 pdfjsLib.GlobalWorkerOptions.workerSrc = window.location.origin + '/pdf.worker.min.js';
 
-// --- Math Helpers for Hit Testing ---
-export const distancePointToSegment = (px: number, py: number, x1: number, y1: number, x2: number, y2: number) => {
-    const l2 = (x1 - x2) ** 2 + (y1 - y2) ** 2;
-    if (l2 === 0) return Math.hypot(px - x1, py - y1);
-    let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
-    t = Math.max(0, Math.min(1, t));
-    return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
-};
+// Geometry helpers live in utils/geometry.ts — import from there.
+import { distancePointToSegment } from '../../utils/geometry';
 
-// Helper for L-shape elbow calculation
+// L-shape elbow helper (still needed for select-tool hit-testing in this file)
 const getElbowPoint = (startP: {x: number, y: number}, endP: {x: number, y: number}, type: string) => {
     switch (type) {
-        case 'arrow-l-1': // Horizontal then Vertical (┌ or └ depending on start/end)
-            return { x: endP.x, y: startP.y }; 
-        case 'arrow-l-2': // Vertical then Horizontal (┐ or ┘)
-            return { x: startP.x, y: endP.y };
-        default:
-            return { x: endP.x, y: startP.y };
+        case 'arrow-l-1': return { x: endP.x, y: startP.y };
+        case 'arrow-l-2': return { x: startP.x, y: endP.y };
+        default:          return { x: endP.x, y: startP.y };
     }
 }
 
@@ -68,8 +66,15 @@ const PdfViewer: React.FC = () => {
 
     // Per-page annotation storage
     const [pageDrawings, setPageDrawings] = useState<Record<number, DrawingAnnotation[]>>({});
-    const [pageDrawingHistories, setPageDrawingHistories] = useState<Record<number, DrawingAnnotation[][]>>({});
-    const [pageDrawingIndices, setPageDrawingIndices] = useState<Record<number, number>>({});
+    const [pageTextAnnotations, setPageTextAnnotations] = useState<Record<number, any[]>>({});
+    // Command History — one CommandHistory per page
+    const pageCommandHistories = useRef<Record<number, CommandHistory>>({});
+    const getPageHistory = (page: number): CommandHistory => {
+        if (!pageCommandHistories.current[page]) {
+            pageCommandHistories.current[page] = new CommandHistory();
+        }
+        return pageCommandHistories.current[page];
+    };
     
     // Text Annotation State
     const [textAnnotations, setTextAnnotations] = useState<any[]>([]);
@@ -77,7 +82,6 @@ const PdfViewer: React.FC = () => {
     const [inputPos, setInputPos] = useState<{ x: number; y: number } | null>(null);
     const [tempText, setTempText] = useState('');
 
-    const [pageTextAnnotations, setPageTextAnnotations] = useState<Record<number, any[]>>({});
     const [originalData, setOriginalData] = useState<Uint8Array | null>(null);
 
     // Arrow Resizing / Object Selection State
@@ -132,84 +136,44 @@ const PdfViewer: React.FC = () => {
     useEffect(() => {
         if (currentFileName && docType === 'pdf') {
             const timeoutId = setTimeout(() => {
-                fetch('/api/pdf/workspace', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filename: currentFileName, lastViewedPage: currentPage })
-                }).catch(err => console.warn('Failed to save workspace', err));
-            }, 500); // 500ms debounce
+                workspaceApiService.saveWorkspace(currentFileName, currentPage);
+            }, 500);
             return () => clearTimeout(timeoutId);
         }
     }, [currentPage, currentFileName, docType]);
 
+    // handleEraserHit — uses EraserToolStrategy.hitTest via ToolFactory
     const handleEraserHit = useCallback((pos: { x: number, y: number }) => {
-        const radius = (20) / scale; // Eraser radius in normalized coordinates
-        let changed = false;
+        const radius = 20 / scale;
+        const eraserStrategy = ToolFactory.create('eraser');
 
         setDrawings(prev => {
-            const filtered = prev.filter(d => {
-                // 1. Vector lines (pen, highlight)
-                if (d.type === 'pen' || d.type === 'highlight') {
-                    for (let i = 0; i < d.points.length - 1; i++) {
-                        const dist = distancePointToSegment(pos.x, pos.y, d.points[i].x, d.points[i].y, d.points[i+1].x, d.points[i+1].y);
-                        if (dist < radius) {
-                            changed = true;
-                            return false;
-                        }
-                    }
-                }
-                // 2. Arrows
-                else if (d.type.startsWith('arrow-') && d.points.length >= 2) {
-                    const from = d.points[0];
-                    const to = d.points[1];
-                    let dist = Infinity;
-                    if (d.type.startsWith('arrow-l-')) {
-                        const elbow = getElbowPoint(from, to, d.type);
-                        dist = Math.min(
-                            distancePointToSegment(pos.x, pos.y, from.x, from.y, elbow.x, elbow.y),
-                            distancePointToSegment(pos.x, pos.y, elbow.x, elbow.y, to.x, to.y)
-                        );
-                    } else {
-                        dist = distancePointToSegment(pos.x, pos.y, from.x, from.y, to.x, to.y);
-                    }
-                    if (dist < radius + 5) {
-                        changed = true;
-                        return false;
-                    }
-                }
-                // 3. Rects/Circles
-                else if ((d.type === 'rect' || d.type === 'circle') && d.rect) {
-                    const [rx, ry, rw, rh] = d.rect;
-                    if (pos.x >= rx - radius && pos.x <= rx + rw + radius && pos.y >= ry - radius && pos.y <= ry + rh + radius) {
-                        changed = true;
-                        return false;
-                    }
-                }
-                return true;
-            });
-            if (changed) return filtered;
-            return prev;
+            const toErase = prev.filter(d => eraserStrategy.hitTest(d, pos, radius));
+            if (toErase.length === 0) return prev;
+
+            // Record erase action in Command history
+            const history = getPageHistory(currentPage);
+            const cmd = new EraseAnnotationCommand(toErase, setDrawings);
+            // Don't execute via history here — setDrawings filter below is the execute
+            // Just push undo capability
+            history['stack'] = [...(history as any)['stack'].slice(0, (history as any)['pointer'] + 1)];
+            history['stack'].push(cmd);
+            (history as any)['pointer']++;
+
+            setWasErased(true);
+            const erasedIds = new Set(toErase.map(d => d.id));
+            return prev.filter(d => !erasedIds.has(d.id));
         });
 
-        // 4. Text Annotations
         setTextAnnotations(prev => {
+            const clickRadius = 20;
             const filtered = prev.filter(ann => {
-                // Approximate bounding box for text
-                const clickRadius = 20;
-                // Since text is not strictly normalized in all older versions, we check both
                 const hit = Math.abs(pos.x * scale - ann.x) < clickRadius && Math.abs(pos.y * scale - ann.y) < clickRadius;
-                if (hit) {
-                    changed = true;
-                    return false;
-                }
-                return true;
+                return !hit;
             });
-            if (changed) return filtered;
-            return prev;
+            return filtered.length !== prev.length ? filtered : prev;
         });
-
-        if (changed) setWasErased(true);
-    }, [scale]);
+    }, [scale, currentPage]);
 
     useEffect(() => {
         setPageInput(currentPage.toString());
@@ -285,11 +249,11 @@ const PdfViewer: React.FC = () => {
         setDrawingHistory([]);
         setDrawingHistoryIndex(-1);
         setPageDrawings({});
-        setPageDrawingHistories({});
-        setPageDrawingIndices({});
         setTextAnnotations([]);
         setPageTextAnnotations({});
         setTextBlocks([]);
+        // Reset all per-page command histories
+        pageCommandHistories.current = {};
     }, []);
 
     const renderPage = useCallback(
@@ -378,23 +342,13 @@ const PdfViewer: React.FC = () => {
             setPdfDoc(doc);
             setNumPages(doc.numPages);
             resetDocumentState();
-            
-            // Restore last viewed page from Backend Workspace API
+
+            // Restore last viewed page via WorkspaceApiService (Facade)
             let targetPage = 1;
             if (currentFileName) {
-                try {
-                    const res = await fetch(`/api/pdf/workspace?filename=${encodeURIComponent(currentFileName)}`);
-                    if (res.ok) {
-                        const workspace = await res.json();
-                        if (workspace && typeof workspace.lastViewedPage === 'number') {
-                            const memPage = workspace.lastViewedPage;
-                            if (memPage >= 1 && memPage <= doc.numPages) {
-                                targetPage = memPage;
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.warn('Failed to fetch pdf workspace memory', e);
+                const ws = await workspaceApiService.fetchWorkspace(currentFileName);
+                if (ws && ws.lastViewedPage >= 1 && ws.lastViewedPage <= doc.numPages) {
+                    targetPage = ws.lastViewedPage;
                 }
             }
 
@@ -534,47 +488,33 @@ const PdfViewer: React.FC = () => {
         return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     };
 
-    const saveDrawingToHistory = (newDrawings: DrawingAnnotation[]) => {
-        setDrawingHistory(prev => {
-            const next = prev.slice(0, drawingHistoryIndex + 1);
-            next.push([...newDrawings]);
-            return next;
-        });
-        setDrawingHistoryIndex(prev => prev + 1);
-        
-        // Update per-page state
-        setPageDrawings(prev => ({ ...prev, [currentPage]: newDrawings }));
-        setPageDrawingHistories(prev => {
-            const hist = prev[currentPage] || [];
-            const nextHist = hist.slice(0, (pageDrawingIndices[currentPage] ?? -1) + 1);
-            nextHist.push([...newDrawings]);
-            return { ...prev, [currentPage]: nextHist };
-        });
-        setPageDrawingIndices(prev => ({ ...prev, [currentPage]: (prev[currentPage] ?? -1) + 1 }));
-    };
 
     const handleUndo = useCallback(() => {
-        if (drawingHistoryIndex < 0) return;
-        
-        const newIdx = drawingHistoryIndex - 1;
-        const previousState = newIdx >= 0 ? drawingHistory[newIdx] : [];
-        
-        setDrawings(previousState);
-        setDrawingHistoryIndex(newIdx);
-        setPageDrawings(prev => ({ ...prev, [currentPage]: previousState }));
-        setPageDrawingIndices(prev => ({ ...prev, [currentPage]: newIdx }));
+        // Delegate to per-page CommandHistory (Command pattern)
+        const didUndo = getPageHistory(currentPage).undo();
+        if (!didUndo) {
+            // Fallback to legacy snapshot undo
+            if (drawingHistoryIndex < 0) return;
+            const newIdx = drawingHistoryIndex - 1;
+            const previousState = newIdx >= 0 ? drawingHistory[newIdx] : [];
+            setDrawings(previousState);
+            setDrawingHistoryIndex(newIdx);
+            setPageDrawings(prev => ({ ...prev, [currentPage]: previousState }));
+        }
     }, [drawingHistory, drawingHistoryIndex, currentPage]);
 
     const handleRedo = useCallback(() => {
-        if (drawingHistoryIndex >= drawingHistory.length - 1) return;
-        
-        const newIdx = drawingHistoryIndex + 1;
-        const nextState = drawingHistory[newIdx];
-        
-        setDrawings(nextState);
-        setDrawingHistoryIndex(newIdx);
-        setPageDrawings(prev => ({ ...prev, [currentPage]: nextState }));
-        setPageDrawingIndices(prev => ({ ...prev, [currentPage]: newIdx }));
+        // Delegate to per-page CommandHistory (Command pattern)
+        const didRedo = getPageHistory(currentPage).redo();
+        if (!didRedo) {
+            // Fallback to legacy snapshot redo
+            if (drawingHistoryIndex >= drawingHistory.length - 1) return;
+            const newIdx = drawingHistoryIndex + 1;
+            const nextState = drawingHistory[newIdx];
+            setDrawings(nextState);
+            setDrawingHistoryIndex(newIdx);
+            setPageDrawings(prev => ({ ...prev, [currentPage]: nextState }));
+        }
     }, [drawingHistory, drawingHistoryIndex, currentPage]);
 
     const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
@@ -601,69 +541,8 @@ const PdfViewer: React.FC = () => {
     };
 
     const renderVectors = useCallback((ctx: CanvasRenderingContext2D, drawingList: DrawingAnnotation[], s: number) => {
-        ctx.save();
-        drawingList.forEach(draw => {
-            ctx.beginPath();
-            ctx.strokeStyle = draw.color;
-            ctx.fillStyle = draw.color;
-            ctx.lineWidth = draw.strokeWidth * s;
-            ctx.globalAlpha = draw.opacity;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-
-            if (draw.type === 'pen' || draw.type === 'eraser' || (draw.type === 'highlight' && draw.points.length > 2)) {
-                if (draw.type === 'eraser') {
-                    ctx.globalAlpha = 1.0;
-                    ctx.strokeStyle = '#FFFFFF';
-                }
-                draw.points.forEach((p, i) => {
-                    if (i === 0) ctx.moveTo(p.x * s, p.y * s);
-                    else ctx.lineTo(p.x * s, p.y * s);
-                });
-                ctx.stroke();
-            } else if (draw.type === 'highlight' && draw.rect) {
-                const [rx, ry, rw, rh] = draw.rect;
-                ctx.fillRect(rx * s, ry * s, rw * s, rh * s);
-            } else if (draw.type === 'rect' && draw.rect) {
-                const [rx, ry, rw, rh] = draw.rect;
-                ctx.strokeRect(rx * s, ry * s, rw * s, rh * s);
-            } else if (draw.type === 'circle' && draw.rect) {
-                const [rx, ry, rw, rh] = draw.rect;
-                const cx = (rx + rw / 2) * s;
-                const cy = (ry + rh / 2) * s;
-                ctx.ellipse(cx, cy, (rw / 2) * s, (rh / 2) * s, 0, 0, 2 * Math.PI);
-                ctx.stroke();
-                ctx.stroke();
-            } else if (draw.type.startsWith('arrow-') && draw.points.length >= 2) {
-                const from = draw.points[0];
-                const to = draw.points[1];
-                const headlen = (10 + draw.strokeWidth * 2) * s;
-                let angle = draw.angle ?? Math.atan2((to.y - from.y), (to.x - from.x));
-
-                ctx.beginPath();
-                ctx.moveTo(from.x * s, from.y * s);
-
-                if (draw.type.startsWith('arrow-l-')) {
-                    const elbow = getElbowPoint(from, to, draw.type);
-                    ctx.lineTo(elbow.x * s, elbow.y * s);
-                    ctx.lineTo(to.x * s, to.y * s);
-                    
-                    // recalculate angle based on the last segment (elbow to end)
-                    angle = Math.atan2((to.y - elbow.y), (to.x - elbow.x));
-                } else {
-                    ctx.lineTo(to.x * s, to.y * s);
-                }
-                ctx.stroke();
-
-                ctx.beginPath();
-                ctx.moveTo(to.x * s, to.y * s);
-                ctx.lineTo((to.x * s) - headlen * Math.cos(angle - Math.PI / 6), (to.y * s) - headlen * Math.sin(angle - Math.PI / 6));
-                ctx.moveTo(to.x * s, to.y * s);
-                ctx.lineTo((to.x * s) - headlen * Math.cos(angle + Math.PI / 6), (to.y * s) - headlen * Math.sin(angle + Math.PI / 6));
-                ctx.stroke();
-            }
-        });
-        ctx.restore();
+        // Facade + Strategy: delegate to PdfRenderService which calls each tool's render() method
+        pdfRenderService.renderVectors(ctx, drawingList, s);
     }, []);
 
     const drawAllAnnotations = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -787,19 +666,14 @@ const PdfViewer: React.FC = () => {
 
         if (prevPage !== currentPage) {
             setPageDrawings(prev => ({ ...prev, [prevPage]: drawings }));
-            setPageDrawingHistories(prev => ({ ...prev, [prevPage]: drawingHistory }));
-            setPageDrawingIndices(prev => ({ ...prev, [prevPage]: drawingHistoryIndex }));
             setPageTextAnnotations(prev => ({ ...prev, [prevPage]: textAnnotations }));
         }
 
         const savedDrawings = pageDrawings[currentPage] || [];
-        const savedHistory = pageDrawingHistories[currentPage] || [];
-        const savedIndex = pageDrawingIndices[currentPage] ?? -1;
         const savedText = pageTextAnnotations[currentPage] || [];
 
         setDrawings(savedDrawings);
-        setDrawingHistory(savedHistory);
-        setDrawingHistoryIndex(savedIndex);
+        // Note: per-page undo/redo state is managed by CommandHistory (pageCommandHistories ref)
         setTextAnnotations(savedText);
 
         lastPageRef.current = currentPage;
@@ -1182,7 +1056,16 @@ const PdfViewer: React.FC = () => {
         setIsDrawing(false);
 
         if (activeTool === 'select' && selectedDrawingId && draggingDrawingHandle) {
-            saveDrawingToHistory(drawings);
+            // Command pattern: record the drag-move via CommandHistory
+            const history = getPageHistory(currentPage);
+            // Snapshot current drawings for undo
+            const snapshot = [...drawings];
+            history['stack'].push({
+                execute: () => { /* already applied via setDrawings during drag */ },
+                undo: () => setDrawings(snapshot)
+            });
+            (history as any)['pointer']++;
+            setPageDrawings(prev => ({ ...prev, [currentPage]: drawings }));
             setDraggingDrawingHandle(null);
             setStartPos(null);
             return;
@@ -1190,7 +1073,8 @@ const PdfViewer: React.FC = () => {
 
         if (activeTool === 'eraser') {
             if (wasErased) {
-                saveDrawingToHistory(drawings);
+                // Erase command already recorded in handleEraserHit; just sync page state
+                setPageDrawings(prev => ({ ...prev, [currentPage]: drawings }));
                 setWasErased(false);
             }
             setStartPos(null);
@@ -1199,8 +1083,10 @@ const PdfViewer: React.FC = () => {
 
         if (currentDrawing) {
             const nextDrawings = [...drawings, currentDrawing];
-            setDrawings(nextDrawings);
-            saveDrawingToHistory(nextDrawings);
+            // Command pattern: push AddAnnotationCommand to per-page CommandHistory
+            const history = getPageHistory(currentPage);
+            history.push(new AddAnnotationCommand(currentDrawing, setDrawings));
+            setPageDrawings(prev => ({ ...prev, [currentPage]: nextDrawings }));
         }
         
         setCurrentDrawing(null);
