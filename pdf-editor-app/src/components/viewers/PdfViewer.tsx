@@ -125,6 +125,30 @@ const PdfViewer: React.FC = () => {
         ctx.restore();
     }, [guideLineX, guideLineY, scale]); // Re-render when guides or scale changes
     const [resizingType, setResizingType] = useState<'width' | 'height' | 'both' | null>(null);
+    const [pageInput, setPageInput] = useState('1');
+
+    useEffect(() => {
+        setPageInput(currentPage.toString());
+    }, [currentPage]);
+
+    const handlePageJump = () => {
+        const parsed = parseInt(pageInput, 10);
+        if (!isNaN(parsed) && parsed >= 1 && parsed <= numPages) {
+            setCurrentPage(parsed);
+        } else {
+            setPageInput(currentPage.toString());
+        }
+    };
+
+    const handlePageInputKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') {
+            handlePageJump();
+            (e.target as HTMLInputElement).blur();
+        } else if (e.key === 'Escape') {
+            setPageInput(currentPage.toString());
+            (e.target as HTMLInputElement).blur();
+        }
+    };
 
     const { activeTool, toolSettings } = useAppStore();
 
@@ -871,14 +895,16 @@ const PdfViewer: React.FC = () => {
             let minY = Math.min(startPos.y, pos.y);
             let maxY = Math.max(startPos.y, pos.y);
 
+            const vTolerance = 10;
+            const hTolerance = 5;
             const startBlock = textBlocks.find(b =>
-                startPos.x >= b.rect[0] && startPos.x <= b.rect[0] + b.rect[2] &&
-                startPos.y >= b.rect[1] && startPos.y <= b.rect[1] + b.rect[3]
+                startPos.x >= b.rect[0] - hTolerance && startPos.x <= b.rect[0] + b.rect[2] + hTolerance &&
+                startPos.y >= b.rect[1] - vTolerance && startPos.y <= b.rect[1] + b.rect[3] + vTolerance
             );
 
             const endBlock = textBlocks.find(b =>
-                pos.x >= b.rect[0] && pos.x <= b.rect[0] + b.rect[2] &&
-                pos.y >= b.rect[1] && pos.y <= b.rect[1] + b.rect[3]
+                pos.x >= b.rect[0] - hTolerance && pos.x <= b.rect[0] + b.rect[2] + hTolerance &&
+                pos.y >= b.rect[1] - vTolerance && pos.y <= b.rect[1] + b.rect[3] + vTolerance
             );
 
             const leftBlock = minX === startPos.x ? startBlock : endBlock;
@@ -894,13 +920,13 @@ const PdfViewer: React.FC = () => {
                     maxY = Math.max(...yVals) + 1;
                 }
 
-                const threshold = 20;
+                const threshold = 15;
 
                 // Snap left edge to leftBlock's left edge
                 if (leftBlock) {
-                    // Always cover from the very first character if started inside
-                    const isLeftInside = (minX === startPos.x && startBlock) || (minX === pos.x && endBlock);
-                    if (isLeftInside || Math.abs(minX - leftBlock.rect[0]) < threshold) {
+                    // Only snap if close to the edge. For small blocks (like "1"), 15px will cover the whole block anyway.
+                    // This prevents over-selection in long blocks like "(multi-variate linear regression): 2"
+                    if (Math.abs(minX - leftBlock.rect[0]) < threshold) {
                         minX = leftBlock.rect[0];
                     }
                 }
@@ -1709,9 +1735,23 @@ const PdfViewer: React.FC = () => {
                         >
                             <ChevronLeft size={16} />
                         </button>
-                        <span className="text-xs font-semibold theme-text-muted min-w-[3rem] text-center">
-                            {docType ? `${currentPage} / ${numPages}` : '- / -'}
-                        </span>
+                        <div className="flex items-center gap-1 min-w-[3.5rem] justify-center">
+                            {docType ? (
+                                <>
+                                    <input
+                                        type="text"
+                                        value={pageInput}
+                                        onChange={(e) => setPageInput(e.target.value)}
+                                        onKeyDown={handlePageInputKeyDown}
+                                        onBlur={handlePageJump}
+                                        className="w-10 h-6 bg-slate-100/50 dark:bg-slate-800/50 border theme-border rounded text-center text-[11px] font-bold theme-text-main focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all"
+                                    />
+                                    <span className="text-[10px] theme-text-muted">/ {numPages}</span>
+                                </>
+                            ) : (
+                                <span className="text-[10px] theme-text-muted">- / -</span>
+                            )}
+                        </div>
                         <button
                             onClick={() => setCurrentPage((p) => Math.min(numPages, p + 1))}
                             disabled={currentPage >= numPages || !docType}
