@@ -9,6 +9,7 @@ import { HighlightToolStrategy } from './HighlightToolStrategy';
 import { ShapeToolStrategy } from './ShapeToolStrategy';
 import { ArrowToolStrategy } from './ArrowToolStrategy';
 import { EraserToolStrategy } from './EraserToolStrategy';
+import { ImageToolStrategy } from './ImageToolStrategy';
 
 // Cache instances — strategies are stateless, so singletons are safe.
 const strategyCache = new Map<DrawingTool, DrawingToolStrategy>();
@@ -44,6 +45,9 @@ export class ToolFactory {
                 break;
             case 'eraser':
                 strategy = new EraserToolStrategy();
+                break;
+            case 'image':
+                strategy = new ImageToolStrategy();
                 break;
             default:
                 // 'select' and 'text' do not draw vector annotations.

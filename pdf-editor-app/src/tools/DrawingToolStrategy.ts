@@ -4,7 +4,7 @@
 export type DrawingTool =
     | 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle'
     | 'eraser' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right'
-    | 'arrow-l-1' | 'arrow-l-2';
+    | 'arrow-l-1' | 'arrow-l-2' | 'image';
 
 export interface DrawingAnnotation {
     id: string;
@@ -15,6 +15,7 @@ export interface DrawingAnnotation {
     opacity: number;
     rect?: [number, number, number, number]; // [x, y, w, h] at scale=1.0
     angle?: number;
+    imageSrc?: string; // Base64 or URL for image annotations
 }
 
 export interface ToolSettings {
