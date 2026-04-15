@@ -11,6 +11,7 @@ import { AddAnnotationCommand } from '../../commands/AddAnnotationCommand';
 import { EraseAnnotationCommand } from '../../commands/EraseAnnotationCommand';
 import { workspaceApiService } from '../../services/WorkspaceApiService';
 import { pdfRenderService } from '../../services/PdfRenderService';
+import { DrawingAnnotation } from '../../tools/DrawingToolStrategy';
 
 // pdfjs worker setup
 // pdfjs worker setup - using absolute local path for maximum reliability
@@ -28,24 +29,20 @@ const getElbowPoint = (startP: {x: number, y: number}, endP: {x: number, y: numb
     }
 }
 
-interface DrawingAnnotation {
-    id: string;
-    type: DrawingTool;
-    points: { x: number; y: number }[]; // Raw coordinates (normalized to 1.0 scale)
-    color: string;
-    strokeWidth: number;
-    opacity: number;
-    // For shapes
-    rect?: [number, number, number, number]; 
-    angle?: number;
-}
+// (Re-definition removed, importing from DrawingToolStrategy instead)
 
 const PdfViewer: React.FC = () => {
-    const { currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTab } = useAppStore();
+    const { 
+        currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTab,
+        activeTool, setActiveTool, toolSettings, setToolSettings
+    } = useAppStore();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
     const guideCanvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const imageInputRef = useRef<HTMLInputElement>(null);
+    const imageCache = useRef<Record<string, HTMLImageElement>>({});
+    const lastMousePos = useRef<{ x: number, y: number } | null>(null);
 
     const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
     const [imageDoc, setImageDoc] = useState<HTMLImageElement | null>(null);
@@ -84,9 +81,9 @@ const PdfViewer: React.FC = () => {
 
     const [originalData, setOriginalData] = useState<Uint8Array | null>(null);
 
-    // Arrow Resizing / Object Selection State
+    // Arrow / Image Resizing / Object Selection State
     const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
-    const [draggingDrawingHandle, setDraggingDrawingHandle] = useState<'start' | 'end' | 'body' | null>(null);
+    const [draggingDrawingHandle, setDraggingDrawingHandle] = useState<'start' | 'end' | 'body' | 'image-tl' | 'image-tr' | 'image-bl' | 'image-br' | 'image-tm' | 'image-bm' | 'image-lm' | 'image-rm' | null>(null);
 
     // 다른 이름으로 저장 다이얼로그 상태
     const [isSaveAsDialogOpen, setIsSaveAsDialogOpen] = useState(false);
@@ -131,6 +128,145 @@ const PdfViewer: React.FC = () => {
     const [resizingType, setResizingType] = useState<'width' | 'height' | 'both' | null>(null);
     const [pageInput, setPageInput] = useState('1');
     const [wasErased, setWasErased] = useState(false);
+    const [historyRevision, setHistoryRevision] = useState(0);
+
+    const processAndInsertImage = (src: string) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = canvasRef.current;
+            const container = containerRef.current;
+            if (!canvas || !container) return;
+
+            const pageWidth = canvas.width / scale;
+            const pageHeight = canvas.height / scale;
+
+            let w = img.width;
+            let h = img.height;
+
+            // Auto-fit to max 50% of page (reduced from 80% for better UX)
+            const maxW = pageWidth * 0.5;
+            const maxH = pageHeight * 0.5;
+            if (w > maxW || h > maxH) {
+                const ratio = Math.min(maxW / w, maxH / h);
+                w *= ratio;
+                h *= ratio;
+            }
+
+            // Placement: 1. Mouse Position, 2. Viewport Center, 3. Fallback (50, 50)
+            let targetX = 50;
+            let targetY = 50;
+
+            if (lastMousePos.current) {
+                // Use mouse pos (already normalized by getPos / scale in processAndInsertImage context? 
+                // wait, getPos returns canvas pixels. lastMousePos stores that).
+                targetX = (lastMousePos.current.x / scale) - (w / 2);
+                targetY = (lastMousePos.current.y / scale) - (h / 2);
+            } else {
+                // Viewport center
+                const scrollTop = container.scrollTop;
+                const scrollLeft = container.scrollLeft;
+                const viewW = container.clientWidth;
+                const viewH = container.clientHeight;
+                
+                // Convert viewport center to canvas coordinates
+                targetX = ((scrollLeft + viewW / 2) / scale) - (w / 2);
+                targetY = ((scrollTop + viewH / 2) / scale) - (h / 2);
+            }
+
+            // Boundary check: don't let it paste completely off-page
+            targetX = Math.max(0, Math.min(pageWidth - 50, targetX));
+            targetY = Math.max(0, Math.min(pageHeight - 50, targetY));
+
+            const newAnnotation: DrawingAnnotation = {
+                id: Date.now().toString() + Math.random().toString(36).substring(2),
+                type: 'image',
+                points: [{ x: targetX, y: targetY }],
+                color: 'transparent',
+                strokeWidth: 0,
+                opacity: 1.0,
+                rect: [targetX, targetY, w, h],
+                imageSrc: src
+            };
+
+            const nextDrawings = [...drawings, newAnnotation];
+            const history = getPageHistory(currentPage);
+            history.push(new AddAnnotationCommand(newAnnotation, setDrawings));
+            setHistoryRevision(p => p + 1);
+            setDrawings(nextDrawings);
+            setPageDrawings(prev => ({ ...prev, [currentPage]: nextDrawings }));
+            
+            setActiveTool('select');
+            setSelectedDrawingId(newAnnotation.id);
+        };
+        img.src = src;
+    };
+
+    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const src = event.target?.result as string;
+            processAndInsertImage(src);
+        };
+        reader.readAsDataURL(file);
+        e.target.value = '';
+    };
+
+    // Clipboard Paste Support
+    useEffect(() => {
+        const handlePaste = (e: ClipboardEvent) => {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf('image') !== -1) {
+                    const blob = items[i].getAsFile();
+                    if (!blob) continue;
+
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const src = event.target?.result as string;
+                        processAndInsertImage(src);
+                    };
+                    reader.readAsDataURL(blob);
+                    break; // Handle first image only
+                }
+            }
+        };
+
+        window.addEventListener('paste', handlePaste);
+        return () => window.removeEventListener('paste', handlePaste);
+    }, [drawings, currentPage, scale]); // Dependencies for processAndInsertImage closures
+
+    // Delete / Backspace Shortcut for Selected Annotations
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Ignore if typing in an input or textarea
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (selectedDrawingId) {
+                    const toErase = drawings.find(d => d.id === selectedDrawingId);
+                    if (toErase) {
+                        const history = getPageHistory(currentPage);
+                        history.push(new EraseAnnotationCommand([toErase], setDrawings));
+                        setHistoryRevision(p => p + 1);
+                        setDrawings(prev => prev.filter(d => d.id !== selectedDrawingId));
+                        setSelectedDrawingId(null);
+                        setPageDrawings(prev => ({ 
+                            ...prev, 
+                            [currentPage]: (prev[currentPage] || []).filter(d => d.id !== selectedDrawingId) 
+                        }));
+                    }
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [selectedDrawingId, drawings, currentPage]);
 
     // Save page memory whenever currentPage changes (with debounce)
     useEffect(() => {
@@ -151,14 +287,10 @@ const PdfViewer: React.FC = () => {
             const toErase = prev.filter(d => eraserStrategy.hitTest(d, pos, radius));
             if (toErase.length === 0) return prev;
 
-            // Record erase action in Command history
+            // Record erase action in Command history (Command pattern)
             const history = getPageHistory(currentPage);
-            const cmd = new EraseAnnotationCommand(toErase, setDrawings);
-            // Don't execute via history here — setDrawings filter below is the execute
-            // Just push undo capability
-            history['stack'] = [...(history as any)['stack'].slice(0, (history as any)['pointer'] + 1)];
-            history['stack'].push(cmd);
-            (history as any)['pointer']++;
+            history.push(new EraseAnnotationCommand(toErase, setDrawings));
+            setHistoryRevision(p => p + 1);
 
             setWasErased(true);
             const erasedIds = new Set(toErase.map(d => d.id));
@@ -198,7 +330,7 @@ const PdfViewer: React.FC = () => {
         }
     };
 
-    const { activeTool, toolSettings } = useAppStore();
+    // Removed duplicate useAppStore call
 
     const renderImage = useCallback(
         async (img: HTMLImageElement, s: number) => {
@@ -491,8 +623,11 @@ const PdfViewer: React.FC = () => {
 
     const handleUndo = useCallback(() => {
         // Delegate to per-page CommandHistory (Command pattern)
-        const didUndo = getPageHistory(currentPage).undo();
-        if (!didUndo) {
+        const history = getPageHistory(currentPage);
+        const didUndo = history.undo();
+        if (didUndo) {
+            setHistoryRevision(p => p + 1);
+        } else {
             // Fallback to legacy snapshot undo
             if (drawingHistoryIndex < 0) return;
             const newIdx = drawingHistoryIndex - 1;
@@ -505,8 +640,11 @@ const PdfViewer: React.FC = () => {
 
     const handleRedo = useCallback(() => {
         // Delegate to per-page CommandHistory (Command pattern)
-        const didRedo = getPageHistory(currentPage).redo();
-        if (!didRedo) {
+        const history = getPageHistory(currentPage);
+        const didRedo = history.redo();
+        if (didRedo) {
+            setHistoryRevision(p => p + 1);
+        } else {
             // Fallback to legacy snapshot redo
             if (drawingHistoryIndex >= drawingHistory.length - 1) return;
             const newIdx = drawingHistoryIndex + 1;
@@ -564,26 +702,59 @@ const PdfViewer: React.FC = () => {
         });
 
         // 3. Draw Selection Handles for Active Arrow
+        // 3. Draw Selection Handles for Active Arrow or Image
         if (selectedDrawingId) {
             const selected = drawings.find(d => d.id === selectedDrawingId);
-            if (selected && selected.type.startsWith('arrow-') && selected.points.length >= 2) {
-                const p1 = selected.points[0];
-                const p2 = selected.points[1];
-                ctx.fillStyle = '#3b82f6'; // blue-500
-                ctx.strokeStyle = '#ffffff'; // white border
-                ctx.lineWidth = 2;
-                
-                // Draw start handle
-                ctx.beginPath();
-                ctx.arc(p1.x * scale, p1.y * scale, 6, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
+            if (selected) {
+                if (selected.type.startsWith('arrow-') && selected.points.length >= 2) {
+                    const p1 = selected.points[0];
+                    const p2 = selected.points[1];
+                    ctx.save();
+                    ctx.fillStyle = '#3b82f6'; // blue-500
+                    ctx.strokeStyle = '#ffffff'; // white border
+                    ctx.lineWidth = 2;
+                    
+                    [p1, p2].forEach(p => {
+                        ctx.beginPath();
+                        ctx.arc(p.x * scale, p.y * scale, 6, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+                    });
+                    ctx.restore();
+                } else if (selected.type === 'image' && selected.rect) {
+                    const [ix, iy, iw, ih] = selected.rect;
+                    ctx.save();
+                    // Selection Border
+                    ctx.setLineDash([5, 5]);
+                    ctx.strokeStyle = '#3b82f6';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(ix * scale, iy * scale, iw * scale, ih * scale);
 
-                // Draw end handle
-                ctx.beginPath();
-                ctx.arc(p2.x * scale, p2.y * scale, 6, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
+                    // Resize Handles (8 Handles: corners + middle of edges)
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = '#3b82f6';
+                    ctx.strokeStyle = '#ffffff';
+                    const handleRadius = 5;
+                    
+                    const handles = [
+                        { x: ix * scale, y: iy * scale },            // TL
+                        { x: (ix + iw) * scale, y: iy * scale },     // TR
+                        { x: ix * scale, y: (iy + ih) * scale },     // BL
+                        { x: (ix + iw) * scale, y: (iy + ih) * scale }, // BR
+                        { x: (ix + iw/2) * scale, y: iy * scale },      // TM
+                        { x: (ix + iw/2) * scale, y: (iy + ih) * scale }, // BM
+                        { x: ix * scale, y: (iy + ih/2) * scale },      // LM
+                        { x: (ix + iw) * scale, y: (iy + ih/2) * scale }  // RM
+                    ];
+
+                    handles.forEach(p => {
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, handleRadius, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+                    });
+                    ctx.restore();
+                }
             }
         }
     }, [textAnnotations, drawings, scale, renderVectors, selectedDrawingId]);
@@ -649,7 +820,7 @@ const PdfViewer: React.FC = () => {
 
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [handleUndo, handleRedo, activeTab, pdfDoc, imageDoc, currentPage, numPages]);
+    }, [handleUndo, handleRedo, activeTab, pdfDoc, imageDoc, currentPage, numPages, historyRevision]);
 
     useEffect(() => {
         if (pdfDoc) {
@@ -690,9 +861,40 @@ const PdfViewer: React.FC = () => {
         const pos = getPos(e);
         const normalizedPos = { x: pos.x / scale, y: pos.y / scale };
 
+        if (activeTool === 'image') {
+            imageInputRef.current?.click();
+            return;
+        }
+
         // Selection & Hit-Testing Logic
         if (activeTool === 'select') {
-            // First check if clicking an already selected arrow's handles
+            // First check for image resizing handles
+            const selected = drawings.find(d => d.id === selectedDrawingId);
+            if (selected && selected.type === 'image' && selected.rect) {
+                const [ix, iy, iw, ih] = selected.rect;
+                const handles = [
+                    { id: 'image-tl' as const, x: ix * scale, y: iy * scale },
+                    { id: 'image-tr' as const, x: (ix + iw) * scale, y: iy * scale },
+                    { id: 'image-bl' as const, x: ix * scale, y: (iy + ih) * scale },
+                    { id: 'image-br' as const, x: (ix + iw) * scale, y: (iy + ih) * scale },
+                    { id: 'image-tm' as const, x: (ix + iw/2) * scale, y: iy * scale },
+                    { id: 'image-bm' as const, x: (ix + iw/2) * scale, y: (iy + ih) * scale },
+                    { id: 'image-lm' as const, x: ix * scale, y: (iy + ih/2) * scale },
+                    { id: 'image-rm' as const, x: (ix + iw) * scale, y: (iy + ih/2) * scale },
+                ];
+
+                for (const h of handles) {
+                    if (Math.hypot(pos.x - h.x, pos.y - h.y) < 15) {
+                        setDraggingDrawingHandle(h.id);
+                        setStartPos(pos);
+                        setIsDrawing(true);
+                        setCanvasRevision(prev => prev + 1);
+                        return;
+                    }
+                }
+            }
+
+            // Check if clicking an already selected arrow's handles
             if (selectedDrawingId) {
                 const selected = drawings.find(d => d.id === selectedDrawingId);
                 if (selected && selected.type.startsWith('arrow-') && selected.points.length >= 2) {
@@ -735,7 +937,22 @@ const PdfViewer: React.FC = () => {
             // Reverse loop to pick topmost drawing
             for (let i = drawings.length - 1; i >= 0; i--) {
                 const d = drawings[i];
-                if (d.type.startsWith('arrow-') && d.points.length >= 2) {
+                if (d.type === 'image' && d.rect) {
+                    const [ix, iy, iw, ih] = d.rect;
+                    const realX = iw < 0 ? ix + iw : ix;
+                    const realY = ih < 0 ? iy + ih : iy;
+                    const realW = Math.abs(iw);
+                    const realH = Math.abs(ih);
+                    if (normalizedPos.x >= realX && normalizedPos.x <= realX + realW &&
+                        normalizedPos.y >= realY && normalizedPos.y <= realY + realH) {
+                        setSelectedDrawingId(d.id);
+                        setDraggingDrawingHandle('body');
+                        setIsDrawing(true);
+                        setStartPos(pos);
+                        setCanvasRevision(prev => prev + 1);
+                        return;
+                    }
+                } else if (d.type.startsWith('arrow-') && d.points.length >= 2) {
                     const startP = { x: d.points[0].x * scale, y: d.points[0].y * scale };
                     const endP = { x: d.points[1].x * scale, y: d.points[1].y * scale };
                     
@@ -797,9 +1014,49 @@ const PdfViewer: React.FC = () => {
     };
 
     const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!isDrawing) return;
         const pos = getPos(e);
+        lastMousePos.current = pos;
         let normalizedPos = { x: pos.x / scale, y: pos.y / scale };
+
+        // Update Cursor when Hovering (not dragging)
+        if (!isDrawing && activeTool === 'select') {
+            const selected = drawings.find(d => d.id === selectedDrawingId);
+            if (selected && selected.type === 'image' && selected.rect) {
+                const [ix, iy, iw, ih] = selected.rect;
+                const handles = [
+                    { x: ix * scale, y: iy * scale, cursor: 'nwse-resize' },            // TL
+                    { x: (ix + iw) * scale, y: iy * scale, cursor: 'nesw-resize' },     // TR
+                    { x: ix * scale, y: (iy + ih) * scale, cursor: 'nesw-resize' },     // BL
+                    { x: (ix + iw) * scale, y: (iy + ih) * scale, cursor: 'nwse-resize' }, // BR
+                    { x: (ix + iw/2) * scale, y: iy * scale, cursor: 'ns-resize' },      // TM
+                    { x: (ix + iw/2) * scale, y: (iy + ih) * scale, cursor: 'ns-resize' }, // BM
+                    { x: ix * scale, y: (iy + ih/2) * scale, cursor: 'ew-resize' },      // LM
+                    { x: (ix + iw) * scale, y: (iy + ih/2) * scale, cursor: 'ew-resize' }  // RM
+                ];
+
+                let foundHandle = false;
+                for (const h of handles) {
+                    if (Math.hypot(pos.x - h.x, pos.y - h.y) < 15) {
+                        e.currentTarget.style.cursor = h.cursor;
+                        foundHandle = true;
+                        break;
+                    }
+                }
+
+                if (!foundHandle) {
+                    if (normalizedPos.x >= ix && normalizedPos.x <= ix + iw &&
+                        normalizedPos.y >= iy && normalizedPos.y <= iy + ih) {
+                        e.currentTarget.style.cursor = 'move';
+                    } else {
+                        e.currentTarget.style.cursor = 'default';
+                    }
+                }
+            } else {
+                e.currentTarget.style.cursor = 'default';
+            }
+        }
+
+        if (!isDrawing) return;
 
         // Helper for endpoint magnetic snapping
         const hitTestEndpointsForSnap = (px: number, py: number, ignoreId: string | null = null) => {
@@ -843,25 +1100,48 @@ const PdfViewer: React.FC = () => {
                     const rawNewEnd = { x: d.points[1].x + dx, y: d.points[1].y + dy };
                     const snapped = hitTestEndpointsForSnap(rawNewEnd.x, rawNewEnd.y, d.id);
                     newD.points = [d.points[0], snapped || rawNewEnd];
-                    // Update angle for arrow head (straight arrows only, L-shape gets it dynamically in render)
                     if (!d.type.startsWith('arrow-l-')) {
                         newD.angle = Math.atan2(newD.points[1].y - newD.points[0].y, newD.points[1].x - newD.points[0].x);
                     }
                 } else if (draggingDrawingHandle === 'body') {
-                    newD.points = [
-                        { x: d.points[0].x + dx, y: d.points[0].y + dy },
-                        { x: d.points[1].x + dx, y: d.points[1].y + dy }
-                    ];
+                    if (d.type === 'image' && d.rect) {
+                        const [ix, iy, iw, ih] = d.rect;
+                        newD.rect = [ix + dx, iy + dy, iw, ih];
+                        newD.points = [{ x: ix + dx, y: iy + dy }];
+                    } else {
+                        newD.points = [
+                            { x: d.points[0].x + dx, y: d.points[0].y + dy },
+                            { x: d.points[1].x + dx, y: d.points[1].y + dy }
+                        ];
+                    }
+                } else if (d.type === 'image' && d.rect) {
+                    const [ix, iy, iw, ih] = d.rect;
+                    if (draggingDrawingHandle === 'image-br') {
+                        newD.rect = [ix, iy, iw + dx, ih + dy];
+                    } else if (draggingDrawingHandle === 'image-tl') {
+                        newD.rect = [ix + dx, iy + dy, iw - dx, ih - dy];
+                    } else if (draggingDrawingHandle === 'image-tr') {
+                        newD.rect = [ix, iy + dy, iw + dx, ih - dy];
+                    } else if (draggingDrawingHandle === 'image-bl') {
+                        newD.rect = [ix + dx, iy, iw - dx, ih + dy];
+                    } else if (draggingDrawingHandle === 'image-tm') {
+                        newD.rect = [ix, iy + dy, iw, ih - dy];
+                    } else if (draggingDrawingHandle === 'image-bm') {
+                        newD.rect = [ix, iy, iw, ih + dy];
+                    } else if (draggingDrawingHandle === 'image-lm') {
+                        newD.rect = [ix + dx, iy, iw - dx, ih];
+                    } else if (draggingDrawingHandle === 'image-rm') {
+                        newD.rect = [ix, iy, iw + dx, ih];
+                    }
                 }
                 return newD;
             }));
-            setStartPos(pos); // Update start pos for continuous diff
+            setStartPos(pos);
             return;
         }
 
         if (!currentDrawing) return;
 
-        // Snapping while initially drawing a brand new arrow
         if (currentDrawing.type.startsWith('arrow-')) {
             const snapped = hitTestEndpointsForSnap(normalizedPos.x, normalizedPos.y, currentDrawing.id);
             if (snapped) {
@@ -898,7 +1178,6 @@ const PdfViewer: React.FC = () => {
             const rightBlock = maxX === startPos.x ? startBlock : endBlock;
 
             if (leftBlock || rightBlock) {
-                // Y bounds
                 const yVals: number[] = [];
                 if (leftBlock) { yVals.push(leftBlock.rect[1], leftBlock.rect[1] + leftBlock.rect[3]); }
                 if (rightBlock) { yVals.push(rightBlock.rect[1], rightBlock.rect[1] + rightBlock.rect[3]); }
@@ -908,31 +1187,11 @@ const PdfViewer: React.FC = () => {
                 }
 
                 const threshold = 15;
-
-                // Snap left edge to leftBlock's left edge
-                if (leftBlock) {
-                    // Only snap if close to the edge. For small blocks (like "1"), 15px will cover the whole block anyway.
-                    // This prevents over-selection in long blocks like "(multi-variate linear regression): 2"
-                    if (Math.abs(minX - leftBlock.rect[0]) < threshold) {
-                        minX = leftBlock.rect[0];
-                    }
+                if (leftBlock && Math.abs(minX - leftBlock.rect[0]) < threshold) {
+                    minX = leftBlock.rect[0];
                 }
-
-                // Snap right edge to rightBlock's right edge
-                if (rightBlock) {
-                    if (Math.abs(maxX - (rightBlock.rect[0] + rightBlock.rect[2])) < threshold) {
-                        maxX = rightBlock.rect[0] + rightBlock.rect[2];
-                    }
-                }
-
-                if (Math.abs(maxX - minX) < 5) {
-                    if (leftBlock) {
-                        minX = leftBlock.rect[0];
-                        maxX = leftBlock.rect[0] + leftBlock.rect[2];
-                    } else if (rightBlock) {
-                        minX = rightBlock.rect[0];
-                        maxX = rightBlock.rect[0] + rightBlock.rect[2];
-                    }
+                if (rightBlock && Math.abs(maxX - (rightBlock.rect[0] + rightBlock.rect[2])) < threshold) {
+                    maxX = rightBlock.rect[0] + rightBlock.rect[2];
                 }
             }
 
@@ -952,66 +1211,20 @@ const PdfViewer: React.FC = () => {
                 const by = b.rect[1];
                 const bw = b.rect[2];
                 const bh = b.rect[3];
-                return !(bx > dragRect.x + dragRect.w ||
-                    bx + bw < dragRect.x ||
-                    by > dragRect.y + dragRect.h ||
-                    by + bh < dragRect.y);
+                return !(bx > dragRect.x + dragRect.w || bx + bw < dragRect.x || by > dragRect.y + dragRect.h || by + bh < dragRect.y);
             });
 
             if (intersectingBlocks.length > 0) {
                 minY = Math.min(...intersectingBlocks.map(b => b.rect[1]));
                 maxY = Math.max(...intersectingBlocks.map(b => b.rect[1] + b.rect[3]));
-                const padding = 2;
-                minY -= padding;
-                maxY += padding;
-                setGuideLineY(minY + padding);
-                
-                const snapXThreshold = 15;
-                intersectingBlocks.forEach(b => {
-                    if (Math.abs(minX - b.rect[0]) < snapXThreshold) {
-                        minX = b.rect[0];
-                        setGuideLineX(minX);
-                    }
-                    if (Math.abs(maxX - (b.rect[0] + b.rect[2])) < snapXThreshold) {
-                        maxX = b.rect[0] + b.rect[2];
-                        setGuideLineX(maxX);
-                    }
-                });
-            } else {
-                const snapThreshold = 10;
-                const uniqueBaselines = Array.from(new Set(textBlocks.map(b => b.rect[1])));
-                let snapped = false;
-                for (const baseline of uniqueBaselines) {
-                    if (Math.abs(minY - baseline) < snapThreshold) {
-                        const height = maxY - minY;
-                        minY = baseline;
-                        maxY = minY + height;
-                        setGuideLineY(minY);
-                        snapped = true;
-                        break;
-                    }
-                }
-                const margins = Array.from(new Set([
-                    ...textBlocks.map(b => b.rect[0]),
-                    ...textBlocks.map(b => b.rect[0] + b.rect[2])
-                ]));
-                for (const margin of margins) {
-                    if (Math.abs(minX - margin) < snapThreshold) {
-                        const width = maxX - minX;
-                        minX = margin;
-                        maxX = minX + width;
-                        setGuideLineX(minX);
-                        break;
-                    }
-                }
-                if (!snapped) setGuideLineY(null);
+                minY -= 2;
+                maxY += 2;
             }
 
             const finalW = maxX - minX;
             const finalH = maxY - minY;
 
             setCurrentDrawing(prev => {
-                const headlen = 10 + prev!.strokeWidth * 2;
                 let fromX = startPos.x;
                 let fromY = startPos.y;
                 let toX = pos.x;
@@ -1019,21 +1232,6 @@ const PdfViewer: React.FC = () => {
                 let angle = 0;
 
                 if (activeTool.startsWith('arrow-')) {
-                    const snapThreshold = 20;
-                    textBlocks.forEach(b => {
-                        const edges = [
-                            { x: b.rect[0], y: b.rect[1] + b.rect[3]/2 }, 
-                            { x: b.rect[0] + b.rect[2], y: b.rect[1] + b.rect[3]/2 }, 
-                            { x: b.rect[0] + b.rect[2]/2, y: b.rect[1] }, 
-                            { x: b.rect[0] + b.rect[2]/2, y: b.rect[1] + b.rect[3] }
-                        ];
-                        edges.forEach(edge => {
-                            if (Math.hypot(toX - edge.x, toY - edge.y) < snapThreshold) {
-                                toX = edge.x; toY = edge.y;
-                                setGuideLineX(toX); setGuideLineY(toY);
-                            }
-                        });
-                    });
                     angle = Math.atan2(toY - fromY, toX - fromX);
                     if (activeTool === 'arrow-right') { toX = Math.max(fromX + 10, toX); toY = fromY; angle = 0; }
                     else if (activeTool === 'arrow-left') { toX = Math.min(fromX - 10, toX); toY = fromY; angle = Math.PI; }
@@ -1056,15 +1254,13 @@ const PdfViewer: React.FC = () => {
         setIsDrawing(false);
 
         if (activeTool === 'select' && selectedDrawingId && draggingDrawingHandle) {
-            // Command pattern: record the drag-move via CommandHistory
             const history = getPageHistory(currentPage);
-            // Snapshot current drawings for undo
             const snapshot = [...drawings];
-            history['stack'].push({
-                execute: () => { /* already applied via setDrawings during drag */ },
+            history.push({
+                execute: () => { },
                 undo: () => setDrawings(snapshot)
             });
-            (history as any)['pointer']++;
+            setHistoryRevision(p => p + 1);
             setPageDrawings(prev => ({ ...prev, [currentPage]: drawings }));
             setDraggingDrawingHandle(null);
             setStartPos(null);
@@ -1073,7 +1269,6 @@ const PdfViewer: React.FC = () => {
 
         if (activeTool === 'eraser') {
             if (wasErased) {
-                // Erase command already recorded in handleEraserHit; just sync page state
                 setPageDrawings(prev => ({ ...prev, [currentPage]: drawings }));
                 setWasErased(false);
             }
@@ -1083,9 +1278,10 @@ const PdfViewer: React.FC = () => {
 
         if (currentDrawing) {
             const nextDrawings = [...drawings, currentDrawing];
-            // Command pattern: push AddAnnotationCommand to per-page CommandHistory
             const history = getPageHistory(currentPage);
             history.push(new AddAnnotationCommand(currentDrawing, setDrawings));
+            setHistoryRevision(p => p + 1);
+            setDrawings(nextDrawings);
             setPageDrawings(prev => ({ ...prev, [currentPage]: nextDrawings }));
         }
         
@@ -1093,6 +1289,11 @@ const PdfViewer: React.FC = () => {
         setStartPos(null);
         setGuideLineY(null);
         setGuideLineX(null);
+    };
+
+    const handleMouseLeaveCanvas = () => {
+        lastMousePos.current = null;
+        if (isDrawing) endDraw();
     };
 
     const handleTextClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1798,16 +1999,18 @@ const PdfViewer: React.FC = () => {
                     <div className="flex items-center gap-1 theme-bg-panel px-1 py-1 rounded-lg border theme-border">
                         <button
                             onClick={handleUndo}
-                            disabled={drawingHistoryIndex < 0}
-                            className="px-2 py-1 rounded text-[10px] font-bold theme-text-main theme-tool-hover disabled:opacity-30 transition-colors"
+                            disabled={!getPageHistory(currentPage).canUndo}
+                            className="px-2 py-1 rounded text-[10px] theme-text-main theme-tool-hover disabled:opacity-30 transition-colors uppercase"
+                            title="Ctrl + Z"
                         >
                             <span className="flex items-center gap-1"><span className="text-[14px]">↶</span> 취소</span>
                         </button>
                         <div className="w-px h-3 bg-slate-200/50" />
                         <button
                             onClick={handleRedo}
-                            disabled={drawingHistoryIndex >= drawingHistory.length - 1}
-                            className="px-2 py-1 rounded text-[10px] font-bold theme-text-main theme-tool-hover disabled:opacity-30 transition-colors"
+                            disabled={!getPageHistory(currentPage).canRedo}
+                            className="px-2 py-1 rounded text-[10px] theme-text-main theme-tool-hover disabled:opacity-30 transition-colors uppercase"
+                            title="Ctrl + Y"
                         >
                             <span className="flex items-center gap-1"><span className="text-[14px]">↷</span> 복구</span>
                         </button>
@@ -1836,6 +2039,13 @@ const PdfViewer: React.FC = () => {
 
             <div ref={containerRef} className="flex-1 overflow-auto bg-gray-200 rounded-lg flex items-start justify-center p-4 dark-pdf-filter">
                 <div className="relative shadow-xl">
+                    <input 
+                        type="file" 
+                        ref={imageInputRef} 
+                        className="hidden" 
+                        accept="image/*" 
+                        onChange={handleImageUpload} 
+                    />
                     <canvas ref={canvasRef} className="block" />
                     <canvas
                         ref={overlayCanvasRef}
@@ -1844,7 +2054,7 @@ const PdfViewer: React.FC = () => {
                         onMouseDown={startDraw}
                         onMouseMove={draw}
                         onMouseUp={endDraw}
-                        onMouseLeave={endDraw}
+                        onMouseLeave={handleMouseLeaveCanvas}
                         onClick={handleTextClick}
                     />
                     {/* Dedicated Interaction Guide Canvas */}
