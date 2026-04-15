@@ -18,13 +18,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 앱 정보
   getAppInfo: () => ipcRenderer.invoke('app:getInfo'),
   getConfig: () => ipcRenderer.invoke('app:getConfig'),
+  forceQuitApp: () => ipcRenderer.invoke('app:force-quit'),
 
   // 플랫폼
   platform: process.platform,
   
   // 이벤트 리스너
   on: (channel, callback) => {
-    const validChannels = ['file-saved', 'auto-save-status', 'ai-response'];
+    const validChannels = ['file-saved', 'auto-save-status', 'ai-response', 'app:request-close'];
     if (validChannels.includes(channel)) {
       const subscription = (event, ...args) => callback(...args);
       ipcRenderer.on(channel, subscription);

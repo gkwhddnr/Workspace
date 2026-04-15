@@ -1,17 +1,26 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { useAppStore, DrawingTool } from '../../store/useAppStore';
+import { usePdfEditorStore } from '../../store/usePdfEditorStore';
 import { FileUp, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Save } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { PDFDocument } from 'pdf-lib';
-// ── Design Pattern imports ──────────────────────────────────────────────────
-import { ToolFactory } from '../../tools/ToolFactory';
-import { CommandHistory } from '../../commands/CommandHistory';
-import { AddAnnotationCommand } from '../../commands/AddAnnotationCommand';
-import { EraseAnnotationCommand } from '../../commands/EraseAnnotationCommand';
+import { RenderElement } from '../../models/RenderElement';
+import { ElementFactory } from '../../models/ElementFactory';
+import { ToolManager } from '../../tools/next/ToolManager';
+import { CanvasRenderVisitor } from '../../renderers/CanvasRenderVisitor';
+import { LayerIterator } from '../../renderers/LayerIterator';
+import { PdfPageProxy } from '../../services/PdfPageProxy';
 import { workspaceApiService } from '../../services/WorkspaceApiService';
 import { pdfRenderService } from '../../services/PdfRenderService';
-import { DrawingAnnotation } from '../../tools/DrawingToolStrategy';
+import { useSavePdf } from '../../hooks/useSavePdf';
+import { useEditorShortcuts } from '../../hooks/useEditorShortcuts';
+import { ImageElement } from '../../models/ImageElement';
+import { AddElementCommand } from '../../commands/AddElementCommand';
+import { UpdateElementCommand } from '../../commands/UpdateElementCommand';
+import { DeleteElementCommand } from '../../commands/DeleteElementCommand';
+import { CommandHistory } from '../../commands/CommandHistory';
+import './PdfViewer.css';
 
 // pdfjs worker setup
 // pdfjs worker setup - using absolute local path for maximum reliability
@@ -21,79 +30,234 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = window.location.origin + '/pdf.worker.m
 import { distancePointToSegment } from '../../utils/geometry';
 
 // L-shape elbow helper (still needed for select-tool hit-testing in this file)
-const getElbowPoint = (startP: {x: number, y: number}, endP: {x: number, y: number}, type: string) => {
+const getElbowPoint = (startP: { x: number, y: number }, endP: { x: number, y: number }, type: string) => {
     switch (type) {
         case 'arrow-l-1': return { x: endP.x, y: startP.y };
         case 'arrow-l-2': return { x: startP.x, y: endP.y };
-        default:          return { x: endP.x, y: startP.y };
+        default: return { x: endP.x, y: startP.y };
     }
 }
 
 // (Re-definition removed, importing from DrawingToolStrategy instead)
 
+// Helper to safely get rect [x, y, w, h] from any element (legacy or class-based)
+const getElementRect = (el: any): [number, number, number, number] => {
+    if (el.rect && Array.isArray(el.rect) && el.rect.length === 4) return el.rect;
+    if (el.getBoundingBox) {
+        const bbox = el.getBoundingBox();
+        return [bbox.x, bbox.y, bbox.width, bbox.height];
+    }
+    return [el.x || 0, el.y || 0, el.width || 0, el.height || 0];
+};
+
 const PdfViewer: React.FC = () => {
-    const { 
+
+    const {
         currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTab,
-        activeTool, setActiveTool, toolSettings, setToolSettings
+        activeTool, setActiveTool, toolSettings, setToolSettings,
+        eraserInstantDelete, setEraserInstantDelete
     } = useAppStore();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
     const guideCanvasRef = useRef<HTMLCanvasElement>(null);
+    const floatingInputRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
     const imageCache = useRef<Record<string, HTMLImageElement>>({});
     const lastMousePos = useRef<{ x: number, y: number } | null>(null);
+    const renderTaskRef = useRef<any>(null);
+
+    const {
+        docType, setDocType,
+        currentPage, setCurrentPage,
+        numPages, setNumPages,
+        scale, setScale,
+        saveStatus, setSaveStatus,
+        isSaveAsDialogOpen, toggleSaveAsDialog,
+        saveAsName, setSaveAsName,
+        isExitDialogOpen, toggleExitDialog,
+        historyRevision, incrementRevision, lastSavedRevision, markSaved,
+        elements, setElements, setAllElements, selectedElementIds, setSelectedElements,
+        clearElements
+    } = usePdfEditorStore();
+
+
+
+    const currentPageElements = useMemo(() => elements[currentPage] || [], [elements, currentPage]);
+
 
     const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
     const [imageDoc, setImageDoc] = useState<HTMLImageElement | null>(null);
-    const [docType, setDocType] = useState<'pdf' | 'image' | null>(null);
-    const [currentPage, setCurrentPage] = useState(1);
-    const [numPages, setNumPages] = useState(0);
-    const [scale, setScale] = useState(1.5);
-    const [isDrawing, setIsDrawing] = useState(false);
-    // Vector Annotation State
-    const [drawings, setDrawings] = useState<DrawingAnnotation[]>([]);
-    const [drawingHistory, setDrawingHistory] = useState<DrawingAnnotation[][]>([]);
-    const [drawingHistoryIndex, setDrawingHistoryIndex] = useState(-1);
-    const [startPos, setStartPos] = useState<{ x: number; y: number } | null>(null);
-    const [highlightedInStroke, setHighlightedInStroke] = useState<Set<number>>(new Set());
-    const [isDraggingOver, setIsDraggingOver] = useState(false);
-    const [currentDrawing, setCurrentDrawing] = useState<DrawingAnnotation | null>(null);
-    const [canvasRevision, setCanvasRevision] = useState(0);
+    // Managers and Services (initialized via refs or memo)
+    const toolManager = useMemo(() => new ToolManager(usePdfEditorStore), []);
+    const pdfProxies = useRef<Record<number, PdfPageProxy>>({});
+    const commandHistories = useRef<Record<number, CommandHistory>>({});
 
-    // Per-page annotation storage
-    const [pageDrawings, setPageDrawings] = useState<Record<number, DrawingAnnotation[]>>({});
-    const [pageTextAnnotations, setPageTextAnnotations] = useState<Record<number, any[]>>({});
-    // Command History — one CommandHistory per page
-    const pageCommandHistories = useRef<Record<number, CommandHistory>>({});
-    const getPageHistory = (page: number): CommandHistory => {
-        if (!pageCommandHistories.current[page]) {
-            pageCommandHistories.current[page] = new CommandHistory();
+    // Preview element for in-progress drawing (kept as ref+state to avoid Zustand serialization)
+    const previewElementRef = useRef<RenderElement | null>(null);
+    const [previewRevision, setPreviewRevision] = useState(0);
+
+    // Selection handle state for rendering
+    const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
+    const [activeHandle, setActiveHandle] = useState<string | null>(null);
+
+    // Wire toolManager preview callback to local state
+    useEffect(() => {
+        toolManager.onPreviewChange = (el) => {
+            previewElementRef.current = el;
+            setPreviewRevision(r => r + 1);
+        };
+        // Inject providers lazily via refs to avoid declaration-order issues
+        toolManager.getCommandHistory = (page) => commandHistoriesRef.current(page);
+        toolManager.getTextBlocks = () => wordBlocksRef.current;
+        toolManager.getTextRuns = () => textBlocksRef.current;
+        toolManager.onSelectionChange = (id, handle) => {
+            setSelectedElementId(id);
+            setActiveHandle(handle);
+        };
+    }, [toolManager]);
+
+    const getCommandHistory = useCallback((page: number) => {
+        if (!commandHistories.current[page]) {
+            commandHistories.current[page] = new CommandHistory();
         }
-        return pageCommandHistories.current[page];
-    };
-    
-    // Text Annotation State
-    const [textAnnotations, setTextAnnotations] = useState<any[]>([]);
+        return commandHistories.current[page];
+    }, []);
+
+    // Stable ref so toolManager can access getCommandHistory without closure/ordering issues
+    const commandHistoriesRef = useRef(getCommandHistory);
+    useEffect(() => { commandHistoriesRef.current = getCommandHistory; }, [getCommandHistory]);
+
+
+
+    const [isDraggingOver, setIsDraggingOver] = useState(false);
+    const [canvasRevision, setCanvasRevision] = useState(0);
+    const [isDrawing, setIsDrawing] = useState(false);
+    const lastPageRef = useRef<number>(1);
+
+
+
+
+
+    // Command History is now managed globally or via CommandManager (Phase 4)
+    // For now, we'll keep the page-based command history bridge if existing logic depends on it,
+    // but ideally, we transition to usePdfEditorStore actions.
+
+
+    // Memoized Word Blocks for precise snapping
+    const wordBlocks = useMemo(() => {
+        const blocks: { text: string; rect: [number, number, number, number] }[] = [];
+
+        // 1. PDF Text Blocks (Per-character width measurement for accurate X positions)
+        const measureCanvas = document.createElement('canvas');
+        const measureCtx = measureCanvas.getContext('2d')!;
+
+        textBlocks.forEach(b => {
+            const parts = b.text.split('');
+            if (!parts.length) return;
+
+            // Estimate font size from block height (PDF.js provides height in canvas-pixel coords)
+            // Use a generic sans-serif font for measurement — proportions are close enough
+            const estimatedFontSize = b.rect[3] * 0.85; // height → approximate font size
+            measureCtx.font = `${estimatedFontSize}px Arial, sans-serif`;
+
+            // Measure each character's actual width
+            const charWidths = parts.map(ch => measureCtx.measureText(ch).width);
+            const measuredTotal = charWidths.reduce((s, w) => s + w, 0);
+
+            // Scale factor: map measured widths to actual PDF block width
+            const scaleFactor = measuredTotal > 0 ? b.rect[2] / measuredTotal : 1;
+
+            let currentX = b.rect[0];
+            parts.forEach((part, i) => {
+                const w = charWidths[i] * scaleFactor;
+                if (part.trim().length > 0) {
+                    blocks.push({ text: part, rect: [currentX, b.rect[1], w, b.rect[3]] });
+                }
+                currentX += w;
+            });
+        });
+
+        // 2. User Text Elements (New Model)
+        currentPageElements.forEach(el => {
+            if (el.type === 'text') {
+                const textEl = el as any;
+                const rect = getElementRect(textEl);
+                const annFontSize = (Number(textEl.fontSize) || 20) * scale;
+                const lineHeight = annFontSize * 1.2;
+                const text = textEl.text || '';
+                const lines = text.split('\n');
+                const tyBase = rect[1] * scale;
+
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d')!;
+                ctx.font = `${annFontSize}px ${textEl.fontFamily || 'Outfit, sans-serif'}`;
+
+                lines.forEach((line: string, lineIdx: number) => {
+                    const ty = tyBase + (lineIdx * lineHeight);
+                    let currentX = rect[0] * scale;
+                    const parts = line.split('');
+
+                    parts.forEach((part: string) => {
+                        const w = ctx.measureText(part).width;
+                        if (part.trim().length > 0) {
+                            blocks.push({
+                                text: part,
+                                rect: [currentX, ty, w, annFontSize]
+                            });
+                        }
+                        currentX += w;
+                    });
+                });
+            }
+        });
+
+
+
+        return blocks;
+    }, [textBlocks, currentPageElements, scale]);
+
+    // Ref so toolManager can always access the latest wordBlocks without closure issues
+    const wordBlocksRef = useRef(wordBlocks);
+    useEffect(() => { wordBlocksRef.current = wordBlocks; }, [wordBlocks]);
+
+    // Ref for raw textBlocks (text runs, canvas-pixel coords) — used for highlight snap
+    const textBlocksRef = useRef(textBlocks);
+    useEffect(() => { textBlocksRef.current = textBlocks; }, [textBlocks]);
+
     const [editingId, setEditingId] = useState<string | null>(null);
     const [inputPos, setInputPos] = useState<{ x: number; y: number } | null>(null);
+    const isInputActive = editingId !== null || inputPos !== null;
+
+    // Clear selection when text input becomes active
+    useEffect(() => {
+        if (isInputActive) {
+            setSelectedElementId(null);
+            setActiveHandle(null);
+            setSelectedElements([]);
+        }
+    }, [isInputActive]);
+
+    // Show eraser mode popup when eraser tool is selected — handled in Sidebar
     const [tempText, setTempText] = useState('');
 
     const [originalData, setOriginalData] = useState<Uint8Array | null>(null);
 
-    // Arrow / Image Resizing / Object Selection State
-    const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
-    const [draggingDrawingHandle, setDraggingDrawingHandle] = useState<'start' | 'end' | 'body' | 'image-tl' | 'image-tr' | 'image-bl' | 'image-br' | 'image-tm' | 'image-bm' | 'image-lm' | 'image-rm' | null>(null);
+    // Arrow / Image Resizing / Object Selection State (Managed via ToolManager now)
+    
+    // Editor Dimension States for perfect persistence
+    const [editorWidth, setEditorWidth] = useState<number>(120);
+    const [editorHeight, setEditorHeight] = useState<number>(18);
 
-    // 다른 이름으로 저장 다이얼로그 상태
-    const [isSaveAsDialogOpen, setIsSaveAsDialogOpen] = useState(false);
-    const [saveAsName, setSaveAsName] = useState('');
+    // Exit confirmation state
+    const [isClosingAfterSaveAs, setIsClosingAfterSaveAs] = useState(false);
 
     // Text Box Interaction State
     const [isDraggingBox, setIsDraggingBox] = useState(false);
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
     const [guideLineY, setGuideLineY] = useState<number | null>(null); // Horizontal dashed line
     const [guideLineX, setGuideLineX] = useState<number | null>(null); // Vertical dashed line
+    const [activeSnapPoint, setActiveSnapPoint] = useState<{x: number, y: number} | null>(null); // Snap indicator
 
     // Effect to render alignment guides on a separate canvas
     useEffect(() => {
@@ -123,12 +287,46 @@ const PdfViewer: React.FC = () => {
             ctx.lineTo(guideLineX, canvas.height);
             ctx.stroke();
         }
+
+        // ─── Render Snap Indicator (Visual Guide) ───
+        if (activeSnapPoint) {
+            ctx.beginPath();
+            ctx.arc(activeSnapPoint.x * scale, activeSnapPoint.y * scale, 5, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(37, 99, 235, 0.6)'; // Blue-600 with transparency
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
         ctx.restore();
-    }, [guideLineX, guideLineY, scale]); // Re-render when guides or scale changes
+    }, [guideLineX, guideLineY, activeSnapPoint, scale]); // Re-render when guides or scale changes
     const [resizingType, setResizingType] = useState<'width' | 'height' | 'both' | null>(null);
     const [pageInput, setPageInput] = useState('1');
     const [wasErased, setWasErased] = useState(false);
-    const [historyRevision, setHistoryRevision] = useState(0);
+
+    // Font Size Indicator state
+    const [fontSizeIndicator, setFontSizeIndicator] = useState<{ size: number; visible: boolean }>({ size: 0, visible: false });
+    const fontSizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const showFontSizeIndicator = (size: number) => {
+        if (fontSizeTimerRef.current) clearTimeout(fontSizeTimerRef.current);
+        setFontSizeIndicator({ size, visible: true });
+        fontSizeTimerRef.current = setTimeout(() => {
+            setFontSizeIndicator(prev => ({ ...prev, visible: false }));
+        }, 1200);
+    };
+
+    // Setting Indicator (Stroke Width, Arrowhead Size, etc)
+    const [settingIndicator, setSettingIndicator] = useState<{ label: string; value: string | number; visible: boolean }>({ label: '', value: '', visible: false });
+    const settingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const showSettingIndicator = (label: string, value: string | number) => {
+        if (settingTimerRef.current) clearTimeout(settingTimerRef.current);
+        setSettingIndicator({ label, value, visible: true });
+        settingTimerRef.current = setTimeout(() => {
+            setSettingIndicator(prev => ({ ...prev, visible: false }));
+        }, 1200);
+    };
 
     const processAndInsertImage = (src: string) => {
         const img = new Image();
@@ -167,7 +365,7 @@ const PdfViewer: React.FC = () => {
                 const scrollLeft = container.scrollLeft;
                 const viewW = container.clientWidth;
                 const viewH = container.clientHeight;
-                
+
                 // Convert viewport center to canvas coordinates
                 targetX = ((scrollLeft + viewW / 2) / scale) - (w / 2);
                 targetY = ((scrollTop + viewH / 2) / scale) - (h / 2);
@@ -177,26 +375,22 @@ const PdfViewer: React.FC = () => {
             targetX = Math.max(0, Math.min(pageWidth - 50, targetX));
             targetY = Math.max(0, Math.min(pageHeight - 50, targetY));
 
-            const newAnnotation: DrawingAnnotation = {
-                id: Date.now().toString() + Math.random().toString(36).substring(2),
-                type: 'image',
-                points: [{ x: targetX, y: targetY }],
-                color: 'transparent',
-                strokeWidth: 0,
-                opacity: 1.0,
-                rect: [targetX, targetY, w, h],
-                imageSrc: src
-            };
-
-            const nextDrawings = [...drawings, newAnnotation];
-            const history = getPageHistory(currentPage);
-            history.push(new AddAnnotationCommand(newAnnotation, setDrawings));
-            setHistoryRevision(p => p + 1);
-            setDrawings(nextDrawings);
-            setPageDrawings(prev => ({ ...prev, [currentPage]: nextDrawings }));
+            const newElement = ElementFactory.create('image',
+                Date.now().toString() + Math.random().toString(36).substring(2),
+                [targetX, targetY, w, h],
+                '#000000'
+            ) as ImageElement;
             
-            setActiveTool('select');
-            setSelectedDrawingId(newAnnotation.id);
+            if (newElement) {
+                newElement.imageSrc = src;
+                const command = new AddElementCommand(currentPage, newElement, setElements);
+                getCommandHistory(currentPage).push(command);
+                incrementRevision();
+
+                setActiveTool('select');
+            }
+
+
         };
         img.src = src;
     };
@@ -236,37 +430,13 @@ const PdfViewer: React.FC = () => {
             }
         };
 
-        window.addEventListener('paste', handlePaste);
-        return () => window.removeEventListener('paste', handlePaste);
-    }, [drawings, currentPage, scale]); // Dependencies for processAndInsertImage closures
+    }, [currentPage, scale]); // Dependencies for processAndInsertImage context
 
-    // Delete / Backspace Shortcut for Selected Annotations
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            // Ignore if typing in an input or textarea
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    // Keyboard shortcuts for delete are now handled within ToolStates in ToolManager (Phase 3)
+    // or through the unified onKeyDown in ToolManager.
+    
+    // (Legacy selection effects removed. Selection & Property updates are now handled via ToolManager & Commands)
 
-            if (e.key === 'Delete' || e.key === 'Backspace') {
-                if (selectedDrawingId) {
-                    const toErase = drawings.find(d => d.id === selectedDrawingId);
-                    if (toErase) {
-                        const history = getPageHistory(currentPage);
-                        history.push(new EraseAnnotationCommand([toErase], setDrawings));
-                        setHistoryRevision(p => p + 1);
-                        setDrawings(prev => prev.filter(d => d.id !== selectedDrawingId));
-                        setSelectedDrawingId(null);
-                        setPageDrawings(prev => ({ 
-                            ...prev, 
-                            [currentPage]: (prev[currentPage] || []).filter(d => d.id !== selectedDrawingId) 
-                        }));
-                    }
-                }
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedDrawingId, drawings, currentPage]);
 
     // Save page memory whenever currentPage changes (with debounce)
     useEffect(() => {
@@ -278,34 +448,20 @@ const PdfViewer: React.FC = () => {
         }
     }, [currentPage, currentFileName, docType]);
 
-    // handleEraserHit — uses EraserToolStrategy.hitTest via ToolFactory
+    // handleEraserHit is now delegated to EraserTool via toolManager
     const handleEraserHit = useCallback((pos: { x: number, y: number }) => {
-        const radius = 20 / scale;
-        const eraserStrategy = ToolFactory.create('eraser');
-
-        setDrawings(prev => {
-            const toErase = prev.filter(d => eraserStrategy.hitTest(d, pos, radius));
-            if (toErase.length === 0) return prev;
-
-            // Record erase action in Command history (Command pattern)
-            const history = getPageHistory(currentPage);
-            history.push(new EraseAnnotationCommand(toErase, setDrawings));
-            setHistoryRevision(p => p + 1);
-
-            setWasErased(true);
-            const erasedIds = new Set(toErase.map(d => d.id));
-            return prev.filter(d => !erasedIds.has(d.id));
+        toolManager.onPointerDown({
+            pos: { x: pos.x * scale, y: pos.y * scale },
+            scale,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: false,
+            activeTool,
+            toolSettings,
+            originalEvent: {} as any
         });
+    }, [scale, activeTool, toolSettings]);
 
-        setTextAnnotations(prev => {
-            const clickRadius = 20;
-            const filtered = prev.filter(ann => {
-                const hit = Math.abs(pos.x * scale - ann.x) < clickRadius && Math.abs(pos.y * scale - ann.y) < clickRadius;
-                return !hit;
-            });
-            return filtered.length !== prev.length ? filtered : prev;
-        });
-    }, [scale, currentPage]);
 
     useEffect(() => {
         setPageInput(currentPage.toString());
@@ -336,98 +492,138 @@ const PdfViewer: React.FC = () => {
         async (img: HTMLImageElement, s: number) => {
             const canvas = canvasRef.current;
             if (!canvas) return;
-            const ctx = canvas.getContext('2d')!;
+            const ctx = canvas.getContext('2d', { alpha: false })!;
 
             const dpr = window.devicePixelRatio || 1;
-            const width = Math.max(1, Math.round(img.naturalWidth * s));
-            const height = Math.max(1, Math.round(img.naturalHeight * s));
+            const qualityMultiplier = 2.0; // Extra oversampling for crisp visuals
 
-            canvas.width = width * dpr;
-            canvas.height = height * dpr;
-            canvas.style.width = `${width}px`;
-            canvas.style.height = `${height}px`;
+            const logicalWidth = Math.max(1, Math.round(img.naturalWidth * s));
+            const logicalHeight = Math.max(1, Math.round(img.naturalHeight * s));
+
+            canvas.width = logicalWidth * dpr * qualityMultiplier;
+            canvas.height = logicalHeight * dpr * qualityMultiplier;
+            canvas.style.width = `${logicalWidth}px`;
+            canvas.style.height = `${logicalHeight}px`;
 
             if (overlayCanvasRef.current) {
                 const overlay = overlayCanvasRef.current;
-                overlay.width = width * dpr;
-                overlay.height = height * dpr;
-                overlay.style.width = `${width}px`;
-                overlay.style.height = `${height}px`;
-                overlay.getContext('2d')!.scale(dpr, dpr);
+                overlay.width = logicalWidth * dpr * qualityMultiplier;
+                overlay.height = logicalHeight * dpr * qualityMultiplier;
+                overlay.style.width = `${logicalWidth}px`;
+                overlay.style.height = `${logicalHeight}px`;
+                overlay.getContext('2d')!.setTransform(dpr * qualityMultiplier, 0, 0, dpr * qualityMultiplier, 0, 0);
             }
 
             if (guideCanvasRef.current) {
                 const guide = guideCanvasRef.current;
-                guide.width = width * dpr;
-                guide.height = height * dpr;
-                guide.style.width = `${width}px`;
-                guide.style.height = `${height}px`;
+                guide.width = logicalWidth * dpr * qualityMultiplier;
+                guide.height = logicalHeight * dpr * qualityMultiplier;
+                guide.style.width = `${logicalWidth}px`;
+                guide.style.height = `${logicalHeight}px`;
             }
 
-            ctx.scale(dpr, dpr);
-            ctx.clearRect(0, 0, width, height);
-            ctx.drawImage(img, 0, 0, width, height);
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.setTransform(dpr * qualityMultiplier, 0, 0, dpr * qualityMultiplier, 0, 0);
+            ctx.clearRect(0, 0, logicalWidth, logicalHeight);
+            ctx.drawImage(img, 0, 0, logicalWidth, logicalHeight);
 
             setTextBlocks([]); // 이미지에는 PDF 텍스트 블록이 없음
-            const overlay = overlayCanvasRef.current;
-            if (overlay) overlay.getContext('2d')!.clearRect(0, 0, overlay.width, overlay.height);
             setCanvasRevision(prev => prev + 1);
         },
         [setTextBlocks, setCanvasRevision]
     );
 
     const resetDocumentState = useCallback(() => {
-        setDrawings([]);
-        setDrawingHistory([]);
-        setDrawingHistoryIndex(-1);
-        setPageDrawings({});
-        setTextAnnotations([]);
-        setPageTextAnnotations({});
+        clearElements();
         setTextBlocks([]);
-        // Reset all per-page command histories
-        pageCommandHistories.current = {};
-    }, []);
+        // Reset all per-page command histories and page proxies
+        commandHistories.current = {};
+        // Destroy and clear all cached page proxies
+        Object.values(pdfProxies.current).forEach(p => p.destroy());
+        pdfProxies.current = {};
+    }, [clearElements]);
+
 
     const renderPage = useCallback(
         async (page: pdfjsLib.PDFPageProxy, s: number) => {
             const canvas = canvasRef.current;
             if (!canvas) return;
-            const ctx = canvas.getContext('2d')!;
+
+            const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true })!;
             const dpr = window.devicePixelRatio || 1;
-            const viewport = page.getViewport({ scale: s * dpr });
+            const qualityMultiplier = 2.0;
+
+            const viewport = page.getViewport({ scale: s * dpr * qualityMultiplier });
 
             canvas.height = viewport.height;
             canvas.width = viewport.width;
-            canvas.style.height = `${viewport.height / dpr}px`;
-            canvas.style.width = `${viewport.width / dpr}px`;
+            canvas.style.height = `${viewport.height / (dpr * qualityMultiplier)}px`;
+            canvas.style.width = `${viewport.width / (dpr * qualityMultiplier)}px`;
 
             if (overlayCanvasRef.current) {
                 const overlay = overlayCanvasRef.current;
                 overlay.height = viewport.height;
                 overlay.width = viewport.width;
-                overlay.style.height = `${viewport.height / dpr}px`;
-                overlay.style.width = `${viewport.width / dpr}px`;
-                // Use setTransform instead of scale to prevent cumulative DPR accumulation on zoom changes
-                overlay.getContext('2d')!.setTransform(dpr, 0, 0, dpr, 0, 0);
+                overlay.style.height = `${viewport.height / (dpr * qualityMultiplier)}px`;
+                overlay.style.width = `${viewport.width / (dpr * qualityMultiplier)}px`;
+                overlay.getContext('2d')!.setTransform(dpr * qualityMultiplier, 0, 0, dpr * qualityMultiplier, 0, 0);
             }
 
-            if (guideCanvasRef.current) {
-                const guide = guideCanvasRef.current;
-                guide.height = viewport.height;
-                guide.width = viewport.width;
-                guide.style.height = `${viewport.height / dpr}px`;
-                guide.style.width = `${viewport.width / dpr}px`;
+            // Cancel any in-progress render before starting a new one
+            if (renderTaskRef.current) {
+                try {
+                    renderTaskRef.current.cancel();
+                    await renderTaskRef.current.promise.catch(() => {});
+                } catch (_) {}
+                renderTaskRef.current = null;
             }
 
-            await page.render({ canvasContext: ctx, viewport }).promise;
-            setCanvasRevision(prev => prev + 1);
+            const renderContext = {
+                canvasContext: ctx,
+                viewport,
+                intent: 'display'
+            };
+
+            const renderTask = page.render(renderContext);
+            renderTaskRef.current = renderTask;
+
+            try {
+                await renderTask.promise;
+                setCanvasRevision(prev => prev + 1);
+            } catch (err: any) {
+                if (err?.name !== 'RenderingCancelledException') {
+                    console.error('PDF render error:', err);
+                }
+            } finally {
+                if (renderTaskRef.current === renderTask) {
+                    renderTaskRef.current = null;
+                }
+            }
         },
-        []
+        [setCanvasRevision]
     );
+
+
 
     const loadPage = useCallback(
         async (doc: pdfjsLib.PDFDocumentProxy, pageNum: number, s: number) => {
-            const page = await doc.getPage(pageNum);
+            // Guard: skip invalid page numbers
+            if (!doc || pageNum < 1 || pageNum > doc.numPages) return;
+
+            // If cached proxy belongs to a different doc, invalidate it
+            if (pdfProxies.current[pageNum] && (pdfProxies.current[pageNum] as any)._doc !== doc) {
+                pdfProxies.current[pageNum].destroy();
+                delete pdfProxies.current[pageNum];
+            }
+
+            if (!pdfProxies.current[pageNum]) {
+                pdfProxies.current[pageNum] = new PdfPageProxy(doc, pageNum);
+            }
+            
+            const proxy = pdfProxies.current[pageNum];
+            const page = await proxy.load();
+            
             await renderPage(page, s);
 
             // Extract text content for snapping
@@ -443,14 +639,48 @@ const PdfViewer: React.FC = () => {
             }).filter(b => b.text.trim().length > 0);
 
             setTextBlocks(blocks);
+            
+            // Note: We don't release immediately to keep the snapshot logic working for snapping/rendering
+            // Release would happen when current page changes or document closes.
         },
         [renderPage, setTextBlocks]
     );
 
+
     const loadPdf = async (file: File) => {
         try {
             console.log('Loading PDF file:', file.name, file.size);
-            const arrayBuffer = await file.arrayBuffer();
+
+            let actualFile = file;
+            let targetPage = 1;
+            let pData: string | null = null;
+
+            if (file.name) {
+                const ws = await workspaceApiService.fetchWorkspace(file.name);
+                if (ws) {
+                    if (ws.lastViewedPage >= 1) {
+                        targetPage = ws.lastViewedPage;
+                    }
+                    if (ws.projectData) {
+                        pData = ws.projectData;
+                    }
+                    if (ws.hasOriginalPdf) {
+                        const origBlob = await workspaceApiService.fetchOriginalPdf(file.name);
+                        if (origBlob) {
+                            actualFile = new File([origBlob], file.name, { type: 'application/pdf' });
+                            console.log("Loaded unflattened Original PDF from backend!");
+                        }
+                    } else {
+                        // Upload original only if not already backed up
+                        workspaceApiService.uploadOriginalPdf(file.name, file).catch(console.error);
+                    }
+                } else {
+                    // No workspace record yet — upload original for first-time backup
+                    workspaceApiService.uploadOriginalPdf(file.name, file).catch(console.error);
+                }
+            }
+
+            const arrayBuffer = await actualFile.arrayBuffer();
             const uint8Array = new Uint8Array(arrayBuffer);
 
             // pdf.js might detach the buffer, so we store a separate copy for pdf-lib
@@ -475,18 +705,125 @@ const PdfViewer: React.FC = () => {
             setNumPages(doc.numPages);
             resetDocumentState();
 
-            // Restore last viewed page via WorkspaceApiService (Facade)
-            let targetPage = 1;
-            if (currentFileName) {
-                const ws = await workspaceApiService.fetchWorkspace(currentFileName);
-                if (ws && ws.lastViewedPage >= 1 && ws.lastViewedPage <= doc.numPages) {
-                    targetPage = ws.lastViewedPage;
-                }
-            }
+            if (targetPage > doc.numPages) targetPage = doc.numPages;
 
             setCurrentPage(targetPage);
             setPageInput(targetPage.toString());
+            lastPageRef.current = targetPage; // Prevent cross-page data corruption during load effect
+
+            if (pData) {
+                try {
+                    const parsed = JSON.parse(pData);
+                    const migrated: Record<number, RenderElement[]> = {};
+
+                    // 0. New architecture format: { elements: Record<number, RenderElement[]> }
+                    if (parsed.elements) {
+                        Object.keys(parsed.elements).forEach(pg => {
+                            const pNum = parseInt(pg);
+                            migrated[pNum] = migrated[pNum] || [];
+                            parsed.elements[pg].forEach((d: any) => {
+                                const type = d.type === 'rectangle' ? 'rect' : d.type;
+                                let element: RenderElement | null = null;
+
+                                if (type === 'text') {
+                                    element = ElementFactory.create('text', d.id,
+                                        [d.x ?? 0, d.y ?? 0, d.width ?? 200, d.height ?? 50],
+                                        d.style?.color || d.color || '#000000'
+                                    );
+                                    if (element) {
+                                        const textEl = element as any;
+                                        textEl.text = d.text || '';
+                                        textEl.fontSize = d.fontSize || 20;
+                                        textEl.fontFamily = d.fontFamily || 'Outfit, sans-serif';
+                                        textEl.width = d.width;
+                                        textEl.height = d.height;
+                                    }
+                                } else if (type === 'path') {
+                                    element = ElementFactory.create('pen', d.id, [], d.style?.color || '#000000');
+                                    if (element) {
+                                        (element as any).points = d.points || [];
+                                        element.style = element.style.copy({
+                                            strokeWidth: d.style?.strokeWidth ?? 2,
+                                            opacity: d.style?.opacity ?? 1,
+                                            color: d.style?.color || '#000000'
+                                        });
+                                    }
+                                } else {
+                                    element = ElementFactory.create(type, d.id,
+                                        d.rect || [d.x ?? 0, d.y ?? 0, d.width ?? 0, d.height ?? 0],
+                                        d.style?.color || d.color || '#000000'
+                                    );
+                                    if (element) {
+                                        element.style = element.style.copy({
+                                            strokeWidth: d.style?.strokeWidth ?? 2,
+                                            opacity: d.style?.opacity ?? 1,
+                                            arrowHeadSize: d.style?.arrowHeadSize ?? 12
+                                        });
+                                        if (d.points) (element as any).points = d.points;
+                                        if (d.shapeType) (element as any).shapeType = d.shapeType;
+                                        if (type === 'image' && d.imageSrc) {
+                                            (element as ImageElement).imageSrc = d.imageSrc;
+                                        }
+                                    }
+                                }
+
+                                if (element) migrated[pNum].push(element);
+                            });
+                        });
+                    }
+
+                    // 1. Migrate legacy Vector Drawings (pageDrawings format)
+                    if (parsed.pageDrawings) {
+                        Object.keys(parsed.pageDrawings).forEach(pg => {
+                            const pNum = parseInt(pg);
+                            migrated[pNum] = migrated[pNum] || [];
+                            parsed.pageDrawings[pg].forEach((d: any) => {
+                                const type = d.type === 'rectangle' ? 'rect' : d.type;
+                                const element = ElementFactory.create(type, d.id, d.rect || [], d.color || '#000000');
+                                
+                                if (element) {
+                                    element.style = element.style.copy({ opacity: d.opacity ?? 1 });
+                                    if (element.type === 'image' && d.imageSrc) {
+                                        (element as ImageElement).imageSrc = d.imageSrc;
+                                    }
+                                    migrated[pNum].push(element);
+                                }
+                            });
+                        });
+                    }
+
+                    // 2. Migrate legacy Text Annotations (pageTextAnnotations format)
+                    if (parsed.pageTextAnnotations) {
+                        Object.keys(parsed.pageTextAnnotations).forEach(pg => {
+                            const pNum = parseInt(pg);
+                            migrated[pNum] = migrated[pNum] || [];
+                            parsed.pageTextAnnotations[pg].forEach((a: any) => {
+                                const element = ElementFactory.create('text', a.id, [a.x, a.y, a.width || 200, a.height || 50], a.color || '#000000');
+                                if (element) {
+                                    const textEl = element as any;
+                                    textEl.text = a.text;
+                                    textEl.fontSize = a.fontSize;
+                                    textEl.fontFamily = a.fontFamily;
+                                    migrated[pNum].push(element);
+                                }
+                            });
+                        });
+                    }
+
+                    setAllElements(migrated);
+                    // Mark as saved so loading existing annotations doesn't trigger unsaved warning
+                    setTimeout(() => markSaved(), 0);
+
+                } catch (e) {
+                    console.error("Failed to parse projectData or migrate elements", e);
+                }
+            }
+
+
+
             // loadPage and renderImage are automatically handled by the useEffect that watches pdfDoc, imageDoc, currentPage, scale
+            // Mark as saved — loading a file (with or without annotations) is not an unsaved change
+            setTimeout(() => markSaved(), 100);
         } catch (error) {
             console.error('Error loading PDF:', error);
             alert(`PDF 로드 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
@@ -520,87 +857,73 @@ const PdfViewer: React.FC = () => {
         }
     };
 
-    const convertOfficeToPdfAndLoad = async (file: File) => {
-        try {
-            const formData = new FormData();
-            formData.append('file', file, file.name);
-
-            const response = await fetch('http://localhost:8080/api/pdf/convert-to-pdf', {
-                method: 'POST',
-                body: formData,
-            });
-
-            if (!response.ok) {
-                const text = await response.text().catch(() => '');
-                throw new Error(text || 'PPT 변환에 실패했습니다. (LibreOffice 설치/설정 필요)');
-            }
-
-            const blob = await response.blob();
-            const baseName = file.name.replace(/\.(ppt|pptx)$/i, '');
-            const pdfFile = new File([blob], `${baseName}.pdf`, { type: 'application/pdf' });
-            await loadPdf(pdfFile);
-        } catch (error) {
-            console.error('Error converting PPT to PDF:', error);
-            alert(`PPT 변환 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    };
-
     const loadAnyDocument = async (file: File) => {
         const lower = file.name.toLowerCase();
         if (lower.endsWith('.pdf') || file.type === 'application/pdf') return loadPdf(file);
         if (lower.endsWith('.png') || file.type === 'image/png') return loadImage(file);
-        if (lower.endsWith('.ppt') || lower.endsWith('.pptx')) return convertOfficeToPdfAndLoad(file);
 
-        alert('지원하지 않는 파일 형식입니다. (PDF, PNG, PPT, PPTX)');
+        alert('지원하지 않는 파일 형식입니다. (PDF, PNG)');
     };
+
+    // Unsaved changes warning state
+    const [pendingFileOpen, setPendingFileOpen] = useState<{ fn: () => Promise<void> } | null>(null);
+    // Show warning only if there are actual annotations drawn (not just file load revisions)
+    const totalElements = Object.values(elements).reduce((sum, pageEls) => sum + pageEls.length, 0);
+    const hasUnsavedChanges = currentFileName !== null && totalElements > 0 && historyRevision !== lastSavedRevision;
 
     const handleFileOpen = async () => {
         const anyWindow = window as any;
         const electronAPI = anyWindow?.electronAPI;
 
-        // Electron 환경: 네이티브 파일 열기 다이얼로그 사용
-        if (electronAPI?.openFileDialog) {
-            try {
-                const result = await electronAPI.openFileDialog({
-                    filters: [
-                        { name: 'PDF / 이미지 / PPT', extensions: ['pdf', 'png', 'ppt', 'pptx'] },
-                    ],
-                });
-                if (result?.canceled) return;
+        const doOpen = async () => {
+            // Electron 환경: 네이티브 파일 열기 다이얼로그 사용
+            if (electronAPI?.openFileDialog) {
+                try {
+                    const result = await electronAPI.openFileDialog({
+                        filters: [
+                            { name: 'PDF / 이미지', extensions: ['pdf', 'png'] },
+                        ],
+                    });
+                    if (result?.canceled) return;
 
-                const { fileName, filePath, data, mimeType } = result;
-                // console.log('Opened file data info:', { ... }); // Cleaned up
+                    const { fileName, filePath, data, mimeType } = result;
+                    const uint8 = new Uint8Array(data);
+                    const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
+                    const file = new File([blob], fileName, { type: mimeType || 'application/pdf' });
 
-                // data is already a Uint8Array (or Buffer) when coming from invoke
-                const uint8 = new Uint8Array(data);
-                const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
-                const file = new File([blob], fileName, { type: mimeType || 'application/pdf' });
-
-                // Electron buffer will also be detached if transferred, so slice it
-                setOriginalData(uint8.slice());
-                setCurrentFile(filePath, fileName);
-                await loadAnyDocument(file);
-                return;
-            } catch (error) {
-                console.error('Electron 파일 열기 오류:', error);
-                alert(`파일을 여는 동안 오류가 발생했습니다:\n${error instanceof Error ? error.message : String(error)}`);
-                return;
+                    setOriginalData(uint8.slice());
+                    setCurrentFile(filePath, fileName);
+                    await loadAnyDocument(file);
+                    return;
+                } catch (error) {
+                    console.error('Electron 파일 열기 오류:', error);
+                    alert(`파일을 여는 동안 오류가 발생했습니다:\n${error instanceof Error ? error.message : String(error)}`);
+                    return;
+                }
             }
+
+            // 브라우저 환경
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.pdf,.png,.ppt,.pptx';
+            input.onchange = async (e) => {
+                const file = (e.target as HTMLInputElement).files?.[0];
+                if (file) {
+                    const path = (file as any).path || file.name;
+                    setCurrentFile(path, file.name);
+                    await loadAnyDocument(file);
+                }
+            };
+            input.click();
+        };
+
+        // If there are unsaved changes, show warning popup
+        if (hasUnsavedChanges) {
+            setPendingFileOpen({ fn: doOpen });
+            return;
         }
 
-        // 브라우저 환경 / Electron API 미사용: 기존 input 방식
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.pdf,.png,.ppt,.pptx';
-        input.onchange = async (e) => {
-            const file = (e.target as HTMLInputElement).files?.[0];
-            if (file) {
-                const path = (file as any).path || file.name;
-                setCurrentFile(path, file.name);
-                await loadAnyDocument(file);
-            }
-        };
-        input.click();
+        await doOpen();
     };
 
     const handleDrop = async (e: React.DragEvent) => {
@@ -620,235 +943,374 @@ const PdfViewer: React.FC = () => {
         return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     };
 
+    // ─── Enhanced Snapping Utility ───
+    const getNearestSnapPoint = (px: number, py: number, ignoreId: string | null = null) => {
+        const snapThreshold = 15 / scale;
+        let closestPt: { x: number, y: number } | null = null;
+        let minDist = Infinity;
 
-    const handleUndo = useCallback(() => {
-        // Delegate to per-page CommandHistory (Command pattern)
-        const history = getPageHistory(currentPage);
-        const didUndo = history.undo();
-        if (didUndo) {
-            setHistoryRevision(p => p + 1);
-        } else {
-            // Fallback to legacy snapshot undo
-            if (drawingHistoryIndex < 0) return;
-            const newIdx = drawingHistoryIndex - 1;
-            const previousState = newIdx >= 0 ? drawingHistory[newIdx] : [];
-            setDrawings(previousState);
-            setDrawingHistoryIndex(newIdx);
-            setPageDrawings(prev => ({ ...prev, [currentPage]: previousState }));
-        }
-    }, [drawingHistory, drawingHistoryIndex, currentPage]);
-
-    const handleRedo = useCallback(() => {
-        // Delegate to per-page CommandHistory (Command pattern)
-        const history = getPageHistory(currentPage);
-        const didRedo = history.redo();
-        if (didRedo) {
-            setHistoryRevision(p => p + 1);
-        } else {
-            // Fallback to legacy snapshot redo
-            if (drawingHistoryIndex >= drawingHistory.length - 1) return;
-            const newIdx = drawingHistoryIndex + 1;
-            const nextState = drawingHistory[newIdx];
-            setDrawings(nextState);
-            setDrawingHistoryIndex(newIdx);
-            setPageDrawings(prev => ({ ...prev, [currentPage]: nextState }));
-        }
-    }, [drawingHistory, drawingHistoryIndex, currentPage]);
-
-    const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
-        const lines = text.split('\n');
-        let currentY = y;
-        for (let i = 0; i < lines.length; i++) {
-            let line = '';
-            const chars = Array.from(lines[i]);
-            for (let j = 0; j < chars.length; j++) {
-                const testLine = line + chars[j];
-                const metrics = ctx.measureText(testLine);
-                const testWidth = metrics.width;
-                if (testWidth > maxWidth && j > 0) {
-                    ctx.fillText(line, x, currentY);
-                    line = chars[j];
-                    currentY += lineHeight;
-                } else {
-                    line = testLine;
-                }
-            }
-            ctx.fillText(line, x, currentY);
-            currentY += lineHeight;
-        }
-    };
-
-    const renderVectors = useCallback((ctx: CanvasRenderingContext2D, drawingList: DrawingAnnotation[], s: number) => {
-        // Facade + Strategy: delegate to PdfRenderService which calls each tool's render() method
-        pdfRenderService.renderVectors(ctx, drawingList, s);
-    }, []);
-
-    const drawAllAnnotations = useCallback((ctx: CanvasRenderingContext2D) => {
-        // 1. Draw Vector Drawings
-        renderVectors(ctx, drawings, scale);
-
-        // 2. Draw Text Annotations
-        textAnnotations.forEach(ann => {
-            const fontSize = Number(ann.fontSize) || 20;
-            ctx.font = `${fontSize}px ${ann.fontFamily || 'Outfit, sans-serif'}`;
-            ctx.fillStyle = ann.color || '#000000';
-
-            if (ann.width) {
-                wrapText(ctx, ann.text, ann.x, ann.y, ann.width, fontSize * 1.2);
-            } else {
-                // Legacy support for single line
-                ctx.fillText(ann.text, ann.x, ann.y);
-            }
-        });
-
-        // 3. Draw Selection Handles for Active Arrow
-        // 3. Draw Selection Handles for Active Arrow or Image
-        if (selectedDrawingId) {
-            const selected = drawings.find(d => d.id === selectedDrawingId);
-            if (selected) {
-                if (selected.type.startsWith('arrow-') && selected.points.length >= 2) {
-                    const p1 = selected.points[0];
-                    const p2 = selected.points[1];
-                    ctx.save();
-                    ctx.fillStyle = '#3b82f6'; // blue-500
-                    ctx.strokeStyle = '#ffffff'; // white border
-                    ctx.lineWidth = 2;
-                    
-                    [p1, p2].forEach(p => {
-                        ctx.beginPath();
-                        ctx.arc(p.x * scale, p.y * scale, 6, 0, Math.PI * 2);
-                        ctx.fill();
-                        ctx.stroke();
-                    });
-                    ctx.restore();
-                } else if (selected.type === 'image' && selected.rect) {
-                    const [ix, iy, iw, ih] = selected.rect;
-                    ctx.save();
-                    // Selection Border
-                    ctx.setLineDash([5, 5]);
-                    ctx.strokeStyle = '#3b82f6';
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(ix * scale, iy * scale, iw * scale, ih * scale);
-
-                    // Resize Handles (8 Handles: corners + middle of edges)
-                    ctx.setLineDash([]);
-                    ctx.fillStyle = '#3b82f6';
-                    ctx.strokeStyle = '#ffffff';
-                    const handleRadius = 5;
-                    
-                    const handles = [
-                        { x: ix * scale, y: iy * scale },            // TL
-                        { x: (ix + iw) * scale, y: iy * scale },     // TR
-                        { x: ix * scale, y: (iy + ih) * scale },     // BL
-                        { x: (ix + iw) * scale, y: (iy + ih) * scale }, // BR
-                        { x: (ix + iw/2) * scale, y: iy * scale },      // TM
-                        { x: (ix + iw/2) * scale, y: (iy + ih) * scale }, // BM
-                        { x: ix * scale, y: (iy + ih/2) * scale },      // LM
-                        { x: (ix + iw) * scale, y: (iy + ih/2) * scale }  // RM
-                    ];
-
-                    handles.forEach(p => {
-                        ctx.beginPath();
-                        ctx.arc(p.x, p.y, handleRadius, 0, Math.PI * 2);
-                        ctx.fill();
-                        ctx.stroke();
-                    });
-                    ctx.restore();
-                }
-            }
-        }
-    }, [textAnnotations, drawings, scale, renderVectors, selectedDrawingId]);
-
-    // Redraw whenever annotations change, drawings change, or in-progress drawing updates
-    useEffect(() => {
-        const canvas = overlayCanvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d')!;
-
-        // clearRect must use CSS dimensions (with DPR transform applied), not physical pixels
-        const dpr = window.devicePixelRatio || 1;
-        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-
-        // 1. Draw all annotations (vectors + text)
-        drawAllAnnotations(ctx);
-
-        // 2. Draw current in-progress drawing (for real-time feedback)
-        if (currentDrawing) {
-            renderVectors(ctx, [currentDrawing], scale);
-        }
-    }, [textAnnotations, drawings, currentDrawing, scale, drawAllAnnotations, renderVectors, canvasRevision]);
-
-    // Global keyboard shortcuts (undo/redo, page navigation, open file)
-    useEffect(() => {
-        const handleKey = (e: KeyboardEvent) => {
-            if (activeTab !== 'pdf') return;
-
-            const target = e.target as HTMLElement | null;
-            const tagName = target?.tagName.toLowerCase();
-            if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) {
-                return;
-            }
-
-            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-                e.preventDefault();
-                handleUndo();
-                return;
-            }
-            if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
-                e.preventDefault();
-                handleRedo();
-                return;
-            }
-
-            // Ctrl + O for File Open
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
-                e.preventDefault();
-                handleFileOpen();
-                return;
-            }
-
-            if (!e.ctrlKey && !e.metaKey && !e.altKey && (pdfDoc || imageDoc) && numPages > 0) {
-                if (e.key === 'ArrowRight' && currentPage < numPages) {
-                    e.preventDefault();
-                    setCurrentPage((prev) => Math.min(numPages, prev + 1));
-                } else if (e.key === 'ArrowLeft' && currentPage > 1) {
-                    e.preventDefault();
-                    setCurrentPage((prev) => Math.max(1, prev - 1));
-                }
+        const addCandidate = (x: number, y: number) => {
+            const dist = Math.hypot(x - px, y - py);
+            if (dist < snapThreshold && dist < minDist) {
+                minDist = dist;
+                closestPt = { x, y };
             }
         };
 
-        window.addEventListener('keydown', handleKey);
-        return () => window.removeEventListener('keydown', handleKey);
-    }, [handleUndo, handleRedo, activeTab, pdfDoc, imageDoc, currentPage, numPages, historyRevision]);
+        // 1. Snapping to Elements
+        currentPageElements.forEach(el => {
+            if (el.id === ignoreId) return;
+            const rect = (el as any).rect;
+            if (rect) {
+                const [rx, ry, rw, rh] = rect;
+                addCandidate(rx, ry);
+                addCandidate(rx + rw, ry);
+                addCandidate(rx, ry + rh);
+                addCandidate(rx + rw, ry + rh);
+                addCandidate(rx + rw / 2, ry);
+                addCandidate(rx + rw / 2, ry + rh);
+                addCandidate(rx, ry + rh / 2);
+                addCandidate(rx + rw, ry + rh / 2);
+            }
+        });
+
+        // 2. Snapping to PDF TEXT (wordBlocks)
+        wordBlocks.forEach(b => {
+            const bx = b.rect[0] / scale;
+            const by = b.rect[1] / scale;
+            const bw = b.rect[2] / scale;
+            const bh = b.rect[3] / scale;
+            addCandidate(bx, by);
+            addCandidate(bx + bw, by);
+            addCandidate(bx, by + bh);
+            addCandidate(bx + bw, by + bh);
+        });
+
+        return closestPt;
+    };
+
+
+    const hitTestEndpointsForSnap = (px: number, py: number, ignoreId: string | null) => {
+        return getNearestSnapPoint(px, py, ignoreId);
+    };
+
+    const handleUndo = useCallback(() => {
+        if (getCommandHistory(currentPage).undo()) {
+            incrementRevision();
+        }
+    }, [currentPage, getCommandHistory, incrementRevision]);
+
+    const handleRedo = useCallback(() => {
+        if (getCommandHistory(currentPage).redo()) {
+            incrementRevision();
+        }
+    }, [currentPage, getCommandHistory, incrementRevision]);
+
+
+
+
+    // ─── Rendering Pipeline (Visitor Pattern) ───
+    useEffect(() => {
+        const overlay = overlayCanvasRef.current;
+        if (!overlay) return;
+        const ctx = overlay.getContext('2d')!;
+
+        // DPR-aware clear
+        const dpr = window.devicePixelRatio || 1;
+        const qualityMultiplier = 2.0;
+
+        ctx.save();
+        ctx.setTransform(dpr * qualityMultiplier, 0, 0, dpr * qualityMultiplier, 0, 0);
+        ctx.clearRect(0, 0, overlay.width / (dpr * qualityMultiplier), overlay.height / (dpr * qualityMultiplier));
+
+        const visitor = new CanvasRenderVisitor(ctx, scale, () => {
+            // Re-render when a lazy-loaded image finishes loading
+            setCanvasRevision(prev => prev + 1);
+        });
+        const iterator = LayerIterator.forRendering(currentPageElements);
+
+        while (iterator.hasNext()) {
+            const el = iterator.next();
+            // Skip the element currently being edited — show live preview instead
+            if (el && el.id !== editingId) el.accept(visitor);
+        }
+
+        // Draw in-progress preview element (drag feedback)
+        const preview = previewElementRef.current;
+        if (preview && typeof preview.accept === 'function') {
+            preview.accept(visitor);
+        }
+
+        // ─── Selection handles for select tool ───
+        if (activeTool === 'select' && selectedElementId) {
+            const selEl = currentPageElements.find(e => e.id === selectedElementId) as any;
+            if (selEl) {
+                ctx.save();
+                // [CUSTOMIZE] handle color and size
+                const HANDLE_R = 6;
+                ctx.fillStyle = '#3b82f6';
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+
+                const drawHandle = (x: number, y: number) => {
+                    ctx.beginPath();
+                    ctx.arc(x * scale, y * scale, HANDLE_R, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                };
+
+                if (selEl.shapeType?.startsWith('arrow-') && selEl.points?.length >= 2) {
+                    // Arrow: start (green) and end (red) handles
+                    ctx.fillStyle = '#22c55e';
+                    drawHandle(selEl.points[0].x, selEl.points[0].y);
+                    ctx.fillStyle = '#ef4444';
+                    drawHandle(selEl.points[1].x, selEl.points[1].y);
+
+                    // Dashed selection line
+                    ctx.setLineDash([4, 4]);
+                    ctx.strokeStyle = '#3b82f6';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(selEl.points[0].x * scale, selEl.points[0].y * scale);
+                    ctx.lineTo(selEl.points[1].x * scale, selEl.points[1].y * scale);
+                    ctx.stroke();
+                } else if (selEl.x !== undefined) {
+                    // Shape/Image: dashed bounding box + corner handles
+                    ctx.setLineDash([4, 4]);
+                    ctx.strokeStyle = '#3b82f6';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(selEl.x * scale, selEl.y * scale, selEl.width * scale, selEl.height * scale);
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = '#3b82f6';
+                    drawHandle(selEl.x, selEl.y);
+                    drawHandle(selEl.x + selEl.width, selEl.y);
+                    drawHandle(selEl.x, selEl.y + selEl.height);
+                    drawHandle(selEl.x + selEl.width, selEl.y + selEl.height);
+                }
+                ctx.restore();
+            }
+        }
+
+        // ─── Live text preview while typing in textarea ───
+        if (inputPos) {
+            const fontSize = (Number(toolSettings.fontSize) || 20) * scale;
+            const fontFamily = toolSettings.fontFamily || 'Outfit, sans-serif';
+            const color = toolSettings.color || '#000000';
+            const maxWidth = (editorWidth || 300);
+
+            ctx.save();
+            ctx.font = `${fontSize}px ${fontFamily}`;
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 1.0;
+
+            const lineHeight = fontSize * 1.2;
+            const lines = tempText.split('\n');
+            let currentY = inputPos.y + (fontSize * 0.85);
+
+            for (const line of lines) {
+                let currentLine = '';
+                const chars = Array.from(line);
+                for (let j = 0; j < chars.length; j++) {
+                    const testLine = currentLine + chars[j];
+                    if (ctx.measureText(testLine).width > maxWidth && j > 0) {
+                        ctx.fillText(currentLine, inputPos.x, currentY);
+                        currentLine = chars[j];
+                        currentY += lineHeight;
+                    } else {
+                        currentLine = testLine;
+                    }
+                }
+                ctx.fillText(currentLine, inputPos.x, currentY);
+                currentY += lineHeight;
+            }
+            ctx.restore();
+        }
+
+        ctx.restore();
+    }, [currentPageElements, scale, historyRevision, canvasRevision, previewRevision, inputPos, tempText, toolSettings, editorWidth, editingId, selectedElementId, activeTool]);
+
+
+
+
+    const createEditedPdfBlob = async (): Promise<Blob | null> => {
+        if (!originalData) return null;
+
+        // CurrentfileName 기준으로 한 번 저장 (Background backup)
+        if (currentFileName) {
+            workspaceApiService.saveProjectData(currentFileName, JSON.stringify({ elements }))
+                .catch(e => console.error("Failed to backup project data", e));
+        }
+
+        try {
+            const pdfDocLib = await PDFDocument.load(originalData, { ignoreEncryption: true });
+            const totalPages = pdfDocLib.getPageCount();
+
+            if (!pdfDoc) {
+                alert('오류: PDF 렌더러가 준비되지 않았습니다.');
+                return null;
+            }
+
+            for (let i = 1; i <= totalPages; i++) {
+                const pageElements = elements[i] || [];
+                if (pageElements.length > 0) {
+                    const page = await pdfDoc.getPage(i);
+                    const viewport = page.getViewport({ scale: 2.0 });
+
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = viewport.width;
+                    tempCanvas.height = viewport.height;
+                    const tempCtx = tempCanvas.getContext('2d')!;
+
+                    await page.render({ canvasContext: tempCtx, viewport }).promise;
+
+                    const visitor = new CanvasRenderVisitor(tempCtx, 2.0);
+                    const iterator = new LayerIterator(pageElements);
+
+                    while (iterator.hasNext()) {
+                        const el = iterator.next();
+                        if (el) {
+                            el.accept(visitor);
+                        }
+                    }
+
+
+
+                    const imgData = tempCanvas.toDataURL('image/jpeg', 0.95);
+                    const image = await pdfDocLib.embedJpg(imgData);
+
+                    const pdfPage = pdfDocLib.getPage(i - 1);
+                    const { width, height } = pdfPage.getSize();
+                    pdfPage.drawImage(image, { x: 0, y: 0, width, height });
+                }
+            }
+
+            const pdfBytes = await pdfDocLib.save();
+            return new Blob([pdfBytes as any], { type: 'application/pdf' });
+        } catch (error) {
+            console.error('PDF 저장 오류:', error);
+            alert('PDF 저장 중 오류가 발생했습니다: ' + (error instanceof Error ? error.message : String(error)));
+            return null;
+        }
+    };
+
+    const { handleSave, openSaveAsDialog, confirmSaveAs } = useSavePdf(
+        createEditedPdfBlob,
+        originalData,
+        elements,
+        currentPage
+    );
+
+    // Global keyboard shortcuts and lifecycle events (Moved below dependencies to avoid hoisting issues)
+    useEditorShortcuts({
+        activeTab,
+        pdfDoc: pdfDoc || null,
+        imageDoc: imageDoc || null,
+        numPages,
+        currentPage,
+        historyRevision,
+        lastSavedRevision,
+        saveStatus,
+        isInputActive,
+        toolSettings,
+        editingId,
+        handleUndo,
+        handleRedo,
+        handleFileOpen,
+        handleSave,
+        openSaveAsDialog,
+        setCurrentPage,
+        setToolSettings,
+        toggleExitDialog,
+        showSettingIndicator: () => {}
+    });
+
+
+
+
+    // ─── Event Handling (State/Strategy Pattern) ───
+    const handlePointerDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        const pos = getPos(e);
+
+        // Block all drawing/tool actions while text input is active
+        if (isInputActive) return;
+
+        // Text tool: handled by onClick (handleTextClick), not pointerDown
+        if (activeTool === 'text') return;
+
+        // Image tool: open file picker on click
+        if (activeTool === 'image') {
+            lastMousePos.current = pos;
+            imageInputRef.current?.click();
+            return;
+        }
+
+        // Sync active tool to ToolManager before dispatching event
+        toolManager.switchTool(activeTool);
+        toolManager.onPointerDown({
+            pos,
+            scale,
+            ctrlKey: e.ctrlKey,
+            shiftKey: e.shiftKey,
+            altKey: e.altKey,
+            activeTool,
+            toolSettings,
+            eraserInstantDelete,
+            originalEvent: e
+        });
+        setIsDrawing(true);
+    };
+
+    const handlePointerMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        if (isInputActive) return;
+        if (activeTool === 'text') return;
+        const pos = getPos(e);
+        toolManager.switchTool(activeTool);
+        toolManager.onPointerMove({
+            pos,
+            scale,
+            ctrlKey: e.ctrlKey,
+            shiftKey: e.shiftKey,
+            altKey: e.altKey,
+            activeTool,
+            toolSettings,
+            eraserInstantDelete,
+            originalEvent: e
+        });
+    };
+
+    const handlePointerUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        setIsDrawing(false);
+        if (isInputActive) return;
+        if (activeTool === 'text') return;
+        const pos = getPos(e);
+        toolManager.switchTool(activeTool);
+        toolManager.onPointerUp({
+            pos,
+            scale,
+            ctrlKey: e.ctrlKey,
+            shiftKey: e.shiftKey,
+            altKey: e.altKey,
+            activeTool,
+            toolSettings,
+            eraserInstantDelete,
+            originalEvent: e
+        });
+    };
+
 
     useEffect(() => {
-        if (pdfDoc) {
+        if (pdfDoc && currentPage >= 1 && currentPage <= numPages) {
             loadPage(pdfDoc, currentPage, scale);
         } else if (imageDoc) {
             renderImage(imageDoc, scale);
         }
-    }, [pdfDoc, imageDoc, currentPage, scale, loadPage, renderImage]);
+    }, [pdfDoc, imageDoc, currentPage, scale, numPages, loadPage, renderImage]);
 
-    const lastPageRef = useRef(currentPage);
+    // ─── Stable refs so the page-switch effect can always see the latest data ───
+    // ─── Stable refs so the page-switch effect can always see the latest data ───
+    // (The Page-switch Effect has been eliminated as data is now naturally atomic and derived per-page)
 
-    useEffect(() => {
-        const prevPage = lastPageRef.current;
-
-        if (prevPage !== currentPage) {
-            setPageDrawings(prev => ({ ...prev, [prevPage]: drawings }));
-            setPageTextAnnotations(prev => ({ ...prev, [prevPage]: textAnnotations }));
-        }
-
-        const savedDrawings = pageDrawings[currentPage] || [];
-        const savedText = pageTextAnnotations[currentPage] || [];
-
-        setDrawings(savedDrawings);
-        // Note: per-page undo/redo state is managed by CommandHistory (pageCommandHistories ref)
-        setTextAnnotations(savedText);
-
-        lastPageRef.current = currentPage;
-    }, [currentPage]);
+    // (Other Refs like pageDrawingsRef/pageTextAnnotationsRef should be checked for usage)
 
     // Support non-PDF images if needed
     useEffect(() => {
@@ -857,444 +1319,24 @@ const PdfViewer: React.FC = () => {
         }
     }, [imageDoc, scale, renderImage]);
 
-    const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        const pos = getPos(e);
-        const normalizedPos = { x: pos.x / scale, y: pos.y / scale };
-
-        if (activeTool === 'image') {
-            imageInputRef.current?.click();
-            return;
-        }
-
-        // Selection & Hit-Testing Logic
-        if (activeTool === 'select') {
-            // First check for image resizing handles
-            const selected = drawings.find(d => d.id === selectedDrawingId);
-            if (selected && selected.type === 'image' && selected.rect) {
-                const [ix, iy, iw, ih] = selected.rect;
-                const handles = [
-                    { id: 'image-tl' as const, x: ix * scale, y: iy * scale },
-                    { id: 'image-tr' as const, x: (ix + iw) * scale, y: iy * scale },
-                    { id: 'image-bl' as const, x: ix * scale, y: (iy + ih) * scale },
-                    { id: 'image-br' as const, x: (ix + iw) * scale, y: (iy + ih) * scale },
-                    { id: 'image-tm' as const, x: (ix + iw/2) * scale, y: iy * scale },
-                    { id: 'image-bm' as const, x: (ix + iw/2) * scale, y: (iy + ih) * scale },
-                    { id: 'image-lm' as const, x: ix * scale, y: (iy + ih/2) * scale },
-                    { id: 'image-rm' as const, x: (ix + iw) * scale, y: (iy + ih/2) * scale },
-                ];
-
-                for (const h of handles) {
-                    if (Math.hypot(pos.x - h.x, pos.y - h.y) < 15) {
-                        setDraggingDrawingHandle(h.id);
-                        setStartPos(pos);
-                        setIsDrawing(true);
-                        setCanvasRevision(prev => prev + 1);
-                        return;
-                    }
-                }
-            }
-
-            // Check if clicking an already selected arrow's handles
-            if (selectedDrawingId) {
-                const selected = drawings.find(d => d.id === selectedDrawingId);
-                if (selected && selected.type.startsWith('arrow-') && selected.points.length >= 2) {
-                    const startP = { x: selected.points[0].x * scale, y: selected.points[0].y * scale };
-                    const endP = { x: selected.points[1].x * scale, y: selected.points[1].y * scale };
-                    
-                    if (Math.hypot(pos.x - startP.x, pos.y - startP.y) <= 12) {
-                        setDraggingDrawingHandle('start');
-                        setIsDrawing(true);
-                        setStartPos(pos);
-                        return;
-                    }
-                    if (Math.hypot(pos.x - endP.x, pos.y - endP.y) <= 12) {
-                        setDraggingDrawingHandle('end');
-                        setIsDrawing(true);
-                        setStartPos(pos);
-                        return;
-                    }
-                    // Check arrow body
-                    let isHittingBody = false;
-                    if (selected.type.startsWith('arrow-l-')) {
-                        const elbow = getElbowPoint(startP, endP, selected.type);
-                        const dist1 = distancePointToSegment(pos.x, pos.y, startP.x, startP.y, elbow.x, elbow.y);
-                        const dist2 = distancePointToSegment(pos.x, pos.y, elbow.x, elbow.y, endP.x, endP.y);
-                        isHittingBody = dist1 <= Math.max(10, selected.strokeWidth * scale) || dist2 <= Math.max(10, selected.strokeWidth * scale);
-                    } else {
-                        isHittingBody = distancePointToSegment(pos.x, pos.y, startP.x, startP.y, endP.x, endP.y) <= Math.max(10, selected.strokeWidth * scale);
-                    }
-
-                    if (isHittingBody) {
-                        setDraggingDrawingHandle('body');
-                        setIsDrawing(true);
-                        setStartPos(pos);
-                        return;
-                    }
-                }
-            }
-
-            // Clicked outside existing handles, try to select a new drawing
-            // Reverse loop to pick topmost drawing
-            for (let i = drawings.length - 1; i >= 0; i--) {
-                const d = drawings[i];
-                if (d.type === 'image' && d.rect) {
-                    const [ix, iy, iw, ih] = d.rect;
-                    const realX = iw < 0 ? ix + iw : ix;
-                    const realY = ih < 0 ? iy + ih : iy;
-                    const realW = Math.abs(iw);
-                    const realH = Math.abs(ih);
-                    if (normalizedPos.x >= realX && normalizedPos.x <= realX + realW &&
-                        normalizedPos.y >= realY && normalizedPos.y <= realY + realH) {
-                        setSelectedDrawingId(d.id);
-                        setDraggingDrawingHandle('body');
-                        setIsDrawing(true);
-                        setStartPos(pos);
-                        setCanvasRevision(prev => prev + 1);
-                        return;
-                    }
-                } else if (d.type.startsWith('arrow-') && d.points.length >= 2) {
-                    const startP = { x: d.points[0].x * scale, y: d.points[0].y * scale };
-                    const endP = { x: d.points[1].x * scale, y: d.points[1].y * scale };
-                    
-                    let isHittingBody = false;
-                    if (d.type.startsWith('arrow-l-')) {
-                        const elbow = getElbowPoint(startP, endP, d.type);
-                        const dist1 = distancePointToSegment(pos.x, pos.y, startP.x, startP.y, elbow.x, elbow.y);
-                        const dist2 = distancePointToSegment(pos.x, pos.y, elbow.x, elbow.y, endP.x, endP.y);
-                        isHittingBody = dist1 <= Math.max(10, d.strokeWidth * scale) || dist2 <= Math.max(10, d.strokeWidth * scale);
-                    } else {
-                        isHittingBody = distancePointToSegment(pos.x, pos.y, startP.x, startP.y, endP.x, endP.y) <= Math.max(10, d.strokeWidth * scale);
-                    }
-
-                    if (isHittingBody) {
-                        setSelectedDrawingId(d.id);
-                        setDraggingDrawingHandle('body');
-                        setIsDrawing(true);
-                        setStartPos(pos);
-                        setCanvasRevision(prev => prev + 1); // trigger redraw for handles
-                        return;
-                    }
-                }
-            }
-
-            // Clicked empty space
-            setSelectedDrawingId(null);
-            setDraggingDrawingHandle(null);
-            setCanvasRevision(prev => prev + 1);
-            return;
-        }
-
-        if (activeTool === 'text') return;
-
-        setSelectedDrawingId(null);
-        setIsDrawing(true);
-        setStartPos(pos);
-        setHighlightedInStroke(new Set());
-
-        const newDrawing: DrawingAnnotation = {
-            id: Date.now().toString(),
-            type: activeTool,
-            points: [normalizedPos],
-            color: toolSettings.color,
-            strokeWidth: toolSettings.strokeWidth,
-            opacity: activeTool === 'highlight' ? 0.35 : 1.0
-        };
-
-        if (activeTool === 'eraser') {
-            // Logical eraser - handled in draw/startDraw via state modification
-            setIsDrawing(true);
-            setStartPos(pos);
-            handleEraserHit(normalizedPos);
-            return;
-        } else if (activeTool === 'highlight') {
-            newDrawing.strokeWidth = toolSettings.strokeWidth * 10;
-        }
-
-        setCurrentDrawing(newDrawing);
-    };
-
-    const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        const pos = getPos(e);
-        lastMousePos.current = pos;
-        let normalizedPos = { x: pos.x / scale, y: pos.y / scale };
-
-        // Update Cursor when Hovering (not dragging)
-        if (!isDrawing && activeTool === 'select') {
-            const selected = drawings.find(d => d.id === selectedDrawingId);
-            if (selected && selected.type === 'image' && selected.rect) {
-                const [ix, iy, iw, ih] = selected.rect;
-                const handles = [
-                    { x: ix * scale, y: iy * scale, cursor: 'nwse-resize' },            // TL
-                    { x: (ix + iw) * scale, y: iy * scale, cursor: 'nesw-resize' },     // TR
-                    { x: ix * scale, y: (iy + ih) * scale, cursor: 'nesw-resize' },     // BL
-                    { x: (ix + iw) * scale, y: (iy + ih) * scale, cursor: 'nwse-resize' }, // BR
-                    { x: (ix + iw/2) * scale, y: iy * scale, cursor: 'ns-resize' },      // TM
-                    { x: (ix + iw/2) * scale, y: (iy + ih) * scale, cursor: 'ns-resize' }, // BM
-                    { x: ix * scale, y: (iy + ih/2) * scale, cursor: 'ew-resize' },      // LM
-                    { x: (ix + iw) * scale, y: (iy + ih/2) * scale, cursor: 'ew-resize' }  // RM
-                ];
-
-                let foundHandle = false;
-                for (const h of handles) {
-                    if (Math.hypot(pos.x - h.x, pos.y - h.y) < 15) {
-                        e.currentTarget.style.cursor = h.cursor;
-                        foundHandle = true;
-                        break;
-                    }
-                }
-
-                if (!foundHandle) {
-                    if (normalizedPos.x >= ix && normalizedPos.x <= ix + iw &&
-                        normalizedPos.y >= iy && normalizedPos.y <= iy + ih) {
-                        e.currentTarget.style.cursor = 'move';
-                    } else {
-                        e.currentTarget.style.cursor = 'default';
-                    }
-                }
-            } else {
-                e.currentTarget.style.cursor = 'default';
-            }
-        }
-
-        if (!isDrawing) return;
-
-        // Helper for endpoint magnetic snapping
-        const hitTestEndpointsForSnap = (px: number, py: number, ignoreId: string | null = null) => {
-            const snapThreshold = 15 / scale;
-            let closestPt: { x: number, y: number } | null = null;
-            let minDist = Infinity;
-            
-            drawings.forEach(d => {
-                if (d.id === ignoreId) return;
-                if (d.type.startsWith('arrow-') && d.points.length >= 2) {
-                    [d.points[0], d.points[1]].forEach(pt => {
-                        const dist = Math.hypot(pt.x - px, pt.y - py);
-                        if (dist < snapThreshold && dist < minDist) {
-                            minDist = dist;
-                            closestPt = { ...pt };
-                        }
-                    });
-                }
-            });
-            return closestPt;
-        };
-
-        if (activeTool === 'eraser') {
-            handleEraserHit(normalizedPos);
-            setStartPos(pos);
-            return;
-        }
-
-        if (activeTool === 'select' && selectedDrawingId && draggingDrawingHandle && startPos) {
-            setDrawings(prev => prev.map(d => {
-                if (d.id !== selectedDrawingId) return d;
-                const newD = { ...d };
-                const dx = (pos.x - startPos.x) / scale;
-                const dy = (pos.y - startPos.y) / scale;
-                
-                if (draggingDrawingHandle === 'start') {
-                    const rawNewStart = { x: d.points[0].x + dx, y: d.points[0].y + dy };
-                    const snapped = hitTestEndpointsForSnap(rawNewStart.x, rawNewStart.y, d.id);
-                    newD.points = [snapped || rawNewStart, d.points[1]];
-                } else if (draggingDrawingHandle === 'end') {
-                    const rawNewEnd = { x: d.points[1].x + dx, y: d.points[1].y + dy };
-                    const snapped = hitTestEndpointsForSnap(rawNewEnd.x, rawNewEnd.y, d.id);
-                    newD.points = [d.points[0], snapped || rawNewEnd];
-                    if (!d.type.startsWith('arrow-l-')) {
-                        newD.angle = Math.atan2(newD.points[1].y - newD.points[0].y, newD.points[1].x - newD.points[0].x);
-                    }
-                } else if (draggingDrawingHandle === 'body') {
-                    if (d.type === 'image' && d.rect) {
-                        const [ix, iy, iw, ih] = d.rect;
-                        newD.rect = [ix + dx, iy + dy, iw, ih];
-                        newD.points = [{ x: ix + dx, y: iy + dy }];
-                    } else {
-                        newD.points = [
-                            { x: d.points[0].x + dx, y: d.points[0].y + dy },
-                            { x: d.points[1].x + dx, y: d.points[1].y + dy }
-                        ];
-                    }
-                } else if (d.type === 'image' && d.rect) {
-                    const [ix, iy, iw, ih] = d.rect;
-                    if (draggingDrawingHandle === 'image-br') {
-                        newD.rect = [ix, iy, iw + dx, ih + dy];
-                    } else if (draggingDrawingHandle === 'image-tl') {
-                        newD.rect = [ix + dx, iy + dy, iw - dx, ih - dy];
-                    } else if (draggingDrawingHandle === 'image-tr') {
-                        newD.rect = [ix, iy + dy, iw + dx, ih - dy];
-                    } else if (draggingDrawingHandle === 'image-bl') {
-                        newD.rect = [ix + dx, iy, iw - dx, ih + dy];
-                    } else if (draggingDrawingHandle === 'image-tm') {
-                        newD.rect = [ix, iy + dy, iw, ih - dy];
-                    } else if (draggingDrawingHandle === 'image-bm') {
-                        newD.rect = [ix, iy, iw, ih + dy];
-                    } else if (draggingDrawingHandle === 'image-lm') {
-                        newD.rect = [ix + dx, iy, iw - dx, ih];
-                    } else if (draggingDrawingHandle === 'image-rm') {
-                        newD.rect = [ix, iy, iw + dx, ih];
-                    }
-                }
-                return newD;
-            }));
-            setStartPos(pos);
-            return;
-        }
-
-        if (!currentDrawing) return;
-
-        if (currentDrawing.type.startsWith('arrow-')) {
-            const snapped = hitTestEndpointsForSnap(normalizedPos.x, normalizedPos.y, currentDrawing.id);
-            if (snapped) {
-                normalizedPos = snapped;
-            }
-        }
-
-        const highlightAsStroke = activeTool === 'highlight' && (docType === 'image' || textBlocks.length === 0);
-
-        if (activeTool === 'pen' || (activeTool === 'highlight' && highlightAsStroke)) {
-            setCurrentDrawing(prev => ({
-                ...prev!,
-                points: [...prev!.points, normalizedPos]
-            }));
-        } else if (activeTool === 'highlight' && startPos) {
-            let minX = Math.min(startPos.x, pos.x);
-            let maxX = Math.max(startPos.x, pos.x);
-            let minY = Math.min(startPos.y, pos.y);
-            let maxY = Math.max(startPos.y, pos.y);
-
-            const vTolerance = 10;
-            const hTolerance = 5;
-            const startBlock = textBlocks.find(b =>
-                startPos.x >= b.rect[0] - hTolerance && startPos.x <= b.rect[0] + b.rect[2] + hTolerance &&
-                startPos.y >= b.rect[1] - vTolerance && startPos.y <= b.rect[1] + b.rect[3] + vTolerance
-            );
-
-            const endBlock = textBlocks.find(b =>
-                pos.x >= b.rect[0] - hTolerance && pos.x <= b.rect[0] + b.rect[2] + hTolerance &&
-                pos.y >= b.rect[1] - vTolerance && pos.y <= b.rect[1] + b.rect[3] + vTolerance
-            );
-
-            const leftBlock = minX === startPos.x ? startBlock : endBlock;
-            const rightBlock = maxX === startPos.x ? startBlock : endBlock;
-
-            if (leftBlock || rightBlock) {
-                const yVals: number[] = [];
-                if (leftBlock) { yVals.push(leftBlock.rect[1], leftBlock.rect[1] + leftBlock.rect[3]); }
-                if (rightBlock) { yVals.push(rightBlock.rect[1], rightBlock.rect[1] + rightBlock.rect[3]); }
-                if (yVals.length > 0) {
-                    minY = Math.min(...yVals) - 1;
-                    maxY = Math.max(...yVals) + 1;
-                }
-
-                const threshold = 15;
-                if (leftBlock && Math.abs(minX - leftBlock.rect[0]) < threshold) {
-                    minX = leftBlock.rect[0];
-                }
-                if (rightBlock && Math.abs(maxX - (rightBlock.rect[0] + rightBlock.rect[2])) < threshold) {
-                    maxX = rightBlock.rect[0] + rightBlock.rect[2];
-                }
-            }
-
-            setCurrentDrawing(prev => ({
-                ...prev!,
-                rect: [minX / scale, minY / scale, (maxX - minX) / scale, (maxY - minY) / scale]
-            }));
-        } else if ((activeTool === 'rect' || activeTool === 'circle' || activeTool.includes('arrow')) && startPos) {
-            let minX = Math.min(startPos.x, pos.x);
-            let minY = Math.min(startPos.y, pos.y);
-            let maxX = Math.max(startPos.x, pos.x);
-            let maxY = Math.max(startPos.y, pos.y);
-
-            const dragRect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
-            const intersectingBlocks = textBlocks.filter(b => {
-                const bx = b.rect[0];
-                const by = b.rect[1];
-                const bw = b.rect[2];
-                const bh = b.rect[3];
-                return !(bx > dragRect.x + dragRect.w || bx + bw < dragRect.x || by > dragRect.y + dragRect.h || by + bh < dragRect.y);
-            });
-
-            if (intersectingBlocks.length > 0) {
-                minY = Math.min(...intersectingBlocks.map(b => b.rect[1]));
-                maxY = Math.max(...intersectingBlocks.map(b => b.rect[1] + b.rect[3]));
-                minY -= 2;
-                maxY += 2;
-            }
-
-            const finalW = maxX - minX;
-            const finalH = maxY - minY;
-
-            setCurrentDrawing(prev => {
-                let fromX = startPos.x;
-                let fromY = startPos.y;
-                let toX = pos.x;
-                let toY = pos.y;
-                let angle = 0;
-
-                if (activeTool.startsWith('arrow-')) {
-                    angle = Math.atan2(toY - fromY, toX - fromX);
-                    if (activeTool === 'arrow-right') { toX = Math.max(fromX + 10, toX); toY = fromY; angle = 0; }
-                    else if (activeTool === 'arrow-left') { toX = Math.min(fromX - 10, toX); toY = fromY; angle = Math.PI; }
-                    else if (activeTool === 'arrow-up') { toX = fromX; toY = Math.min(fromY - 10, toY); angle = -Math.PI / 2; }
-                    else if (activeTool === 'arrow-down') { toX = fromX; toY = Math.max(fromY + 10, toY); angle = Math.PI / 2; }
-                }
-
-                return {
-                    ...prev!,
-                    rect: [minX / scale, minY / scale, finalW / scale, finalH / scale],
-                    points: [{ x: fromX / scale, y: fromY / scale }, { x: toX / scale, y: toY / scale }],
-                    angle: angle
-                };
-            });
-        }
-    };
-
-    const endDraw = () => {
-        if (!isDrawing) return;
-        setIsDrawing(false);
-
-        if (activeTool === 'select' && selectedDrawingId && draggingDrawingHandle) {
-            const history = getPageHistory(currentPage);
-            const snapshot = [...drawings];
-            history.push({
-                execute: () => { },
-                undo: () => setDrawings(snapshot)
-            });
-            setHistoryRevision(p => p + 1);
-            setPageDrawings(prev => ({ ...prev, [currentPage]: drawings }));
-            setDraggingDrawingHandle(null);
-            setStartPos(null);
-            return;
-        }
-
-        if (activeTool === 'eraser') {
-            if (wasErased) {
-                setPageDrawings(prev => ({ ...prev, [currentPage]: drawings }));
-                setWasErased(false);
-            }
-            setStartPos(null);
-            return;
-        }
-
-        if (currentDrawing) {
-            const nextDrawings = [...drawings, currentDrawing];
-            const history = getPageHistory(currentPage);
-            history.push(new AddAnnotationCommand(currentDrawing, setDrawings));
-            setHistoryRevision(p => p + 1);
-            setDrawings(nextDrawings);
-            setPageDrawings(prev => ({ ...prev, [currentPage]: nextDrawings }));
-        }
-        
-        setCurrentDrawing(null);
-        setStartPos(null);
-        setGuideLineY(null);
-        setGuideLineX(null);
-    };
-
     const handleMouseLeaveCanvas = () => {
         lastMousePos.current = null;
-        if (isDrawing) endDraw();
+        if (isDrawing) {
+            toolManager.onPointerUp({
+                pos: { x: 0, y: 0 },
+                scale,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                activeTool,
+                toolSettings,
+                eraserInstantDelete,
+                originalEvent: {} as any
+            });
+            setIsDrawing(false);
+        }
     };
+
 
     const handleTextClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
         if (activeTool !== 'text' || isInputActive) return;
@@ -1303,43 +1345,61 @@ const PdfViewer: React.FC = () => {
         const canvas = overlayCanvasRef.current!;
         const ctx = canvas.getContext('2d')!;
 
-        // Hit detection for existing annotations with generous padding (10px)
-        const hit = textAnnotations.find(ann => {
-            const fontSize = Number(ann.fontSize) || 20;
-            const ax = Number(ann.x);
-            const ay = Number(ann.y);
-            const padding = 10;
+        const padding = 10;
+        const hit = currentPageElements.find(el => {
+            // Only hit-test TextElement types — not shapes/arrows/circles
+            if (el.type !== 'text') return false;
+
+            const h = el as any;
+            const rect = getElementRect(h);
+            const ax = rect[0] * scale;
+            const ay = rect[1] * scale;
+            const fontSize = (Number(h.fontSize) || 20) * scale;
 
             let width, height;
-            if (ann.width && ann.height) {
-                width = Number(ann.width);
-                height = Number(ann.height);
+            if (rect[2] && rect[3]) {
+                width = rect[2] * scale;
+                height = rect[3] * scale;
             } else {
-                ctx.font = `${fontSize}px ${ann.fontFamily || 'Outfit, sans-serif'}`;
-                const metrics = ctx.measureText(ann.text);
+                ctx.font = `${fontSize}px ${h.fontFamily || 'Outfit, sans-serif'}`;
+                const metrics = ctx.measureText(h.text || '');
                 width = metrics.width;
                 height = fontSize;
             }
 
             return pos.x >= ax - padding && pos.x <= ax + width + padding &&
-                pos.y >= ay - height - padding && pos.y <= ay + padding;
+                pos.y >= ay - padding && pos.y <= ay + height + padding;
         });
 
         if (hit) {
+            const h = hit as any;
+            const rect = getElementRect(h);
             setEditingId(hit.id);
-            setTempText(hit.text);
-            const fontSize = Number(hit.fontSize) || 20;
-            // Container renders at top: inputPos.y - 8, textarea text starts at inputPos.y + 8 (two p-2 paddings)
-            // So inputPos.y = hit.y - fontSize - 8 ensures text visually appears at hit.y (the saved baseline)
-            setInputPos({ x: Number(hit.x), y: Number(hit.y) - fontSize - 8 });
+            setTempText(h.text || '');
+            setInputPos({ x: rect[0] * scale, y: rect[1] * scale });
+
+            // Only sync fontSize/fontFamily — do NOT override color or textBgOpacity (user's current settings)
+            setToolSettings({
+                fontSize: Number(h.fontSize) || 20,
+                fontFamily: h.fontFamily || 'Outfit, sans-serif',
+            });
+
+            const baseFontSize = Number(h.fontSize) || 20;
+            ctx.font = `${baseFontSize * scale}px ${h.fontFamily || 'Outfit, sans-serif'}`;
+
+            let w = Number(h.width ? h.width * scale : Math.max(120, ctx.measureText(h.text || '').width + 32));
+            let h_val = Math.max(18, Number(h.height || 0) * scale);
+            setEditorWidth(w);
+            setEditorHeight(h_val);
         } else {
             setEditingId(null);
             setTempText('');
-            const fontSize = Number(toolSettings.fontSize) || 20;
-            // Same offset: inputPos.y = pos.y - fontSize - 8 so that ann.y = inputPos.y + fontSize + 8 = pos.y
-            setInputPos({ x: pos.x, y: pos.y - fontSize - 8 });
+            setInputPos({ x: pos.x, y: pos.y });
+            setEditorWidth(120);
+            setEditorHeight(18);
         }
     };
+
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -1347,62 +1407,76 @@ const PdfViewer: React.FC = () => {
         if (!inputPos) return;
 
         const textarea = textareaRef.current;
-        const width = textarea ? textarea.offsetWidth : (editingId ? (textAnnotations.find(a => a.id === editingId)?.width || 300) : 300);
-        const height = textarea ? textarea.offsetHeight : (editingId ? (textAnnotations.find(a => a.id === editingId)?.height || 100) : 100);
+        const width = textarea ? textarea.offsetWidth : 300;
+        const height = textarea ? textarea.offsetHeight : 100;
 
-        let finalAnnotations = textAnnotations;
         if (tempText.trim() === '') {
             if (editingId) {
-                finalAnnotations = textAnnotations.filter(a => a.id !== editingId);
+                // Delete via Command (Phase 4)
+                const toDelete = currentPageElements.find(a => a.id === editingId);
+                if (toDelete) {
+                    const command = new DeleteElementCommand(currentPage, toDelete, setElements);
+                    getCommandHistory(currentPage).push(command);
+                }
+
+
             }
         } else {
             if (editingId) {
-                // Issue 3: Update text AND current tool style settings (fontSize, color, fontFamily)
-                const editingAnn = textAnnotations.find(a => a.id === editingId);
-                const baseFs = Number(toolSettings.fontSize) || Number(editingAnn?.fontSize) || 20;
-                const baseColor = toolSettings.color || editingAnn?.color || '#000000';
-                const baseFontFamily = toolSettings.fontFamily || editingAnn?.fontFamily || 'Outfit, sans-serif';
-                finalAnnotations = textAnnotations.map(a =>
-                    a.id === editingId ? {
-                        ...a,
+                const oldAnn = currentPageElements.find(a => a.id === editingId) as any;
+                if (oldAnn) {
+                    const baseFs = Number(toolSettings.fontSize) || Number(oldAnn.fontSize) || 20;
+                    const baseColor = toolSettings.color || (oldAnn.style?.strokeColor) || '#000000';
+                    const baseFontFamily = toolSettings.fontFamily || oldAnn.fontFamily || 'Outfit, sans-serif';
+
+                    const newProps: any = {
                         text: tempText,
-                        x: inputPos.x,
-                        // ann.y = inputPos.y + fontSize + 8 (8 = container p-2 padding offset)
-                        y: inputPos.y + baseFs + 8,
+                        x: inputPos.x / scale,
+                        y: inputPos.y / scale,
+                        width: width / scale,
+                        height: height / scale,
                         fontSize: baseFs,
-                        color: baseColor,
-                        fontFamily: baseFontFamily,
-                        width,
-                        height
-                    } : a
-                );
+                        color: baseColor, // Apply current color selection
+                        fontFamily: baseFontFamily
+                    };
+                    // Also update the style object for class-based elements
+                    if (oldAnn.style && typeof oldAnn.style.copy === 'function') {
+                        newProps.style = oldAnn.style.copy({ color: baseColor });
+                    } else if (oldAnn.style) {
+                        newProps.style = { ...oldAnn.style, color: baseColor };
+                    }
+                    // Compatibility shadow property
+                    newProps.rect = [newProps.x, newProps.y, newProps.width, newProps.height];
+
+                    const command = new UpdateElementCommand(currentPage, oldAnn, newProps, setElements);
+                    getCommandHistory(currentPage).push(command);
+                }
             } else {
+                // Add via Command
                 const fsNum = Number(toolSettings.fontSize) || 20;
-                const newAnn = {
-                    id: Date.now().toString(),
-                    text: tempText,
-                    x: inputPos.x,
-                    y: inputPos.y + fsNum + 8, // +8 for the container p-2 padding offset
-                    fontSize: fsNum,
-                    color: toolSettings.color || '#000000',
-                    fontFamily: toolSettings.fontFamily || 'Outfit, sans-serif',
-                    width: width,
-                    height: height
-                };
-                finalAnnotations = [...textAnnotations, newAnn];
+                const newEl = ElementFactory.create('text',
+                    Date.now().toString() + Math.random().toString(36).substring(2),
+                    [inputPos.x / scale, inputPos.y / scale, width / scale, height / scale],
+                    toolSettings.color || '#000000'
+                );
+                if (newEl) {
+                    const h = newEl as any;
+                    h.text = tempText;
+                    h.fontSize = fsNum;
+                    h.fontFamily = toolSettings.fontFamily || 'Outfit, sans-serif';
+
+                    const command = new AddElementCommand(currentPage, newEl, setElements);
+                    getCommandHistory(currentPage).push(command);
+                }
             }
+
         }
 
-        // Update local state
-        setTextAnnotations(finalAnnotations);
-
-        // Reset editing states
+        incrementRevision();
         setInputPos(null);
         setEditingId(null);
         setTempText('');
 
-        // Update per-page state map
-        setPageTextAnnotations(prev => ({ ...prev, [currentPage]: finalAnnotations }));
     };
 
     const handleBoxMouseDown = (e: React.MouseEvent) => {
@@ -1421,6 +1495,39 @@ const PdfViewer: React.FC = () => {
         });
     };
 
+    const recalculateEditorSize = useCallback(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+
+        const measureCanvas = document.createElement('canvas');
+        const mCtx = measureCanvas.getContext('2d')!;
+
+        const ann = editingId ? (currentPageElements.find(a => a.id === editingId) as any) : null;
+        const currentFontSize = (Number(ann ? ann.fontSize : toolSettings.fontSize) || 20) * scale;
+        const currentFontFamily = (ann ? ann.fontFamily : toolSettings.fontFamily) || 'Outfit, sans-serif';
+
+        mCtx.font = `${currentFontSize}px ${currentFontFamily}`;
+        const lines = tempText.split('\n');
+        const maxLineWidth = Math.max(...lines.map(l => mCtx.measureText(l || ' ').width));
+
+        setEditorWidth(Math.max(120, maxLineWidth + 60));
+
+        textarea.style.height = 'auto';
+        const newHeight = Math.max(40, textarea.scrollHeight);
+        textarea.style.height = `${newHeight}px`;
+        setEditorHeight(newHeight);
+    }, [editingId, currentPageElements, toolSettings.fontSize, toolSettings.fontFamily, scale, tempText]);
+
+
+    // Auto-fit editor height whenever it opens or text/settings change
+    useEffect(() => {
+        if (isInputActive) {
+            // Use a small timeout to ensure DOM is ready and style.height='auto' can work accurately
+            const timer = setTimeout(recalculateEditorSize, 0);
+            return () => clearTimeout(timer);
+        }
+    }, [isInputActive, editingId, scale, recalculateEditorSize]);
+
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
             const canvas = canvasRef.current;
@@ -1432,7 +1539,7 @@ const PdfViewer: React.FC = () => {
                 const rawY = (e.clientY - rect.top) - dragOffset.y;
 
                 // PDF Text Snapping Logic (including phantom baselines)
-                const snapThreshold = 15; // pixels
+                const snapThreshold = e.altKey ? 0 : 5; // pixels (reduced from 15 to 5, bypass on Alt)
                 let bestY = rawY;
                 let bestX = rawX;
                 let minDiffY = Infinity;
@@ -1443,32 +1550,30 @@ const PdfViewer: React.FC = () => {
                 // 1. Text Block Snapping (Active areas) with Collision Avoidance
                 const boxWidth = textareaRef.current?.offsetWidth || 120;
                 const boxHeight = textareaRef.current?.offsetHeight || 40;
-                
+
                 textBlocks.forEach(b => {
                     const blockTop = b.rect[1];
                     const blockLeft = b.rect[0];
                     const blockWidth = b.rect[2];
-                    
+
                     const diffBaseline = Math.abs(rawY - (blockTop - 4));
                     if (diffBaseline < snapThreshold && diffBaseline < minDiffY) {
                         minDiffY = diffBaseline;
-                        bestY = blockTop - 4; 
+                        bestY = blockTop - 4;
                         foundSnapY = true;
-                        
-                        // Overlap detection: If on the same baseline, ensure we don't cover the text
-                        const isOverlappingX = (bestX + boxWidth > blockLeft - 10) && (bestX < blockLeft + blockWidth + 10);
-                        if (isOverlappingX) {
-                            if (rawX < blockLeft + blockWidth / 2) {
-                                // Push to the left (avoid collision by placing box before the text block)
-                                bestX = blockLeft - boxWidth - 10;
-                            } else {
-                                // Push to the right
-                                bestX = blockLeft + blockWidth + 10;
-                            }
-                            foundSnapX = true;
-                        }
+
+                        // Overlap detection temporarily removed to allow free placement
+                        // const isOverlappingX = (bestX + boxWidth > blockLeft - 10) && (bestX < blockLeft + blockWidth + 10);
+                        // if (isOverlappingX) {
+                        //     if (rawX < blockLeft + blockWidth / 2) {
+                        //         bestX = blockLeft - boxWidth - 10;
+                        //     } else {
+                        //         bestX = blockLeft + blockWidth + 10;
+                        //     }
+                        //     foundSnapX = true;
+                        // }
                     }
-                    
+
                     const diffXLeft = Math.abs(rawX - b.rect[0]);
                     const diffXRight = Math.abs(rawX - (b.rect[0] + b.rect[2]));
                     if (diffXLeft < snapThreshold && diffXLeft < minDiffX) {
@@ -1510,25 +1615,7 @@ const PdfViewer: React.FC = () => {
                     });
                 }
 
-                // 3. Collision Avoidance (Soft Repel / Smart Spacing)
-                // If the box overlaps or is too close to a block, push it slightly
-                const padding = 10;
-                textBlocks.forEach(b => {
-                    const boxW = textareaRef.current?.offsetWidth || 300;
-                    const boxH = textareaRef.current?.offsetHeight || 100;
-                    // Check if box (at bestX, bestY) overlaps block b
-                    const overlaps = !(bestX > b.rect[0] + b.rect[2] + padding ||
-                                     bestX + boxW < b.rect[0] - padding ||
-                                     bestY > b.rect[1] + b.rect[3] + padding ||
-                                     bestY + boxH < b.rect[1] - padding);
-                    
-                    if (overlaps) {
-                        // If it overlaps, try to snap to the right or bottom edge neatly
-                        if (Math.abs(bestX - (b.rect[0] + b.rect[2] + padding)) < 30) {
-                            bestX = b.rect[0] + b.rect[2] + padding;
-                        }
-                    }
-                });
+                // 3. Collision Avoidance removed to allow easy placement of text between lines or over existing blocks.
 
                 setGuideLineY(foundSnapY ? bestY + 4 : null);
                 setGuideLineX(foundSnapX ? bestX : null);
@@ -1537,15 +1624,36 @@ const PdfViewer: React.FC = () => {
                     x: bestX,
                     y: bestY
                 });
+
+                // Real-time Annotation Sync: Move the underlying model as we drag
+                if (editingId) {
+                    const el = currentPageElements.find(a => a.id === editingId) as any;
+                    if (el) {
+                        const newX = bestX / scale;
+                        const newY = bestY / scale;
+                        if (el.move) {
+                            // Using the move method is preferred if provided
+                            const bbox = el.getBoundingBox();
+                            el.move(newX - bbox.x, newY - bbox.y);
+                        } else {
+                            el.x = newX;
+                            el.y = newY;
+                            if (el.rect) el.rect = [newX, newY, el.rect[2], el.rect[3]];
+                        }
+                        incrementRevision(); // Trigger redraw
+                    }
+                }
+
+
             } else if (resizingType && textareaRef.current) {
                 const tRect = textareaRef.current.getBoundingClientRect();
                 if (resizingType === 'width' || resizingType === 'both') {
                     const newWidth = Math.max(50, e.clientX - tRect.left);
-                    textareaRef.current.style.width = `${newWidth}px`;
+                    setEditorWidth(newWidth);
                 }
                 if (resizingType === 'height' || resizingType === 'both') {
                     const newHeight = Math.max(30, e.clientY - tRect.top);
-                    textareaRef.current.style.height = `${newHeight}px`;
+                    setEditorHeight(newHeight);
                 }
             }
         };
@@ -1553,7 +1661,7 @@ const PdfViewer: React.FC = () => {
         const handleMouseUp = () => {
             setIsDraggingBox(false);
             setResizingType(null);
-            setGuideLineY(null); 
+            setGuideLineY(null);
             setGuideLineX(null);
         };
 
@@ -1569,9 +1677,36 @@ const PdfViewer: React.FC = () => {
     }, [isDraggingBox, resizingType, dragOffset, inputPos, textBlocks]);
 
     const handleInputKeyDown = (e: React.KeyboardEvent) => {
-        // Only treat Shift+Enter or Ctrl+Enter? Actually user wants Enter to be 열리고 (open) and not close?
-        // Let's make Enter just a newline now.
-        if (e.key === 'Enter' && e.ctrlKey) {
+        const isDecrease = e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.code === 'ArrowDown' || e.code === 'ArrowLeft');
+        const isIncrease = e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowRight' || e.code === 'ArrowUp' || e.code === 'ArrowRight');
+
+        if (isDecrease) {
+            e.preventDefault();
+            const el = editingId ? currentPageElements.find(a => a.id === editingId) : null;
+            const currentSize = Number((el as any)?.fontSize || toolSettings.fontSize) || 20;
+            const newSize = Math.max(8, currentSize - 1);
+
+            setToolSettings({ fontSize: newSize });
+            if (editingId && el) {
+                const command = new UpdateElementCommand(currentPage, el, { fontSize: newSize }, setElements);
+                getCommandHistory(currentPage).push(command);
+            }
+            showFontSizeIndicator(newSize);
+            setTimeout(recalculateEditorSize, 0);
+        } else if (isIncrease) {
+            e.preventDefault();
+            const el = editingId ? currentPageElements.find(a => a.id === editingId) : null;
+            const currentSize = Number((el as any)?.fontSize || toolSettings.fontSize) || 20;
+            const newSize = Math.min(100, currentSize + 1);
+
+            setToolSettings({ fontSize: newSize });
+            if (editingId && el) {
+                const command = new UpdateElementCommand(currentPage, el, { fontSize: newSize }, setElements);
+                getCommandHistory(currentPage).push(command);
+            }
+            showFontSizeIndicator(newSize);
+            setTimeout(recalculateEditorSize, 0);
+        } else if (e.key === 'Enter' && e.ctrlKey) {
             e.preventDefault();
             handleInputComplete();
         } else if (e.key === 'Escape') {
@@ -1581,256 +1716,27 @@ const PdfViewer: React.FC = () => {
         }
     };
 
-    const isInputActive = inputPos !== null;
 
-    // 공통: 현재 캔버스 상태를 PDF Blob으로 변환 (전체 페이지 합치기)
-    const createEditedPdfBlob = async () => {
-        if (!originalData) return null;
 
-        try {
-            // alert('저장 중...');
-            // alert('PDF 병합 중... 잠시만 기다려 주세요.'); // UI cleanup: remove noisy alert
-            // 원본 PDF 로드 (pdf-lib)
-            const pdfDocLib = await PDFDocument.load(originalData, { ignoreEncryption: true });
-            const totalPages = pdfDocLib.getPageCount();
-
-            // pdf.js 문서 (렌더링용)
-            if (!pdfDoc) {
-                alert('오류: PDF 렌더러가 준비되지 않았습니다.');
-                return null;
-            }
-
-            for (let i = 1; i <= totalPages; i++) {
-                const hasDrawing = pageDrawings[i] && pageDrawings[i].length > 0;
-                const hasText = pageTextAnnotations[i] && pageTextAnnotations[i].length > 0;
-
-                if (hasDrawing || hasText) {
-                    const page = await pdfDoc.getPage(i);
-                    const viewport = page.getViewport({ scale: 2.0 }); // 고화질 렌더링
-
-                    const tempCanvas = document.createElement('canvas');
-                    tempCanvas.width = viewport.width;
-                    tempCanvas.height = viewport.height;
-                    const tempCtx = tempCanvas.getContext('2d')!;
-
-                    // 1. 원본 페이지 렌더링
-                    await page.render({ canvasContext: tempCtx, viewport }).promise;
-
-                    // 2. 오버레이 렌더링 (그림 - 벡터 방식)
-                    const pageDrawingsList = pageDrawings[i];
-                    if (pageDrawingsList && pageDrawingsList.length > 0) {
-                        renderVectors(tempCtx, pageDrawingsList, 2.0);
-                    }
-
-                    // 3. 오버레이 렌더링 (텍스트)
-                    const pageTexts = pageTextAnnotations[i];
-                    if (pageTexts) {
-                        pageTexts.forEach(ann => {
-                            const scaleRatio = 2.0 / scale;
-                            const fs = (Number(ann.fontSize) || 20) * scaleRatio;
-                            tempCtx.font = `${fs}px ${ann.fontFamily || 'Outfit, sans-serif'}`;
-                            tempCtx.fillStyle = ann.color || '#000000';
-
-                            const ax = Number(ann.x) * scaleRatio;
-                            const ay = Number(ann.y) * scaleRatio;
-
-                            if (ann.width) {
-                                wrapText(tempCtx, ann.text, ax, ay, ann.width * scaleRatio, fs * 1.2);
-                            } else {
-                                tempCtx.fillText(ann.text, ax, ay);
-                            }
-                        });
-                    }
-
-                    // 4. pdf-lib 페이지 이미지를 JPEG로 변환하여 덮어쓰기
-                    const imgData = tempCanvas.toDataURL('image/jpeg', 0.95);
-                    const image = await pdfDocLib.embedJpg(imgData);
-
-                    const pdfPage = pdfDocLib.getPage(i - 1);
-                    const { width, height } = pdfPage.getSize();
-                    pdfPage.drawImage(image, {
-                        x: 0,
-                        y: 0,
-                        width: width,
-                        height: height,
-                    });
-                }
-            }
-
-            const pdfBytes = await pdfDocLib.save();
-            // alert('PDF 병합 완료. 파일을 저장합니다.'); // UI cleanup
-            return new Blob([pdfBytes as any], { type: 'application/pdf' });
-        } catch (error) {
-            console.error('PDF 병합 오류:', error);
-            alert('PDF 병합 중 오류가 발생했습니다: ' + (error instanceof Error ? error.message : String(error)));
-            return null;
-        }
-    };
-
-    const blobToBase64 = (blob: Blob): Promise<string> => {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const dataUrl = reader.result as string;
-                const base64 = dataUrl.split(',')[1] || '';
-                resolve(base64);
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
-    };
-
-    // 1) 저장: 현재 불러온 파일 위치에 그대로 덮어쓰기
-    const handleSave = async () => {
-        // alert('저장을 시작합니다 (기존 파일 덮어쓰기)...'); // UI cleanup
-        const blob = await createEditedPdfBlob();
-        if (!blob) {
-            // alert('PDF 생성 실패');
-            return;
-        }
-
-        const anyWindow = window as any;
-        const electronAPI = anyWindow?.electronAPI;
-
-        // Electron + 원본 경로가 있는 경우: 해당 경로에 바로 덮어쓰기
-        if (electronAPI?.autoSave && currentFilePath) {
-            try {
-                const base64 = await blobToBase64(blob);
-                const result = await electronAPI.autoSave({ filePath: currentFilePath, data: base64 });
-                if (result?.success) {
-                    alert('저장 완료');
-                } else {
-                    console.error('AutoSave 실패:', result);
-                    alert('저장 실패');
-                }
-            } catch (error) {
-                console.error('AutoSave 오류:', error);
-                alert('저장 중 오류가 발생했습니다.');
-            }
-            return;
-        }
-
-        // Electron 이 아니거나 경로를 모를 때: 파일 이름만 동일한 새 파일 다운로드(백업용)
-        const baseName = currentFileName ? currentFileName.replace(/\.pdf$/i, '') : 'document';
-        const finalFileName = `${baseName}.pdf`.replace(/[\\/:*?"<>|]/g, '_');
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = finalFileName;
-        a.click();
-        URL.revokeObjectURL(url);
-        alert('원본 경로를 알 수 없어 새 파일로 저장했습니다.');
-    };
-
-    // 2) 다른 이름으로 저장: 다이얼로그를 열어 새 파일명 입력 후 같은 폴더에 새로 저장
-    const openSaveAsDialog = () => {
-        const base = currentFileName || 'document.pdf';
-        const normalized = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
-        setSaveAsName(normalized);
-        setIsSaveAsDialogOpen(true);
-    };
-
-    const confirmSaveAs = async () => {
-        // alert('다른 이름으로 저장을 시작합니다...'); // UI cleanup
-        const blob = await createEditedPdfBlob();
-        if (!blob) {
-            // alert('PDF 생성 실패 (다른 이름으로 저장)');
-            return;
-        }
-
-        let name = saveAsName.trim();
-        if (!name) {
-            alert('파일 이름을 입력하세요.');
-            return;
-        }
-        if (!name.toLowerCase().endsWith('.pdf')) {
-            name += '.pdf';
-        }
-
-        const anyWindow = window as any;
-        const electronAPI = anyWindow?.electronAPI;
-
-        // 1순위: 원본 파일과 같은 폴더에 새 이름으로 저장
-        if (electronAPI?.writeFile && currentFilePath) {
-            try {
-                const base64 = await blobToBase64(blob);
-                const lastSlash = Math.max(
-                    currentFilePath.lastIndexOf('\\'),
-                    currentFilePath.lastIndexOf('/')
-                );
-                const dir = lastSlash >= 0 ? currentFilePath.slice(0, lastSlash + 1) : '';
-                const targetPath = dir + name;
-
-                const result = await electronAPI.writeFile({ filePath: targetPath, data: base64 });
-                if (result?.success) {
-                    setCurrentFile(targetPath, name);
-                    alert(`저장 완료`);
-                    setIsSaveAsDialogOpen(false);
-                    return;
-                } else {
-                    console.error('writeFile 실패:', result);
-                    alert('저장 실패');
-                }
-            } catch (error) {
-                console.error('writeFile 오류:', error);
-                alert('저장 중 오류가 발생했습니다.');
-            }
-        } else if (electronAPI?.saveFileDialog) {
-            // 2순위: 사용자가 직접 위치를 선택하는 저장 다이얼로그
-            try {
-                const base64 = await blobToBase64(blob);
-                const result = await electronAPI.saveFileDialog({
-                    defaultName: name,
-                    data: base64,
-                    fileType: 'pdf',
-                });
-                if (!result?.canceled && result?.success) {
-                    setCurrentFile(result.filePath, name);
-                    alert(`저장 완료`);
-                    setIsSaveAsDialogOpen(false);
-                    return;
-                }
-            } catch (error) {
-                console.error('saveFileDialog 오류:', error);
-                alert('저장 중 오류가 발생했습니다.');
-            }
-        } else {
-            // 브라우저 환경: 단순 다운로드
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = name.replace(/[\\/:*?"<>|]/g, '_');
-            a.click();
-            URL.revokeObjectURL(url);
-            alert('브라우저 환경에서는 다운로드 폴더로 저장됩니다.');
-        }
-    };
-    // Save Shortcuts (Ctrl+S, Ctrl+Shift+S)
     useEffect(() => {
-        const handleSaveShortcut = (e: KeyboardEvent) => {
-            // Ignore if we are currently editing a text annotation
-            if (editingId) return;
+        if (isInputActive && textareaRef.current) {
+            // preventScroll: true prevents browser from auto-scrolling to the textarea
+            textareaRef.current.focus({ preventScroll: true });
+        }
+    }, [isInputActive]);
 
-            // Ignore if focus is in an input field (like AI panel or other text areas)
-            const target = e.target as HTMLElement | null;
-            const tagName = target?.tagName.toLowerCase();
-            if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) {
-                return;
-            }
+    // Auto-expand textarea height whenever text content or the editing target changes.
+    // This runs AFTER React commits the DOM, so scrollHeight is always accurate.
+    useEffect(() => {
+        const textarea = textareaRef.current;
+        if (!textarea || !isInputActive) return;
+        textarea.style.height = 'auto';
+        const newH = Math.max(40, textarea.scrollHeight);
+        textarea.style.height = `${newH}px`;
+        setEditorHeight(newH);
+    }, [tempText, editingId, isInputActive]);
 
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-                e.preventDefault(); // Prevent browser save
-                if (e.shiftKey) {
-                    openSaveAsDialog();
-                } else {
-                    handleSave();
-                }
-            }
-        };
 
-        window.addEventListener('keydown', handleSaveShortcut);
-        return () => window.removeEventListener('keydown', handleSaveShortcut);
-    }, [handleSave, openSaveAsDialog, editingId]);
 
     const changePage = (delta: number) => {
         const newPage = Math.max(1, Math.min(numPages, currentPage + delta));
@@ -1844,10 +1750,10 @@ const PdfViewer: React.FC = () => {
             if (!container) return;
             const rect = container.getBoundingClientRect();
             const isInContainer = e.clientX >= rect.left && e.clientX <= rect.right &&
-                                 e.clientY >= rect.top && e.clientY <= rect.bottom;
+                e.clientY >= rect.top && e.clientY <= rect.bottom;
 
             if (isInContainer && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault(); 
+                e.preventDefault();
                 const factor = Math.exp(-e.deltaY / 300);
                 setScale(prev => Math.min(4.0, Math.max(0.1, prev * factor)));
             }
@@ -1899,6 +1805,42 @@ const PdfViewer: React.FC = () => {
         };
     }, [scale]);
 
+    // Apply dynamic inline styles safely avoiding linter warnings
+    useEffect(() => {
+        if (guideCanvasRef.current && canvasRef.current) {
+            guideCanvasRef.current.style.setProperty('--canvas-width', `${(canvasRef.current.width || 0) / (window.devicePixelRatio || 1)}px`);
+            guideCanvasRef.current.style.setProperty('--canvas-height', `${(canvasRef.current.height || 0) / (window.devicePixelRatio || 1)}px`);
+        }
+    }, [scale, canvasRevision]);
+
+    useEffect(() => {
+        if (floatingInputRef.current && inputPos) {
+            // Precise alignment: 
+            // Wrapper div has p-2 (8px), Textarea has padding: 1px 0.5rem (8px left, 1px top)
+            // Total Left Offset = 8 + 8 = 16px
+            // Total Top Offset = 8 + 1 = 9px
+            floatingInputRef.current.style.setProperty('--input-left', `${inputPos.x - 20}px`);
+            floatingInputRef.current.style.setProperty('--input-top', `${inputPos.y - 12}px`);
+        }
+    }, [inputPos]);
+
+    useEffect(() => {
+        if (textareaRef.current) {
+            const el = editingId ? currentPageElements.find(a => a.id === editingId) : null;
+            const ann = el as any;
+            const size = (Number(ann?.fontSize || toolSettings.fontSize) || 20) * scale;
+            const family = ann?.fontFamily || toolSettings.fontFamily;
+            const color = ann?.color || toolSettings.color;
+
+            textareaRef.current.style.setProperty('--font-size', `${size}px`);
+            if (family) textareaRef.current.style.setProperty('--font-family', family);
+            if (color) textareaRef.current.style.setProperty('--text-color', color);
+            textareaRef.current.style.setProperty('--editor-width', `${editorWidth}px`);
+            textareaRef.current.style.setProperty('--editor-height', `${editorHeight}px`);
+        }
+    }, [editingId, currentPageElements, toolSettings, scale, editorWidth, editorHeight]);
+
+
     const hasDocument = !!pdfDoc || !!imageDoc;
     if (!hasDocument) {
         return (
@@ -1909,7 +1851,7 @@ const PdfViewer: React.FC = () => {
                 onDrop={handleDrop}
             >
                 <FileUp size={48} className="text-gray-300" />
-                <p className="text-gray-500 font-medium">PDF/PNG/PPT 파일을 드래그하거나 버튼을 클릭하세요</p>
+                <p className="text-gray-500 font-medium">PDF/PNG 파일을 드래그하거나 버튼을 클릭하세요</p>
                 <button
                     onClick={handleFileOpen}
                     className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"
@@ -1939,12 +1881,14 @@ const PdfViewer: React.FC = () => {
                     {/* Pagination */}
                     <div className="flex items-center gap-2 theme-bg-panel px-2 py-1 rounded-lg border theme-border">
                         <button
-                            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                            onClick={() => setCurrentPage((p: number) => Math.max(1, p - 1))}
                             disabled={currentPage <= 1 || !docType}
                             className="p-1 theme-tool-hover rounded disabled:opacity-30 theme-text-main"
+                            title="이전 페이지"
                         >
                             <ChevronLeft size={16} />
                         </button>
+
                         <div className="flex items-center gap-1 min-w-[3.5rem] justify-center">
                             {docType ? (
                                 <>
@@ -1954,7 +1898,10 @@ const PdfViewer: React.FC = () => {
                                         onChange={(e) => setPageInput(e.target.value)}
                                         onKeyDown={handlePageInputKeyDown}
                                         onBlur={handlePageJump}
+                                        onClick={(e) => (e.target as HTMLInputElement).select()}
                                         className="w-10 h-6 bg-slate-100/50 dark:bg-slate-800/50 border theme-border rounded text-center text-[11px] font-bold theme-text-main focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all"
+                                        title="페이지 번호 입력"
+                                        placeholder="쪽"
                                     />
                                     <span className="text-[10px] theme-text-muted">/ {numPages}</span>
                                 </>
@@ -1963,12 +1910,14 @@ const PdfViewer: React.FC = () => {
                             )}
                         </div>
                         <button
-                            onClick={() => setCurrentPage((p) => Math.min(numPages, p + 1))}
+                            onClick={() => setCurrentPage((p: number) => Math.min(numPages, p + 1))}
                             disabled={currentPage >= numPages || !docType}
                             className="p-1 theme-tool-hover rounded disabled:opacity-30 theme-text-main"
+                            title="다음 페이지"
                         >
                             <ChevronRight size={16} />
                         </button>
+
                     </div>
 
                     <div className="h-4 w-px bg-slate-200/50" />
@@ -1976,30 +1925,38 @@ const PdfViewer: React.FC = () => {
                     {/* Zoom */}
                     <div className="flex items-center gap-2 theme-bg-panel px-2 py-1 rounded-lg border theme-border">
                         <button
-                            onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}
+                            onClick={() => setScale((s: number) => Math.max(0.5, s - 0.2))}
                             disabled={!docType}
                             className="p-1 theme-tool-hover rounded disabled:opacity-30 theme-text-main"
+                            title="축소"
                         >
                             <ZoomOut size={16} />
                         </button>
+
                         <span className="text-xs font-semibold theme-text-muted min-w-[3rem] text-center">
                             {Math.round(scale * 100)}%
                         </span>
                         <button
-                            onClick={() => setScale((s) => Math.min(3.0, s + 0.2))}
+                            onClick={() => setScale((s: number) => Math.min(3.0, s + 0.2))}
                             disabled={!docType}
                             className="p-1 theme-tool-hover rounded disabled:opacity-30 theme-text-main"
+                            title="확대"
                         >
                             <ZoomIn size={16} />
                         </button>
+
                     </div>
                     <div className="h-4 w-px bg-slate-200/50" />
 
                     {/* History */}
                     <div className="flex items-center gap-1 theme-bg-panel px-1 py-1 rounded-lg border theme-border">
                         <button
-                            onClick={handleUndo}
-                            disabled={!getPageHistory(currentPage).canUndo}
+                            onClick={() => {
+                                if (getCommandHistory(currentPage).undo()) {
+                                    incrementRevision();
+                                }
+                            }}
+                            disabled={!getCommandHistory(currentPage).canUndo}
                             className="px-2 py-1 rounded text-[10px] theme-text-main theme-tool-hover disabled:opacity-30 transition-colors uppercase"
                             title="Ctrl + Z"
                         >
@@ -2007,14 +1964,20 @@ const PdfViewer: React.FC = () => {
                         </button>
                         <div className="w-px h-3 bg-slate-200/50" />
                         <button
-                            onClick={handleRedo}
-                            disabled={!getPageHistory(currentPage).canRedo}
+                            onClick={() => {
+                                if (getCommandHistory(currentPage).redo()) {
+                                    incrementRevision();
+                                }
+                            }}
+                            disabled={!getCommandHistory(currentPage).canRedo}
                             className="px-2 py-1 rounded text-[10px] theme-text-main theme-tool-hover disabled:opacity-30 transition-colors uppercase"
                             title="Ctrl + Y"
                         >
                             <span className="flex items-center gap-1"><span className="text-[14px]">↷</span> 복구</span>
                         </button>
                     </div>
+
+
                 </div>
 
                 {/* Right: Save Controls & Info */}
@@ -2033,93 +1996,101 @@ const PdfViewer: React.FC = () => {
                         <Save size={14} />
                         <span>다른 이름으로 저장</span>
                     </button>
+                    {saveStatus && (
+                        <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-lg text-xs font-bold animate-in fade-in slide-in-from-right-2 border border-green-200 shadow-sm">
+                            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                            {saveStatus}
+                        </div>
+                    )}
                     {currentFileName && <span className="ml-auto text-xs text-gray-500 truncate max-w-[200px]">{currentFileName}</span>}
                 </div>
             </div>
 
             <div ref={containerRef} className="flex-1 overflow-auto bg-gray-200 rounded-lg flex items-start justify-center p-4 dark-pdf-filter">
                 <div className="relative shadow-xl">
-                    <input 
-                        type="file" 
-                        ref={imageInputRef} 
-                        className="hidden" 
-                        accept="image/*" 
-                        onChange={handleImageUpload} 
+                    <input
+                        type="file"
+                        ref={imageInputRef}
+                        className="hidden"
+                        accept="image/*"
+                        onChange={handleImageUpload}
+                        title="이미지 업로드"
                     />
                     <canvas ref={canvasRef} className="block" />
                     <canvas
                         ref={overlayCanvasRef}
-                        className="absolute top-0 left-0"
-                        style={{ cursor: activeTool === 'pen' ? 'crosshair' : activeTool === 'eraser' ? 'cell' : activeTool === 'text' ? 'text' : 'default', opacity: 0.85 }}
-                        onMouseDown={startDraw}
-                        onMouseMove={draw}
-                        onMouseUp={endDraw}
+                        className="pdf-overlay-canvas"
+                        data-active-tool={activeTool}
+                        onMouseDown={handlePointerDown}
+                        onMouseMove={handlePointerMove}
+                        onMouseUp={handlePointerUp}
                         onMouseLeave={handleMouseLeaveCanvas}
                         onClick={handleTextClick}
                     />
-                    {/* Dedicated Interaction Guide Canvas */}
                     <canvas
                         ref={guideCanvasRef}
-                        className="absolute top-0 left-0 pointer-events-none"
-                        style={{ width: (canvasRef.current?.width || 0) / (window.devicePixelRatio || 1), height: (canvasRef.current?.height || 0) / (window.devicePixelRatio || 1) }}
+                        className="pdf-guide-canvas"
                     />
 
                     {/* Floating Text Input */}
                     {isInputActive && inputPos && (
                         <div
-                            className="absolute z-[100] animate-in fade-in zoom-in duration-200 p-2 border-2 border-dashed border-blue-400/50 bg-blue-50/10 rounded-lg cursor-move"
+                            ref={floatingInputRef}
+                            className="pdf-floating-input-container animate-in fade-in zoom-in duration-200"
                             style={{
-                                left: inputPos.x - 8,
-                                top: inputPos.y - 8,
-                            }}
-                            onMouseDown={handleBoxMouseDown}
+                                '--text-bg-opacity': toolSettings.textBgOpacity
+                            } as React.CSSProperties}
                         >
-                            <div className="relative group">
+                            {/* Font Size Indicator Tooltip */}
+                            <div className={`absolute -top-10 left-1/2 -translate-x-1/2 transition-all duration-300 pointer-events-none z-[120] ${fontSizeIndicator.visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}>
+                                <div className="bg-slate-900/90 text-white px-3 py-1.5 rounded-full text-[13px] font-black shadow-xl ring-2 ring-white/20 whitespace-nowrap flex items-center gap-1.5 backdrop-blur-md">
+                                    <span className="text-blue-400">AA</span>
+                                    {fontSizeIndicator.size}px
+                                </div>
+                                <div className="w-2 h-2 bg-slate-900/90 rotate-45 absolute -bottom-1 left-1/2 -translate-x-1/2" />
+                            </div>
+
+                            {/* (Top Toolbar Removed to fix vertical jump) */}
+
+
+                            <div
+                                className="relative group p-2 border-2 border-dashed border-blue-400/50 bg-blue-50/10 rounded-lg cursor-move pointer-events-auto"
+                                onMouseDown={handleBoxMouseDown}
+                            >
                                 <textarea
                                     ref={textareaRef}
-                                    autoFocus
                                     value={tempText}
                                     onChange={(e) => {
-                                        const newText = e.target.value;
-                                        setTempText(newText);
-                                        // Dynamic horizontal expansion using canvas measurement for accuracy
-                                        if (textareaRef.current) {
-                                            const textarea = textareaRef.current;
-                                            // Use a temporary canvas to measure text width precisely
-                                            const measureCanvas = document.createElement('canvas');
-                                            const mCtx = measureCanvas.getContext('2d')!;
-                                            mCtx.font = `${toolSettings.fontSize || 20}px ${toolSettings.fontFamily || 'sans-serif'}`;
-                                            // Find the widest line
-                                            const lines = newText.split('\n');
-                                            const maxLineWidth = Math.max(...lines.map(l => mCtx.measureText(l || ' ').width));
-                                            textarea.style.width = `${Math.max(120, maxLineWidth + 32)}px`; // +32 for padding & border
-                                            // Height: reset and re-measure
-                                            textarea.style.height = 'auto';
-                                            textarea.style.height = `${Math.max(40, textarea.scrollHeight)}px`;
-                                        }
+                                        setTempText(e.target.value);
+                                        setTimeout(recalculateEditorSize, 0);
                                     }}
                                     onKeyDown={handleInputKeyDown}
-                                    className="bg-white/95 border-2 border-blue-500 rounded shadow-2xl p-2 outline-none text-slate-800 block cursor-text select-text overflow-hidden"
-                                    style={{
-                                        fontSize: `${toolSettings.fontSize}px`,
-                                        fontFamily: toolSettings.fontFamily,
-                                        color: toolSettings.color,
-                                        width: 'auto',
-                                        height: 'auto',
-                                        resize: 'none',
-                                        minWidth: '120px',
-                                        minHeight: '40px',
-                                        whiteSpace: 'pre',  // honour newlines but don't wrap long lines
-                                        overflowWrap: 'normal',
-                                        overflowX: 'hidden',
-                                    }}
+                                    className="pdf-text-editor-textarea"
+                                    title="텍스트 입력"
+                                    placeholder="내용을 입력하세요..."
                                 />
                                 {/* Explicit Completion Button - Positioned smartly */}
                                 <button
                                     onMouseDown={(e) => { e.stopPropagation(); handleInputComplete(); }}
-                                    className={`absolute bg-green-600 hover:bg-green-700 text-white w-8 h-8 rounded-full shadow-lg border-2 border-white flex items-center justify-center transition-all hover:scale-110 z-[110] 
-                                        ${inputPos && (inputPos.x + (textareaRef.current?.offsetWidth || 300) > (canvasRef.current?.width || 0) / (window.devicePixelRatio || 1) - 60) 
-                                            ? '-left-3 -top-3' : '-right-3 -top-3'}`}
+                                    className={`absolute bg-green-600 hover:bg-green-700 text-white w-7 h-7 rounded-full shadow-lg border-2 border-white flex items-center justify-center transition-all hover:scale-110 z-[110] 
+                                        ${(() => {
+                                            if (!inputPos) return '-right-3 -top-3';
+                                            // getBoundingClientRect().width returns the real CSS pixel width,
+                                            // which matches inputPos coordinates (canvas logical pixels).
+                                            const canvasW = canvasRef.current?.getBoundingClientRect().width || 9999;
+                                            const boxW = textareaRef.current?.offsetWidth || 120;
+                                            const boxH = textareaRef.current?.offsetHeight || 40;
+
+                                            // inputPos.x/y are logical canvas coords (same space as getBoundingClientRect)
+                                            // The outer wrapper starts at (inputPos.x - 20, inputPos.y - 20)
+                                            const isHittingRight = (inputPos.x - 20 + boxW + 32) > canvasW;
+                                            const isHittingTop = (inputPos.y - 55) < 0;
+
+                                            if (isHittingRight && isHittingTop) return '-left-3 -bottom-3';
+                                            if (isHittingRight) return '-left-3 -top-3';
+                                            if (isHittingTop) return '-right-3 -bottom-3';
+                                            return '-right-3 -top-3';
+                                        })()}`}
                                     title="작업 완료"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -2142,13 +2113,153 @@ const PdfViewer: React.FC = () => {
                                     <div className="w-1.5 h-1.5 border-r-2 border-b-2 border-white rotate-[-45deg] translate-x-[-1px] translate-y-[-1px]" />
                                 </div>
                             </div>
-                            <div className="bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-b-sm absolute -bottom-4 left-2 uppercase tracking-tighter shadow-md">
-                                Ctrl+Enter to Finish | Drag Border to Move
+
+                            {/* Floating Toolbar (Opacity - Bottom and Finish - Top) */}
+                            {/* 1. Status Bar (Moved to Top Right) */}
+                            <div className="absolute -top-8 right-0 pointer-events-auto">
+                                <div className="bg-blue-600 text-white text-[6px] font-bold px-1.5 py-1 rounded-md uppercase tracking-tighter shadow-lg whitespace-nowrap border border-blue-500/50">
+                                    Ctrl+Enter 완료
+                                </div>
+                            </div>
+
+                            {/* 2. Transparency Bar (Moved to Bottom Left, Expanded Width) */}
+                            <div className="absolute -bottom-6 left-0 pointer-events-auto">
+                                <div className="bg-white/95 backdrop-blur-md px-1 py-0.5 rounded-md border border-slate-200 shadow-lg flex items-center gap-1.5 w-[120px]">
+                                    <div className="flex flex-col min-w-[30px]">
+                                        <span className="text-[5px] font-black text-slate-400 uppercase leading-none mb-0.5">박스 투명도</span>
+                                        <span className="text-[7px] font-mono font-black text-blue-600 leading-none">
+                                            {Math.round(toolSettings.textBgOpacity * 100)}%
+                                        </span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="1"
+                                        step="0.01"
+                                        value={toolSettings.textBgOpacity}
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        onChange={(e) => setToolSettings({ textBgOpacity: Number(e.target.value) })}
+                                        className="pdf-text-editor-slider-mini w-[70px] h-0.5"
+                                        title="배경 투명도 조절"
+                                    />
+                                </div>
                             </div>
                         </div>
                     )}
                 </div>
             </div>
+
+            {/* 종료 확인 다이얼로그 */}
+            {isExitDialogOpen && (
+                <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-slate-200 dark:border-slate-700 animate-in zoom-in-95 duration-200">
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                </svg>
+                            </div>
+                            <div>
+                                <h3 className="text-base font-bold text-slate-900 dark:text-white">저장하지 않은 변경 사항</h3>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">종료하기 전에 저장하시겠습니까?</p>
+                            </div>
+                        </div>
+                        <div className="flex flex-col gap-2 mt-4">
+                            <button
+                                onClick={async () => {
+                                    toggleExitDialog(false);
+                                    const success = await handleSave();
+                                    if (success) {
+                                        const anyWindow = window as any;
+                                        await anyWindow?.electronAPI?.forceQuitApp?.();
+                                    }
+                                }}
+                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 shadow-md shadow-blue-500/20 transition-all hover:-translate-y-0.5"
+                            >
+                                예 (저장 후 종료)
+                            </button>
+                            <button
+                                onClick={() => {
+                                    toggleExitDialog(false);
+                                    setIsClosingAfterSaveAs(true);
+                                    openSaveAsDialog();
+                                }}
+                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 transition-all"
+                            >
+                                다른 이름으로 저장 후 종료
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    toggleExitDialog(false);
+                                    const anyWindow = window as any;
+                                    await anyWindow?.electronAPI?.forceQuitApp?.();
+                                }}
+                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
+                            >
+                                아니요 (저장하지 않고 종료)
+                            </button>
+                            <button
+                                onClick={() => {
+                                    toggleExitDialog(false);
+                                    setIsClosingAfterSaveAs(false);
+                                }}
+                                className="w-full px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all"
+                            >
+                                취소 (계속 편집하기)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 미저장 경고 다이얼로그 — 파일 열기 전 표시 */}
+            {pendingFileOpen && (
+                <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-slate-200 animate-in zoom-in-95 duration-200">
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                                <span className="text-amber-600 text-xl">⚠️</span>
+                            </div>
+                            <h3 className="text-base font-bold text-slate-900">저장하지 않은 변경사항</h3>
+                        </div>
+                        <p className="text-sm text-slate-500 mb-5">
+                            현재 파일에 저장되지 않은 필기 내용이 있습니다.<br />
+                            저장하지 않고 다른 파일을 열면 작업 내용이 사라집니다.
+                        </p>
+                        <div className="flex flex-col gap-2">
+                            <button
+                                onClick={async () => {
+                                    const saved = await handleSave();
+                                    if (saved) {
+                                        const fn = pendingFileOpen;
+                                        setPendingFileOpen(null);
+                                        await fn!.fn();
+                                    }
+                                }}
+                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                            >
+                                저장하고 열기
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    const fn = pendingFileOpen;
+                                    setPendingFileOpen(null);
+                                    await fn!.fn();
+                                }}
+                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-red-50 text-red-600 hover:bg-red-100 transition-colors border border-red-200"
+                            >
+                                저장 안 하고 열기
+                            </button>
+                            <button
+                                onClick={() => setPendingFileOpen(null)}
+                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-100 transition-colors"
+                            >
+                                취소
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* 다른 이름으로 저장 다이얼로그 */}
             {isSaveAsDialogOpen && (
@@ -2159,21 +2270,30 @@ const PdfViewer: React.FC = () => {
                         <input
                             type="text"
                             value={saveAsName}
-                            onChange={(e) => setSaveAsName(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && confirmSaveAs()}
+                            onChange={(e) => {
+                                e.stopPropagation();
+                                setSaveAsName(e.target.value);
+                            }}
+                            onKeyDown={(e) => {
+                                e.stopPropagation();
+                                if (e.key === 'Enter') confirmSaveAs(false);
+
+                            }}
+                            onKeyUp={(e) => e.stopPropagation()}
+                            onKeyPress={(e) => e.stopPropagation()}
                             className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-6 text-slate-900"
                             placeholder="파일명 입력"
                             autoFocus
                         />
                         <div className="flex justify-end gap-3">
                             <button
-                                onClick={() => setIsSaveAsDialogOpen(false)}
+                                onClick={() => toggleSaveAsDialog(false)}
                                 className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-100 transition-colors"
                             >
                                 취소
                             </button>
                             <button
-                                onClick={confirmSaveAs}
+                                onClick={() => confirmSaveAs(isClosingAfterSaveAs)}
                                 className="px-5 py-2.5 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-500/20 transition-all hover:-translate-y-0.5"
                             >
                                 저장하기
@@ -2187,3 +2307,4 @@ const PdfViewer: React.FC = () => {
 };
 
 export default PdfViewer;
+

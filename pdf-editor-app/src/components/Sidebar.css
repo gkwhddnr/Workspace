@@ -1,0 +1,10 @@
+/* Sidebar.css */
+
+.sidebar-color-btn {
+  background-color: var(--bg-color);
+}
+
+.sidebar-stroke-preview {
+  width: var(--stroke-width);
+  height: var(--stroke-height);
+}

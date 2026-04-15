@@ -7,4 +7,5 @@ import org.springframework.stereotype.Repository
 @Repository
 interface WorkHistoryRepository : CrudRepository<WorkHistory, Long> {
     fun findAllByOrderBySavedAtDesc(): List<WorkHistory>
+    fun findAllByOriginalFileName(originalFileName: String): List<WorkHistory>
 }

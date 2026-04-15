@@ -16,6 +16,7 @@ export interface DrawingAnnotation {
     rect?: [number, number, number, number]; // [x, y, w, h] at scale=1.0
     angle?: number;
     imageSrc?: string; // Base64 or URL for image annotations
+    arrowHeadSize?: number; // Size of the arrowhead (length of tips)
 }
 
 export interface ToolSettings {
@@ -23,6 +24,7 @@ export interface ToolSettings {
     strokeWidth: number;
     fontSize: number;
     fontFamily: string;
+    arrowHeadSize: number;
 }
 
 /**

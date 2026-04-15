@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
-import { useAppStore, ActiveTab } from '../store/useAppStore';
+import { useAppStore, ActiveTab, PRESET_COLORS, DrawingTool } from '../store/useAppStore';
 import Sidebar from '../components/Sidebar';
 import AiPanel from '../components/AiPanel';
 import PdfViewer from '../components/viewers/PdfViewer';
 import WebViewer from '../components/viewers/WebViewer';
 import CodeViewer from '../components/viewers/CodeViewer';
 import ThemeModal from '../components/ThemeModal';
+import FlattenModal from '../components/FlattenModal';
 import {
     FileText, Globe, Code2, Bot, PanelLeftClose, PanelLeftOpen,
     PanelRightClose, PanelRightOpen
@@ -28,11 +29,23 @@ const MainLayout: React.FC = () => {
     } = useAppStore();
 
     const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
+    const [isFlattenModalOpen, setIsFlattenModalOpen] = useState(false);
 
     // Initialize Theme on Mount
     useEffect(() => {
         setThemeMode(themeMode);
     }, []);
+
+    const handleToolChange = (toolId: DrawingTool) => {
+        setActiveTool(toolId);
+        // Ensure the sidebar scrolls to the selected tool so the user sees it
+        setTimeout(() => {
+            const el = document.getElementById(`tool-${toolId}`);
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }, 50);
+    };
 
     // Global Keyboard Shortcuts
     useEffect(() => {
@@ -51,8 +64,20 @@ const MainLayout: React.FC = () => {
                 return;
             }
 
+            // PDF Flatten Modal (Ctrl + Shift + F)
+            if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') {
+                e.preventDefault();
+                setIsFlattenModalOpen(true);
+                return;
+            }
+
+            // 모달이 열려 있는 상태라면 다른 모든 단축키(Tools Switcher 등)의 작동을 차단합니다.
+            if (isFlattenModalOpen) {
+                return;
+            }
+
             // Color Picker Focus (Alt + C)
-            if (e.altKey && e.key.toLowerCase() === 'c') {
+            if (e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c') {
                 e.preventDefault();
                 const colorInput = document.getElementById('custom-color-picker');
                 if (colorInput) {
@@ -61,37 +86,69 @@ const MainLayout: React.FC = () => {
                 return;
             }
 
+            // Color Navigation (Alt + Shift + Arrows)
+            if (e.altKey && e.shiftKey) {
+                const arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+                if (arrowKeys.includes(e.key)) {
+                    e.preventDefault();
+                    const currentSetColor = toolSettings.color.toUpperCase();
+                    const currentIndex = PRESET_COLORS.findIndex(c => c.toUpperCase() === currentSetColor);
+                    
+                    // If current color is custom, default to first preset
+                    const index = currentIndex === -1 ? 0 : currentIndex;
+                    let nextIndex = index;
+
+                    if (e.key === 'ArrowRight') nextIndex = (index + 1) % PRESET_COLORS.length;
+                    else if (e.key === 'ArrowLeft') nextIndex = (index - 1 + PRESET_COLORS.length) % PRESET_COLORS.length;
+                    else if (e.key === 'ArrowDown') nextIndex = (index + 4) % PRESET_COLORS.length;
+                    else if (e.key === 'ArrowUp') nextIndex = (index - 4 + PRESET_COLORS.length) % PRESET_COLORS.length;
+
+                    setToolSettings({ color: PRESET_COLORS[nextIndex] });
+                    
+                    // Auto-scroll to color palette in sidebar
+                    setTimeout(() => {
+                        const el = document.getElementById('color-palette-section');
+                        if (el) {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }
+                    }, 50);
+                    
+                    return;
+                }
+            }
+
             // No modifier keys for these shortcuts
             if (!e.ctrlKey && !e.metaKey && !e.altKey) {
                 const key = e.key.toLowerCase();
 
                 // Tools Switcher
-                if (key === 's') setActiveTool('select');
-                else if (key === 'p') setActiveTool('pen');
-                else if (key === 'h') setActiveTool('highlight');
-                else if (key === 't') setActiveTool('text');
-                else if (key === 'q') setActiveTool('rect');
-                else if (key === 'c') setActiveTool('circle');
-                else if (key === 'e') setActiveTool('eraser');
-                else if (key === 'u') setActiveTool('arrow-up');
-                else if (key === 'd') setActiveTool('arrow-down');
-                else if (key === 'l') setActiveTool('arrow-left');
-                else if (key === 'r') setActiveTool('arrow-right');
-                else if (key === '1') setActiveTool('arrow-l-1');
-                else if (key === '2') setActiveTool('arrow-l-2');
-                else if (key === 'i') setActiveTool('image');
+                if (key === 's') handleToolChange('select');
+                else if (key === 'p') handleToolChange('pen');
+                else if (key === 'h') handleToolChange('highlight');
+                else if (key === 't') handleToolChange('text');
+                else if (key === 'q') handleToolChange('rect');
+                else if (key === 'c') handleToolChange('circle');
+                else if (key === 'e') handleToolChange('eraser');
+                else if (key === '3') handleToolChange('arrow');
+                else if (key === '1') handleToolChange('arrow-l-1');
+                else if (key === '2') handleToolChange('arrow-l-2');
+                else if (key === 'i') handleToolChange('image');
 
                 // Settings adjustments
                 else if (key === '[') {
+                    e.preventDefault();
                     setToolSettings({ strokeWidth: Math.max(1, toolSettings.strokeWidth - 1) });
                 }
                 else if (key === ']') {
+                    e.preventDefault();
                     setToolSettings({ strokeWidth: Math.min(20, toolSettings.strokeWidth + 1) });
                 }
-                else if (key === '-') {
+                else if (key === '-' || (e.altKey && e.key === '-')) {
+                    e.preventDefault();
                     setToolSettings({ fontSize: Math.max(8, toolSettings.fontSize - 2) });
                 }
-                else if (key === '=') {
+                else if (key === '=' || (e.altKey && e.key === '+')) {
+                    e.preventDefault();
                     setToolSettings({ fontSize: Math.min(100, toolSettings.fontSize + 2) });
                 }
             }
@@ -99,10 +156,10 @@ const MainLayout: React.FC = () => {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [setActiveTool, setToolSettings, toolSettings]);
+    }, [handleToolChange, setToolSettings, toolSettings, isFlattenModalOpen]);
 
     return (
-        <div className="h-screen w-screen flex flex-col overflow-hidden theme-text-main" style={{ background: 'var(--bg-app)' }}>
+        <div className="h-screen w-screen flex flex-col overflow-hidden theme-text-main">
 
             {/* ── Premium Header ── */}
             <header className="h-16 theme-bg-header flex items-center justify-between px-6 gap-4 z-50 shrink-0 border-b theme-border-subtle shadow-sm transition-all duration-500">
@@ -134,6 +191,16 @@ const MainLayout: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-3">
+                    {/* PDF Flatten Button */}
+                    <button
+                        onClick={() => setIsFlattenModalOpen(true)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-colors border border-indigo-200 shadow-sm mr-2"
+                        title="PDF 정리 (Ctrl+Shift+F)"
+                    >
+                        <FileText size={14} />
+                        <span className="hidden lg:block">PDF 정리</span>
+                    </button>
+
                     {/* Control Buttons */}
                     <div className="flex items-center gap-1 p-1 rounded-xl theme-border theme-btn">
                         <button
@@ -180,7 +247,10 @@ const MainLayout: React.FC = () => {
                                     <Sidebar />
                                 </div>
                             </Panel>
-                            <Separator className="w-4 -mx-1.5 bg-transparent hover:bg-indigo-500/10 transition-all cursor-col-resize active:bg-indigo-500/20 z-20 group relative">
+                            <Separator 
+                                onPointerUp={(e) => (e.target as HTMLElement).blur()}
+                                className="w-4 -mx-1.5 bg-transparent hover:bg-indigo-500/10 transition-all cursor-col-resize active:bg-indigo-500/20 z-20 group relative"
+                            >
                                 <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[1px] theme-bg-glass group-hover:bg-indigo-500/50 transition-colors" />
                                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-10 theme-bg-panel border theme-border rounded-lg shadow-md flex flex-col items-center justify-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all scale-90 group-hover:scale-100">
                                     <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
@@ -211,7 +281,10 @@ const MainLayout: React.FC = () => {
                     {/* Right AI Panel */}
                     {isRightPanelOpen && (
                         <>
-                            <Separator className="w-4 -mx-1.5 bg-transparent hover:bg-purple-500/10 transition-all cursor-col-resize active:bg-purple-500/20 z-20 group relative">
+                            <Separator 
+                                onPointerUp={(e) => (e.target as HTMLElement).blur()}
+                                className="w-4 -mx-1.5 bg-transparent hover:bg-purple-500/10 transition-all cursor-col-resize active:bg-purple-500/20 z-20 group relative"
+                            >
                                 <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[1px] theme-bg-glass group-hover:bg-purple-500/50 transition-colors" />
                                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-10 theme-bg-panel border theme-border rounded-lg shadow-md flex flex-col items-center justify-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all scale-90 group-hover:scale-100">
                                     <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
@@ -232,6 +305,7 @@ const MainLayout: React.FC = () => {
             </div>
 
             <ThemeModal isOpen={isThemeModalOpen} onClose={() => setIsThemeModalOpen(false)} />
+            <FlattenModal isOpen={isFlattenModalOpen} onClose={() => setIsFlattenModalOpen(false)} />
         </div>
     );
 };

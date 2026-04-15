@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useAppStore, ThemeMode } from '../store/useAppStore';
 import { Palette, X, Moon, Sun, Droplet, Paintbrush } from 'lucide-react';
 
@@ -10,6 +10,13 @@ interface ThemeModalProps {
 const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
     const { themeMode, setThemeMode, customThemeColor, setCustomThemeColor } = useAppStore();
     const [isVisible, setIsVisible] = useState(false);
+    const colorPreviewRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (themeMode === 'custom' && colorPreviewRef.current) {
+            colorPreviewRef.current.style.backgroundColor = customThemeColor;
+        }
+    }, [customThemeColor, themeMode, isVisible]);
 
     useEffect(() => {
         if (isOpen) {
@@ -70,7 +77,7 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                         <Palette size={24} />
                         <h2 className="text-xl font-bold">화면 모드 설정 (Alt+D)</h2>
                     </div>
-                    <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+                    <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-lg transition-colors" title="닫기">
                         <X size={20} />
                     </button>
                 </div>
@@ -79,6 +86,7 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                     {modes.map((mode) => (
                         <button
                             key={mode.id}
+                            title={mode.label}
                             onClick={() => {
                                 setThemeMode(mode.id);
                                 if (mode.id !== 'custom') {
@@ -124,14 +132,16 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                                 <div className="flex flex-col gap-3 shrink-0">
                                     <div className="relative w-full h-12 flex items-center justify-center group overflow-hidden rounded-xl border-2 border-white shadow-md">
                                         <div 
+                                            ref={colorPreviewRef}
                                             className="absolute inset-0 transition-transform group-hover:scale-110"
-                                            style={{ backgroundColor: customThemeColor }}
                                         />
                                         <input 
                                             type="color" 
                                             value={customThemeColor.startsWith('#') && customThemeColor.length === 7 ? customThemeColor : '#000000'} 
                                             onChange={(e) => setCustomThemeColor(e.target.value)}
                                             className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                                            title="배경색 선택"
+                                            placeholder="색상 선택"
                                         />
                                         <span className="relative text-[10px] font-black text-white mix-blend-difference uppercase">Pick Color</span>
                                     </div>
@@ -142,6 +152,8 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                                             value={customThemeColor.toUpperCase()}
                                             onChange={(e) => setCustomThemeColor(e.target.value)}
                                             className="bg-transparent border-none outline-none font-mono text-xs text-slate-700 w-full"
+                                            title="HEX 코드 직접 입력"
+                                            placeholder="#RRGGBB"
                                         />
                                     </div>
                                 </div>
@@ -163,6 +175,8 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                                                     value={c.value}
                                                     onChange={(e) => handleRgbChange(c.channel, e.target.value)}
                                                     className="w-full bg-transparent border-none text-center outline-none text-xs font-bold text-slate-700"
+                                                    title={`${c.label} 값 조절 (0-255)`}
+                                                    placeholder="0"
                                                 />
                                             </div>
                                         ))}

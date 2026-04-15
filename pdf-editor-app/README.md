@@ -1,370 +1,364 @@
-# 🎉 완전 구현 완료!
+# PDF Editor App
 
-## ✅ 구현된 모든 기능
-
-### 1. 파일 렌더링 ✨
-- **이미지 파일**: PNG, JPG, JPEG, GIF, WebP 완전 지원
-- **자동 스케일링**: 캔버스 크기에 맞게 자동 조정
-- **에러 핸들링**: 파일 로드 실패 시 명확한 오류 메시지
-- **플레이스홀더**: PDF 및 지원하지 않는 파일 형식 안내
-
-### 2. 편집 도구 🎨
-- **선택 도구** (Esc): 객체 선택 및 이동
-- **텍스트 도구** (Ctrl+T): 클릭하여 텍스트 입력
-- **형광펜** (Ctrl+H): 드래그하여 영역 하이라이트
-- **도형** (Ctrl+D): 사각형, 원, 삼각형, 별
-- **화살표** (Ctrl+Shift+A): 화살표 머리 포함
-- **Undo/Redo**: 히스토리 관리
-
-### 3. 파일 저장 💾
-- **Ctrl+S**: 현재 파일에 저장
-- **Ctrl+Shift+S**: 다른 이름으로 저장
-- **Canvas → PNG**: 캔버스 내용을 PNG로 내보내기
-- **파일 다이얼로그**: Electron 파일 시스템 연동
-
-### 4. 코드 에디터 💻
-- **Monaco Editor**: VSCode와 동일한 편집 환경
-- **7가지 언어**: HTML, CSS, JS, TS, Python, JSON, Markdown
-- **실행 기능**:
-  - HTML: 실시간 미리보기
-  - JavaScript: 즉시 실행 + 콘솔 출력 캡처
-  - Python: 안내 메시지
-- **단축키**: Ctrl+Enter (실행)
-
-### 5. AI 코파일럿 🤖
-- **💡 코드 설명**: 현재 코드 분석 및 설명
-- **⚡ 코드 최적화**: 자동 리팩토링 제안
-- **🐛 디버그**: 버그 찾기 및 수정 제안
-- **💬 대화형 AI**: 자유로운 질문 응답
-
-**AI 기능 상세:**
-- 코드 완성 제안 (문맥 인식)
-- var → const/let 자동 변환
-- 에러 패턴 분석
-- 성능 최적화 팁
-- React/JavaScript 가이드
-
-### 6. 단축키 시스템 ⌨️
-
-**파일:**
-- Ctrl+O: 파일 열기
-- Ctrl+S: 저장
-- Ctrl+Shift+S: 다른 이름으로 저장
-- Ctrl+W: 탭 닫기
-
-**편집:**
-- Ctrl+Z: 실행 취소
-- Ctrl+Y: 다시 실행
-- Delete: 선택 삭제
-
-**도구:**
-- Esc: 선택 도구
-- Ctrl+T: 텍스트
-- Ctrl+H: 형광펜
-- Ctrl+D: 도형
-- Ctrl+Shift+A: 화살표
-
-**보기:**
-- F12: 코드 에디터
-- Ctrl+Shift+C: AI 코파일럿
-- Ctrl+B: 사이드바
-- F11: 전체화면
-
-**코드 에디터:**
-- Ctrl+Enter: 코드 실행
-- Ctrl+Shift+E: 코드 설명
-
-**색상:**
-- 1-8: 프리셋 색상 빠른 선택
-
-### 7. UI/UX 개선 🎯
-- **다크 테마**: 눈이 편한 배색
-- **Tailwind CSS**: 깔끔한 디자인
-- **반응형 레이아웃**: 패널 크기 조정
-- **멀티탭**: 여러 파일 동시 작업
-- **상태 표시**: 수정됨, 저장됨 등
+PDF 및 이미지 파일에 필기, 주석, 도형을 추가할 수 있는 Electron 기반 데스크탑 편집 애플리케이션입니다.
 
 ---
 
 ## 🚀 실행 방법
 
-### 방법 1: 터미널 2개 (가장 안정적!)
-
-**터미널 1:**
 ```bash
+# 터미널 1: Vite 개발 서버
 npm run dev:vite
-```
 
-**터미널 2 (5초 후):**
-```bash
+# 터미널 2: Electron (5초 후)
 npm run dev:electron
-```
 
-### 방법 2: 한 번에 실행
-
-```bash
+# 또는 한 번에
 npm run dev
 ```
 
-### 방법 3: 배치 파일 (Windows)
-
+백엔드 (Spring Boot):
 ```bash
-start-dev.bat
+cd backend
+./gradlew bootRun
 ```
 
 ---
 
-## 📸 주요 기능 사용법
+## 🛠️ 기술 스택
 
-### 1. 파일 열기
-```
-1. Ctrl+O 또는 "파일 열기" 버튼
-2. 이미지 파일 선택 (PNG, JPG 등)
-3. 자동으로 캔버스에 렌더링됨!
-```
-
-### 2. 주석 추가
-```
-1. 툴바에서 도구 선택 (텍스트/형광펜/도형)
-2. 색상 선택
-3. 캔버스에서 드래그 또는 클릭
-4. 텍스트는 더블클릭하여 편집
-```
-
-### 3. 저장
-```
-1. Ctrl+S 누르기
-2. 파일 이름 입력
-3. PNG 형식으로 저장됨
-```
-
-### 4. 코드 작성 & 실행
-```
-1. F12로 코드 에디터 열기
-2. HTML 또는 JavaScript 선택
-3. 코드 입력
-4. Ctrl+Enter 또는 "실행" 버튼
-5. HTML: 미리보기 표시
-6. JS: 콘솔 출력 표시
-```
-
-### 5. AI 도움 받기
-```
-1. 코드 에디터에서 코드 작성
-2. 상단의 AI 버튼 클릭:
-   - "설명": 코드 분석
-   - "최적화": 개선 제안
-   - "디버그": 오류 찾기
-3. Ctrl+Shift+C로 코파일럿 열기
-4. 대화하며 질문하기
-```
+- **Frontend**: React + TypeScript + Vite + Tailwind CSS
+- **Desktop**: Electron
+- **PDF 렌더링**: PDF.js
+- **PDF 편집/저장**: pdf-lib
+- **Backend**: Kotlin + Spring Boot + H2 Database
+- **아키텍처**: Visitor Pattern, Command Pattern, Strategy Pattern, Factory Method, Iterator, Proxy, Mediator, State, Flyweight, Decorator Pattern![alt text](image.png)
 
 ---
 
-## 🎨 지원 파일 형식
+## ✏️ 편집 도구 완전 가이드
 
-### ✅ 완전 지원
-- PNG, JPG, JPEG, GIF, WebP
-- 자동 스케일링
-- 캔버스 편집 가능
+### 도구 목록 및 단축키
 
-### ⚠️ 부분 지원
-- PDF: 플레이스홀더 표시 (PDF.js 통합 필요)
-- HWP: 미지원 (향후 추가 예정)
+| 도구 | 단축키 | 설명 |
+|------|--------|------|
+| 선택 | `S` | 요소 선택, 이동, 크기 조절 |
+| 펜 | `P` | 자유 필기 |
+| 형광펜 | `H` | 반투명 마커 (텍스트 스냅 지원) |
+| 텍스트 | `T` | 텍스트 박스 생성 및 편집 |
+| 사각형 | `Q` | 사각형 도형 |
+| 원 | `C` | 타원형 도형 |
+| 지우개 | `E` | 요소 삭제 |
+| 화살표 | `3` | 방향 자동 감지 화살표 |
+| 꺾임 (원형) | `1` | ㄱ자형 화살표 |
+| 꺾임 (세로형) | `2` | ┌자형 화살표 |
+| 이미지 | `I` | 이미지 파일 삽입 |
 
----
+### 선택 도구 (S)
+- 요소 클릭으로 선택
+- 드래그로 이동
+- **화살표 선택 시**: 시작점(초록), 끝점(빨강) 핸들 표시 → 드래그로 방향·길이 조정
+- **도형/이미지 선택 시**: 4개 모서리 핸들 표시 → 드래그로 크기 조절
+- **Ctrl + 드래그**: PDF 텍스트, 텍스트 박스, 모든 도형 경계에 자동 스냅
 
-## 🤖 AI 코파일럿 상세
+### 펜 도구 (P)
+- 마우스 드래그로 자유 필기
+- 색상, 두께 설정 가능
 
-### 시뮬레이션 모드
-현재는 **시뮬레이션 모드**로 작동합니다:
-- 실제 AI 모델 없이도 작동
-- 코드 패턴 인식 및 분석
-- 미리 정의된 규칙 기반 제안
+### 형광펜 도구 (H)
+- 반투명 마커 효과
+- **텍스트 스냅 기능**:
+  - 드래그 중: raw 드래그 rect 미리보기
+  - 마우스 업 시: 드래그 rect에 걸친 글자들의 실제 bounding box로 자동 확장
+  - 다른 줄 침범 방지 (텍스트 런 Y 범위 기준)
+  - 글자 너비 정밀 계산 (`ctx.measureText()` 기반)
 
-### 실제 MCP 연결
-실제 MCP 서버와 연결하려면:
+### 텍스트 도구 (T)
+- PDF 빈 공간 클릭 → 새 텍스트 박스 생성
+- 기존 텍스트 박스 클릭 → 편집 모드
+- **실시간 미리보기**: 타이핑 시 canvas에 즉시 반영
+- V체크 또는 Ctrl+Enter로 완료
+- 폰트, 크기, 색상 설정 가능
+- 박스 투명도 슬라이더로 배경 조절
 
-1. **electron/main.js** 수정:
-```javascript
-// 170번째 줄 근처
-ipcMain.handle('ai:request', async (event, { action, payload }) => {
-  // 여기에 실제 MCP 서버 호출 추가
-  const response = await fetch('YOUR_MCP_SERVER_URL', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, payload })
-  });
-  return await response.json();
-});
-```
+### 화살표 도구 (3)
+- 드래그 방향으로 자동 화살표 방향 결정 (상/하/좌/우)
+- **Ctrl + 드래그**: 시작점/끝점이 PDF 텍스트, 텍스트 박스, 도형 경계에 스냅
 
-2. **MCP 서버 설정**:
-- Anthropic MCP SDK 설치
-- 서버 엔드포인트 설정
-- 인증 토큰 추가
+### 꺾임 화살표 (1, 2)
+- `1`: ㄱ자형 (오른쪽→아래)
+- `2`: ┌자형 (아래→오른쪽)
+- **Ctrl + 드래그**: 텍스트 및 도형 경계 스냅
 
----
+### 이미지 도구 (I)
+- 클릭 시 파일 탐색기 오픈 (PNG, JPG 등)
+- 클릭 위치에 이미지 삽입
+- 삽입 후 자동으로 선택 도구로 전환
+- 선택 도구로 크기/위치 조절 가능
 
-## 🔧 커스터마이징
-
-### 색상 변경
-`tailwind.config.mjs`:
-```javascript
-colors: {
-  primary: {
-    500: '#0078d4', // 여기를 변경
-  }
-}
-```
-
-### 기본 코드 템플릿
-`src/stores/workspaceStore.js`:
-```javascript
-editorCode: '// 여기에 기본 코드'
-```
-
-### 단축키 수정
-`src/hooks/useShortcuts.js`:
-```javascript
-const shortcuts = {
-  'ctrl+o': callbacks.openFile,
-  // 여기에 추가
-};
-```
+### 사각형/원 도구 (Q, C)
+- 드래그로 크기 결정
+- 원은 타원형 지원 (가로/세로 자유 조절)
+- **텍스트 스냅**: 형광펜과 동일하게 PDF 텍스트 영역에 맞게 자동 조정
 
 ---
 
-## 📦 빌드 & 배포
+## ⌨️ 전체 단축키
 
-### 개발 빌드
-```bash
-npm run build
+### 파일
+| 단축키 | 기능 |
+|--------|------|
+| `Ctrl + O` | 파일 열기 |
+| `Ctrl + S` | 저장 |
+| `Ctrl + Shift + S` | 다른 이름으로 저장 |
+
+### 편집
+| 단축키 | 기능 |
+|--------|------|
+| `Ctrl + Z` | 실행 취소 |
+| `Ctrl + Y` | 다시 실행 |
+| `Delete` / `Backspace` | 선택 요소 삭제 |
+
+### 도구
+| 단축키 | 도구 |
+|--------|------|
+| `S` | 선택 |
+| `P` | 펜 |
+| `H` | 형광펜 |
+| `T` | 텍스트 |
+| `Q` | 사각형 |
+| `C` | 원 |
+| `E` | 지우개 |
+| `3` | 화살표 |
+| `1` | 꺾임 (원형) |
+| `2` | 꺾임 (세로형) |
+| `I` | 이미지 |
+
+### 텍스트 편집 중
+| 단축키 | 기능 |
+|--------|------|
+| `Ctrl + Enter` | 텍스트 입력 완료 |
+| `Escape` | 취소 |
+| `Alt + ↑/→` | 폰트 크기 증가 |
+| `Alt + ↓/←` | 폰트 크기 감소 |
+
+### 색상
+| 단축키 | 기능 |
+|--------|------|
+| `Alt + Shift + ↑↓←→` | 프리셋 색상 탐색 |
+| `[` / `]` | 두께 감소/증가 |
+
+### 페이지 이동
+| 단축키 | 기능 |
+|--------|------|
+| `←` | 이전 페이지 |
+| `→` | 다음 페이지 |
+
+---
+
+## 🏗️ 아키텍처
+
+```
+src/
+├── components/viewers/PdfViewer.tsx   # 메인 편집기
+├── tools/next/                        # 도구 구현 (State Pattern)
+│   ├── ToolManager.ts                 # 도구 전환 관리
+│   ├── SelectTool.ts                  # 선택/이동/크기조절
+│   ├── ShapeTool.ts                   # 도형/화살표/형광펜
+│   ├── PenTool.ts                     # 펜/형광펜 자유 필기
+│   └── EraserTool.ts                  # 지우개
+├── renderers/
+│   └── CanvasRenderVisitor.ts         # Visitor 패턴 렌더링
+├── models/                            # RenderElement 계층
+│   ├── PathElement.ts                 # 펜/형광펜
+│   ├── ShapeElement.ts                # 도형/화살표
+│   ├── TextElement.ts                 # 텍스트
+│   └── ImageElement.ts                # 이미지
+├── commands/                          # Command 패턴 (Undo/Redo)
+│   ├── AddElementCommand.ts
+│   ├── DeleteElementCommand.ts
+│   └── UpdateElementCommand.ts
+└── store/
+    ├── useAppStore.ts                 # UI 상태 (도구, 색상 등)
+    └── usePdfEditorStore.ts           # 문서 상태 (elements, 페이지)
 ```
 
-### 프로덕션 EXE 생성
-```bash
-npm run package
-```
-
-결과: `release/` 폴더에 실행 파일 생성
-
----
-
-## 🐛 트러블슈팅
-
-### 문제: 파일이 렌더링되지 않음
-**해결:**
-1. 콘솔에서 오류 확인 (F12)
-2. 파일 크기가 너무 큰지 확인
-3. 지원되는 파일 형식인지 확인
-
-### 문제: AI가 응답하지 않음
-**해결:**
-1. Electron 환경에서 실행 중인지 확인
-2. 콘솔에서 "AI Request" 로그 확인
-3. 네트워크 오류 확인
-
-### 문제: Electron 창이 열리지 않음
-**해결:**
-1. 터미널 2개로 분리 실행
-2. Vite 서버가 먼저 시작되었는지 확인
-3. `http://localhost:5173` 접근 가능한지 확인
-
----
-
-## 🎯 다음 단계 (선택사항)
-
-1. **PDF.js 통합**: 실제 PDF 렌더링
-2. **HWP 지원**: HWP 파서 추가
-3. **실제 MCP 연결**: Anthropic API 연동
-4. **클라우드 저장**: Google Drive 연동
-5. **플러그인 시스템**: 확장 기능 지원
-6. **협업 기능**: 실시간 공동 편집
-
----
-
-## 🎉 완성도 체크리스트
-
-- [x] Electron 앱 실행
-- [x] 파일 열기/저장
-- [x] 이미지 렌더링
-- [x] 편집 도구 (텍스트/형광펜/도형/화살표)
-- [x] Undo/Redo
-- [x] 멀티탭
-- [x] 코드 에디터
-- [x] HTML/JS 실행
-- [x] AI 코파일럿
-- [x] 코드 설명/최적화/디버그
-- [x] 단축키 시스템
-- [x] 다크 테마
-- [x] 설정 페이지
-- [x] 오류 처리
-
-
-## 2026.03.19. Update details
-# 🚀 PDF Editor - Refactored with Design Patterns
-
-최신 디자인 패턴을 적용하여 확장성과 유지보수성을 극대화한 PDF 편집 및 코드 에디터 통합 애플리케이션입니다.
-
-## 🏗️ Architecture & Design Patterns
-
-코드의 복잡도를 낮추고 SOLID 원칙을 준수하기 위해 다음과 같은 디자인 패턴이 적용되었습니다.
+### 아키텍처 다이어그램
 
 ```mermaid
 graph TD
-    A[PdfViewer.tsx] -->|"ToolFactory.create(tool)"| B[Strategy Pattern]
-    B --> C[Concrete Strategies: Pen, Highlight, Shape, Arrow, Eraser]
-    A -->|"CommandHistory.push(cmd)"| D[Command Pattern]
-    D --> E[AddAnnotationCommand, EraseAnnotationCommand]
-    A --> F[Facade Pattern]
-    F --> G[PdfRenderService, WorkspaceApiService]
-    H[Backend Service] --> I[Template Method Pattern]
-    I --> J[UniqueFileStorage / OverwriteFileStorage]
+    subgraph UI["🖥️ UI Layer"]
+        PV["PdfViewer.tsx\n메인 편집기 컴포넌트"]
+        SB["Sidebar.tsx\n도구 & 색상 패널"]
+        ML["MainLayout.tsx\n전역 단축키 처리"]
+    end
+
+    subgraph Store["🗃️ State Store"]
+        AS["useAppStore\n활성 도구, 색상, 폰트 등 UI 상태"]
+        PS["usePdfEditorStore\nelements, 페이지, 히스토리 리비전"]
+    end
+
+    subgraph ToolLayer["🔧 Tool Layer (State Pattern)"]
+        TM["ToolManager\n도구 전환 Context"]
+        SEL["SelectTool\n선택·이동·핸들 편집·Ctrl 스냅"]
+        SHP["ShapeTool\n도형·화살표·형광펜·텍스트 스냅"]
+        PEN["PenTool\n펜·형광펜 자유 필기"]
+        ERA["EraserTool\n요소 삭제"]
+    end
+
+    subgraph ModelLayer["📦 Model Layer (Composite Pattern)"]
+        RE["RenderElement\n추상 기반 클래스"]
+        PATH["PathElement\n펜·형광펜 경로"]
+        SHAPE["ShapeElement\n도형·화살표"]
+        TEXT["TextElement\n텍스트 박스"]
+        IMG["ImageElement\n이미지"]
+    end
+
+    subgraph RenderLayer["🎨 Render Layer (Visitor Pattern)"]
+        CRV["CanvasRenderVisitor\n각 Element 타입별 Canvas 렌더링"]
+        LI["LayerIterator\n렌더링 순서 순회"]
+    end
+
+    subgraph CommandLayer["↩️ Command Layer (Command Pattern)"]
+        CH["CommandHistory\nUndo/Redo 스택 (페이지별)"]
+        ADD["AddElementCommand"]
+        DEL["DeleteElementCommand"]
+        UPD["UpdateElementCommand"]
+    end
+
+    subgraph BackendLayer["☁️ Backend Layer"]
+        WAS["WorkspaceApiService\nHTTP Facade"]
+        PC["PdfController\nSpring Boot REST API"]
+        FSS["FileStorageService\n파일 저장 (Template Method)"]
+        WR["PdfWorkspaceRepository\nH2 DB"]
+    end
+
+    PV -->|"activeTool, toolSettings"| AS
+    PV -->|"elements, historyRevision"| PS
+    SB -->|"setActiveTool, setToolSettings"| AS
+    ML -->|"단축키 → setActiveTool"| AS
+
+    PV -->|"pointerDown/Move/Up"| TM
+    TM -->|"switchTool()"| SEL & SHP & PEN & ERA
+
+    SHP -->|"getTextBlocks()"| PV
+    SHP -->|"getTextRuns()"| PV
+    SHP -->|"getPageElements()"| PS
+    SEL -->|"getTextBlocks()"| PV
+
+    SHP & PEN -->|"AddElementCommand"| CH
+    SEL -->|"UpdateElementCommand"| CH
+    CH -->|"execute/undo/redo"| ADD & DEL & UPD
+    ADD & DEL & UPD -->|"setElements()"| PS
+
+    PS -->|"currentPageElements"| PV
+    PV -->|"accept(visitor)"| CRV
+    LI -->|"next()"| RE
+    RE -->|"구현체"| PATH & SHAPE & TEXT & IMG
+    PATH & SHAPE & TEXT & IMG -->|"accept(visitor)"| CRV
+
+    PV -->|"HTTP 요청"| WAS
+    WAS -->|"REST"| PC
+    PC -->|"save/load"| FSS & WR
 ```
 
-### 적용된 주요 패턴
-1. **Strategy + Factory Method**: 각 그리기 도구(펜, 형광펜, 화살표 등)를 별도 클래스로 분리하여 `PdfViewer`의 거대한 조건문을 제거했습니다.
-2. **Command Pattern**: Undo/Redo를 배열 스냅샷 방식에서 액션 기반 명령 방식으로 전환하여 메모리 효율을 O(n)으로 개선했습니다.
-3. **Facade**: PDF.js 렌더링과 백엔드 API 통신 복잡도를 `PdfRenderService`와 `WorkspaceApiService` 뒤로 숨겨 UI 코드를 간결하게 유지합니다.
-4. **Template Method (Backend)**: 파일 저장 로직의 공통 구조(디렉토리 생성, 이름 정리, 복사)를 상위 클래스에 두고, 이름 충돌 해결 방식만 하위 클래스에서 정의합니다.
+### 아키텍처 설명
+
+#### 1. UI Layer
+- **PdfViewer.tsx**: 캔버스 렌더링, 마우스 이벤트 처리, 텍스트 입력 UI를 담당하는 핵심 컴포넌트. 모든 레이어의 진입점 역할을 합니다.
+- **Sidebar.tsx**: 도구 선택, 색상 팔레트, 두께/폰트 설정 패널.
+- **MainLayout.tsx**: 전역 키보드 단축키(도구 전환, 색상 탐색 등)를 처리합니다.
+
+#### 2. State Store
+- **useAppStore**: 활성 도구(`activeTool`), 색상·폰트 등 `toolSettings`, 파일 경로 등 UI 상태를 관리합니다.
+- **usePdfEditorStore**: 페이지별 `elements`(그려진 요소들), `historyRevision`, 저장 상태 등 문서 상태를 관리합니다.
+
+#### 3. Tool Layer — State Pattern
+- **ToolManager**: 현재 활성 도구 인스턴스를 보유하고 `onPointerDown/Move/Up` 이벤트를 위임합니다. 도구 전환 시 `switchTool()`로 상태를 교체합니다.
+- **SelectTool**: 요소 선택, 드래그 이동, 화살표/도형 핸들 편집, Ctrl 스냅(PDF 텍스트 + 도형 경계)을 처리합니다.
+- **ShapeTool**: 화살표, 사각형, 원, 형광펜을 그립니다. 형광펜은 마우스 업 시 PDF 텍스트 글자 bounding box로 자동 확장합니다.
+- **PenTool**: 자유 필기 경로를 실시간으로 그립니다.
+- **EraserTool**: 포인터 아래의 요소를 삭제합니다.
+
+#### 4. Model Layer — Composite Pattern
+- **RenderElement**: 모든 그래픽 요소의 추상 기반 클래스. `accept(visitor)`, `getBoundingBox()`, `move()`, `clone()` 인터페이스를 정의합니다.
+- **PathElement**: 펜/형광펜의 점 배열 경로.
+- **ShapeElement**: 화살표, 사각형, 원, 형광펜 도형. `shapeType`으로 세부 타입을 구분합니다.
+- **TextElement**: 텍스트 박스. 폰트, 크기, 색상, 줄 바꿈 정보를 포함합니다.
+- **ImageElement**: 삽입된 이미지. Base64 src와 위치/크기 정보를 포함합니다.
+
+#### 5. Render Layer — Visitor Pattern
+- **CanvasRenderVisitor**: `visitPath()`, `visitShape()`, `visitText()`, `visitImage()` 메서드로 각 Element 타입을 Canvas에 렌더링합니다. Element 클래스를 수정하지 않고 렌더링 로직을 분리합니다.
+- **LayerIterator**: `currentPageElements` 배열을 순서대로 순회하며 각 요소에 Visitor를 적용합니다.
+
+#### 6. Command Layer — Command Pattern
+- **CommandHistory**: 페이지별 Undo/Redo 스택. `push(command)`는 즉시 실행 후 스택에 추가합니다.
+- **AddElementCommand / DeleteElementCommand / UpdateElementCommand**: 각각 요소 추가/삭제/수정 작업을 캡슐화합니다. `undo()`로 역작업이 가능합니다.
+
+#### 7. Backend Layer
+- **WorkspaceApiService**: 백엔드 HTTP 호출을 캡슐화하는 Facade. PdfViewer는 직접 `fetch()`를 호출하지 않습니다.
+- **PdfController**: Spring Boot REST 컨트롤러. 저장, 워크스페이스 관리, 원본 PDF 백업 엔드포인트를 제공합니다.
+- **FileStorageService**: Template Method 패턴으로 파일 저장 전략(덮어쓰기/새 이름)을 분리합니다.
+- **PdfWorkspaceRepository**: H2 DB에 마지막 페이지, 주석 데이터, 백업 여부를 저장합니다.
 
 ---
 
-## ✅ 주요 기능
+## 📋 업데이트 이력
 
-### 1. PDF & 이미지 편집 🎨
-- **PDF.js 통합**: 실제 PDF 파일 렌더링 및 페이지 탐색 지원
-- **편집 도구**: 펜, 형광펜(텍스트 스냅), 사각형/원, 지능형 화살표(자석 스냅)
-- **논리적 지우개**: 주석만 선택적으로 제거
-- **Undo/Redo**: 페이지별 독립적인 명령 히스토리 관리
+### 2026-04-14
+- **텍스트 도구 선택 중 이전 도구 완전 차단**: handlePointerDown/Move/Up에 `activeTool === 'text'` 가드 추가
+- **저장 후 재오픈 시 필기 복구**: parsed.elements 형식 복원 로직 추가 (새 아키텍처 형식 지원)
+- **텍스트 입력 중 선택 상태 초기화**: isInputActive 시 selectedElementId 초기화
+- **지우개 ON/OFF 토글**: ON=커서 올리면 즉시 삭제, OFF=클릭 시 삭제. 말풍선 팝업 UI 추가
+- **파일 열기 전 미저장 경고 팝업**: 필기 있고 미저장 상태일 때만 표시. 저장하고 열기/저장 안 하고 열기/취소
+- **파일 로드 후 markSaved() 호출**: 기존 필기 복원 시 미저장으로 오인하던 문제 해결
 
-### 2. 백엔드 연동 & 지속성 💾
-- **PDF 작업 메모리**: 마지막으로 읽은 페이지 위치를 백엔드(`PdfWorkspace` API)에 저장하여 다시 열 때 자동 복구
-- **파일 저장**: `Downloads` 폴더에 원본 유지 또는 덮어쓰기 방식으로 저장 (Kotlin Spring Boot 기반)
-- **작업 이력**: 저장된 파일 히스토리 조회 기능
+### 2026-04-13
+- **텍스트 입력 중 도구 완전 차단**: handlePointerDown/Move/Up 모두에 isInputActive 가드 추가
+- **저장 후 재오픈 시 필기 복구**: parsed.elements 형식 복원 로직 추가 (새 아키텍처 형식 지원)
+- **텍스트 입력 중 선택 상태 초기화**: 텍스트 박스 열릴 때 이전 선택 도형 해제
+- **백업 파일 중복 저장 방지**: originals에 이미 존재하면 재저장 안 함
+- **페이지 입력 클릭 시 전체 선택**: 클릭 즉시 기존 숫자 전체 선택
+- **저장 완료 UI 메시지 통일**: 항상 "저장 완료" 표시
+- **아키텍처 다이어그램 추가**: README.md에 Mermaid 7개 레이어 시각화
+- **한글 파일명 인코딩 수정**: encodeURIComponent / URLDecoder.decode 처리
+- **agent-docs 폴더 구조 생성**: Mistake_Log, Daily_PR_Log, Implementation_Rules 분리
 
-### 3. 테마 커스터마이징 🌈
-- **사용자 색상**: RGB/HEX 입력을 통한 배경색 커스터마이징
-- **가독성 자동 조정**: 배경색 밝기를 분석하여 텍스트 색상(Dark/Light) 자동 전환
-- **영구 저장**: 테마 설정 및 색상 `localStorage` 저장
+### 2026-04-09
+- **아키텍처 전환 완성**: 레거시 DrawingAnnotation → RenderElement + Visitor Pattern
+- **화살표 도구 통합**: 4개(상/하/좌/우) → 1개(방향 자동 감지), 단축키 `3`
+- **형광펜 텍스트 스냅**: 2단계 방식(미리보기 → 글자 bounding box 확장), 글자 너비 정밀 계산
+- **선택 도구 완성**: 화살표/도형 핸들 편집, Ctrl 스냅(PDF 텍스트 + 도형)
+- **이미지 도구**: 파일 탐색기 연동, 크기/위치 조절
+- **텍스트 실시간 미리보기**: 타이핑/삭제 즉시 canvas 반영
+- **Undo/Redo 완성**: 모든 도구 CommandHistory 연동
+- **PDF 렌더링 안정성**: 중복 렌더 에러, Invalid page 에러 수정
 
-### 4. 코드 에디터 & AI 코파일럿 🤖
-- **Monaco Editor**: 7가지 언어 지원 및 실시간 실행 환경
-- **AI 도구**: 코드 설명, 최적화 제안, 디버깅 가이드 (시뮬레이션 모드 지원)
+### 2026-04-08
+- **선택 도구 고도화**: 도형 우선 선택, 텍스트 선택 정밀도 강화
+- **agent.md 도입**: AI 에이전트 작업 지침서 및 실수 방지 로그 시스템
+
+### 2026-03-19
+- **디자인 패턴 적용**: Strategy + Factory, Command, Facade, Template Method
+- **PDF.js 통합**: 실제 PDF 렌더링 및 페이지 탐색
+- **백엔드 연동**: Spring Boot API, 작업 메모리 저장/복구
+- **테마 커스터마이징**: 배경색 커스텀, 가독성 자동 조정
 
 ---
 
-## ⌨️ 핵심 단축키
+## � 저장 방식
 
-| 기능 | 단축키 |
-|---|---|
-| **파일 열기** | `Ctrl + O` |
-| **저장 / 다른 이름으로 저장** | `Ctrl + S` / `Ctrl + Shift + S` |
-| **Undo / Redo** | `Ctrl + Z` / `Ctrl + Y` |
-| **코드 에디터 / AI 열기** | `F12` / `Ctrl + Shift + C` |
-| **도구 선택** | `Esc` (선택), `Ctrl + T` (텍스트), `Ctrl + H` (형광펜), `Ctrl + D` (도형) |
+- **Ctrl+S**: 현재 파일에 주석 포함하여 PDF로 저장
+- **Ctrl+Shift+S**: 다른 이름으로 저장
+- 작업 내용은 백엔드에 자동 저장 (페이지 위치, 주석 데이터)
+- 파일 재오픈 시 이전 작업 상태 자동 복구
 
-
-**완성도: 90%** ✨
 ---
+
+## 🔧 커스터마이즈 포인트
+
+코드 내 `// [CUSTOMIZE]` 주석으로 표시된 위치에서 값 조정 가능:
+
+- `ShapeTool.ts`: 형광펜 텍스트 스냅 tolerance, 수직 padding
+- `SelectTool.ts`: Ctrl 스냅 threshold, 핸들 hit radius
+- `ShapeTool.ts`: 화살표 Ctrl 스냅 threshold

@@ -26,30 +26,27 @@ abstract class AbstractFileStorageService(
 ) {
     /** Template Method — the fixed algorithm skeleton. */
     fun save(file: MultipartFile, filename: String): WorkHistory {
-        val downloadsPath = ensureDownloadsDirectory()
-        val sanitized = sanitizeFilename(filename)
-        val targetPath = resolveTargetPath(downloadsPath, sanitized)   // ← Hook
+        val storagePath = ensureOriginalsDirectory()
+        val sanitized = Companion.sanitizeFilename(filename)
+        val targetPath = resolveTargetPath(storagePath, sanitized)   // ← Hook
         copyFile(file, targetPath)
         return saveToDatabase(file, filename, sanitized, targetPath)
     }
 
     /**
      * Hook — subclasses decide the final target [Path]:
-     *   - Unique strategy: appends _(1), _(2) … suffixes
-     *   - Overwrite strategy: always uses the same path
+     *   - Unique strategy: appends _(1), _(2) … suffixes (Save As)
+     *   - Overwrite strategy: always uses the same path (Save)
      */
-    protected abstract fun resolveTargetPath(downloadsPath: Path, sanitizedName: String): Path
+    protected abstract fun resolveTargetPath(storagePath: Path, sanitizedName: String): Path
 
     // ── Fixed steps (private, not overridable) ──────────────────────────────
 
-    private fun ensureDownloadsDirectory(): Path {
-        val path = Paths.get(System.getProperty("user.home"), "Downloads")
+    private fun ensureOriginalsDirectory(): Path {
+        val path = Paths.get("data", "originals")
         if (!Files.exists(path)) Files.createDirectories(path)
         return path
     }
-
-    private fun sanitizeFilename(name: String): String =
-        name.replace("""[\\/:*?"<>|]""".toRegex(), "_")
 
     private fun copyFile(file: MultipartFile, target: Path) {
         Files.copy(file.inputStream, target, StandardCopyOption.REPLACE_EXISTING)
@@ -69,6 +66,14 @@ abstract class AbstractFileStorageService(
         )
         return workHistoryRepository.save(history)
     }
+
+    companion object {
+        /**
+         * Helper to ensure the filename is valid for the OS.
+         */
+        fun sanitizeFilename(name: String): String =
+            name.replace("""[\\/:*?"<>|]""".toRegex(), "_")
+    }
 }
 
 /**
@@ -80,15 +85,15 @@ class UniqueFileStorageService(
     workHistoryRepository: WorkHistoryRepository
 ) : AbstractFileStorageService(workHistoryRepository) {
 
-    override fun resolveTargetPath(downloadsPath: Path, sanitizedName: String): Path {
+    override fun resolveTargetPath(storagePath: Path, sanitizedName: String): Path {
         var finalName = sanitizedName
-        var target = downloadsPath.resolve(finalName)
+        var target = storagePath.resolve(finalName)
         var counter = 1
         while (Files.exists(target)) {
             val base = sanitizedName.substringBeforeLast(".")
             val ext  = sanitizedName.substringAfterLast(".", "pdf")
-            finalName = "${base}_($counter).$ext"
-            target = downloadsPath.resolve(finalName)
+            finalName = "${base}_(${counter}).$ext"
+            target = storagePath.resolve(finalName)
             counter++
         }
         return target
@@ -104,8 +109,8 @@ class OverwriteFileStorageService(
     workHistoryRepository: WorkHistoryRepository
 ) : AbstractFileStorageService(workHistoryRepository) {
 
-    override fun resolveTargetPath(downloadsPath: Path, sanitizedName: String): Path =
-        downloadsPath.resolve(sanitizedName)
+    override fun resolveTargetPath(storagePath: Path, sanitizedName: String): Path =
+        storagePath.resolve(sanitizedName)
 }
 
 /**
@@ -118,12 +123,40 @@ class FileStorageService(
     private val overwriteStrategy: OverwriteFileStorageService,
     private val workHistoryRepository: WorkHistoryRepository
 ) {
-    fun savePdfToDownloads(file: MultipartFile, filename: String): WorkHistory =
+    fun savePdfToWorkspace(file: MultipartFile, filename: String): WorkHistory =
         uniqueStrategy.save(file, filename)
 
-    fun savePdfToDownloadsOverwrite(file: MultipartFile, filename: String): WorkHistory =
+    fun savePdfToWorkspaceOverwrite(file: MultipartFile, filename: String): WorkHistory =
         overwriteStrategy.save(file, filename)
 
     fun getHistory(): List<WorkHistory> =
         workHistoryRepository.findAllByOrderBySavedAtDesc()
+
+    private fun buildTargetPath(filename: String): Path {
+        val sanitized = AbstractFileStorageService.sanitizeFilename(filename)
+        // Ensure only one .pdf extension, case-insensitive
+        val targetName = if (sanitized.lowercase().endsWith(".pdf")) {
+            sanitized
+        } else {
+            "$sanitized.pdf"
+        }
+        val targetPath = Paths.get("data", "originals", targetName)
+        println("[FileStorageService] buildTargetPath: filename=$filename -> targetPath=${targetPath.toAbsolutePath()}")
+        return targetPath
+    }
+
+    fun saveOriginalPdf(file: MultipartFile, filename: String) {
+        println("[FileStorageService] saveOriginalPdf: starting save for $filename")
+        val path = buildTargetPath(filename)
+        println("[FileStorageService] saveOriginalPdf: saving to ${path.toAbsolutePath()}")
+        val parent = path.parent
+        if (!Files.exists(parent)) Files.createDirectories(parent)
+        Files.copy(file.inputStream, path, StandardCopyOption.REPLACE_EXISTING)
+    }
+
+    fun getOriginalPdf(filename: String): Path? {
+        val target = buildTargetPath(filename)
+        println("[FileStorageService] getOriginalPdf: looking for ${target.toAbsolutePath()}")
+        return if (Files.exists(target)) target else null
+    }
 }

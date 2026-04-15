@@ -1,20 +1,30 @@
 import { create } from 'zustand';
 
 export type ActiveTab = 'pdf' | 'web' | 'code';
-export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2' | 'image';
+export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2' | 'image';
 export type ThemeMode = 'white' | 'translucent' | 'dark' | 'custom';
+
+export const PRESET_COLORS = [
+    '#2563EB', '#DC2626', '#16A34A', '#D97706',
+    '#7C3AED', '#0891B2', '#DB2777', '#111827',
+    '#FFFFFF', '#000000', '#FBBF24', '#10B981',
+];
 
 interface ToolSettings {
     color: string;
     fontSize: number;
     fontFamily: string;
     strokeWidth: number;
+    textBgOpacity: number;
+    arrowHeadSize: number;
 }
 
 interface AppState {
     // Layout
     isLeftPanelOpen: boolean;
     isRightPanelOpen: boolean;
+    toggleLeftPanel: () => void;
+    toggleRightPanel: () => void;
     toggleLeftPanel: () => void;
     toggleRightPanel: () => void;
 
@@ -33,11 +43,14 @@ interface AppState {
     setActiveTool: (tool: DrawingTool) => void;
     toolSettings: ToolSettings;
     setToolSettings: (settings: Partial<ToolSettings>) => void;
+    // Eraser mode: true = instant delete on click, false = drag to erase
+    eraserInstantDelete: boolean;
+    setEraserInstantDelete: (value: boolean) => void;
 
     // File State
     currentFilePath: string | null;
     currentFileName: string | null;
-    setCurrentFile: (path: string, name: string) => void;
+    setCurrentFile: (path: string | null, name: string | null) => void;
 
     // Web Viewer
     webUrl: string;
@@ -46,6 +59,8 @@ interface AppState {
     // Code Editor
     codeLanguage: 'html' | 'css' | 'javascript';
     setCodeLanguage: (lang: 'html' | 'css' | 'javascript') => void;
+    sharedCode: { html: string; css: string; javascript: string };
+    setSharedCode: (code: { html: string; css: string; javascript: string }) => void;
 
     // AI Copilot
     aiAgent: 'gemini' | 'chatgpt' | 'cursor' | 'antigravity';
@@ -151,14 +166,18 @@ export const useAppStore = create<AppState>((set) => ({
     setActiveTool: (tool) => set({ activeTool: tool }),
     toolSettings: {
         color: '#2563EB',
-        fontSize: 16,
+        fontSize: 12,
         fontFamily: 'Inter, sans-serif',
         strokeWidth: 2,
+        textBgOpacity: 0.5,
+        arrowHeadSize: 12,
     },
     setToolSettings: (settings) =>
         set((s) => ({ toolSettings: { ...s.toolSettings, ...settings } })),
 
-    // File defaults
+    // Eraser mode defaults: ON = instant delete on click
+    eraserInstantDelete: true,
+    setEraserInstantDelete: (value) => set({ eraserInstantDelete: value }),
     currentFilePath: null,
     currentFileName: null,
     setCurrentFile: (path, name) => set({ currentFilePath: path, currentFileName: name }),
@@ -170,6 +189,36 @@ export const useAppStore = create<AppState>((set) => ({
     // Code Editor defaults
     codeLanguage: 'html',
     setCodeLanguage: (lang) => set({ codeLanguage: lang }),
+    sharedCode: {
+        html: `<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>나의 페이지</title>
+</head>
+<body>
+  <h1>안녕하세요! 👋</h1>
+  <p>코드 에디터에서 편집한 내용이 웹 서퍼에 실시간으로 반영됩니다.</p>
+</body>
+</html>`,
+        css: `/* CSS 스타일시트 */
+body {
+  margin: 0;
+  padding: 2rem;
+  font-family: 'Inter', sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: white;
+}`,
+        javascript: `// JavaScript 코드
+console.log('실시간 프리뷰가 작동 중입니다!');`
+    },
+    setSharedCode: (code) => set({ sharedCode: code }),
 
     // AI Copilot defaults
     aiAgent: 'gemini',

@@ -9,6 +9,8 @@ export interface WorkspaceData {
     filename: string;
     lastViewedPage: number;
     updatedAt: string;
+    projectData?: string;
+    hasOriginalPdf?: boolean;
 }
 
 export class WorkspaceApiService {
@@ -56,6 +58,60 @@ export class WorkspaceApiService {
             body: formData,
         });
         if (!res.ok) throw new Error(`Save-as failed: HTTP ${res.status}`);
+    }
+
+    /** Save JSON project data (vectors, texts, images). */
+    async saveProjectData(filename: string, projectData: string): Promise<void> {
+        try {
+            console.log(`[WorkspaceApiService] saveProjectData starting for ${filename}`);
+            const res = await fetch(`${BASE}/workspace/project-data`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+                body: JSON.stringify({ filename, projectData }),
+            });
+            if (!res.ok) throw new Error(`ProjectData save failed: HTTP ${res.status}`);
+            console.log(`[WorkspaceApiService] saveProjectData success for ${filename}`);
+        } catch (e) {
+            console.error('[WorkspaceApiService] saveProjectData failed:', e);
+        }
+    }
+
+    /** Upload unflattened PDF for later restoration. */
+    async uploadOriginalPdf(filename: string, blob: Blob): Promise<void> {
+        try {
+            console.log(`[WorkspaceApiService] uploadOriginalPdf starting for ${filename}, size=${blob.size}`);
+            const formData = new FormData();
+            formData.append('file', blob, filename);
+            // Send filename as plain text — Spring's UTF-8 encoding filter handles decoding
+            formData.append('filename', filename);
+            const res = await fetch(`${BASE}/workspace/original-pdf`, {
+                method: 'POST',
+                body: formData,
+            });
+            if (!res.ok) throw new Error(`OriginalPdf upload failed: HTTP ${res.status}`);
+            console.log(`[WorkspaceApiService] uploadOriginalPdf success for ${filename}`);
+        } catch (e) {
+            console.error('[WorkspaceApiService] uploadOriginalPdf failed:', e);
+            throw e;
+        }
+    }
+
+    /** Download unflattened PDF from backend. */
+    async fetchOriginalPdf(filename: string): Promise<Blob | null> {
+        try {
+            console.log(`[WorkspaceApiService] fetchOriginalPdf requesting for ${filename}`);
+            const res = await fetch(`${BASE}/workspace/original-pdf?filename=${encodeURIComponent(filename)}`);
+            if (res.status === 404) {
+                console.warn(`[WorkspaceApiService] fetchOriginalPdf: 404 NOT FOUND for ${filename}`);
+                return null;
+            }
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            console.log(`[WorkspaceApiService] fetchOriginalPdf success for ${filename}`);
+            return await res.blob();
+        } catch (e) {
+            console.error('[WorkspaceApiService] fetchOriginalPdf failed:', e);
+            return null;
+        }
     }
 }
 

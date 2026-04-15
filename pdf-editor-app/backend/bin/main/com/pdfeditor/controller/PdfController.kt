@@ -13,7 +13,15 @@ import com.pdfeditor.model.PdfWorkspace
 import com.pdfeditor.repository.PdfWorkspaceRepository
 import java.time.LocalDateTime
 
-data class WorkspaceRequest(val filename: String, val lastViewedPage: Int)
+data class WorkspaceRequest(
+    val filename: String = "",
+    val lastViewedPage: Int = 1
+)
+
+data class ProjectDataRequest(
+    val filename: String = "",
+    val projectData: String = ""
+)
 
 @RestController
 @RequestMapping("/api/pdf")
@@ -29,7 +37,7 @@ class PdfController(
         @RequestParam("filename") filename: String
     ): ResponseEntity<WorkHistory> {
         return try {
-            val savedHistory = fileStorageService.savePdfToDownloads(file, filename)
+            val savedHistory = fileStorageService.savePdfToWorkspace(file, filename)
             ResponseEntity.ok(savedHistory)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -43,7 +51,7 @@ class PdfController(
         @RequestParam("filename") filename: String
     ): ResponseEntity<WorkHistory> {
         return try {
-            val savedHistory = fileStorageService.savePdfToDownloadsOverwrite(file, filename)
+            val savedHistory = fileStorageService.savePdfToWorkspaceOverwrite(file, filename)
             ResponseEntity.ok(savedHistory)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -126,5 +134,61 @@ class PdfController(
             e.printStackTrace()
             ResponseEntity.internalServerError().build()
         }
+    }
+
+    @PostMapping("/workspace/project-data")
+    fun saveProjectData(@RequestBody request: ProjectDataRequest): ResponseEntity<Void> {
+        val ws = pdfWorkspaceRepository.findByFilename(request.filename)
+        return if (ws != null) {
+            ws.projectData = request.projectData
+            ws.updatedAt = LocalDateTime.now()
+            pdfWorkspaceRepository.save(ws)
+            ResponseEntity.ok().build()
+        } else {
+            // Create implicitly if it doesn't exist? It should exist if the file was loaded, 
+            // but let's safely create it.
+            val newWs = PdfWorkspace(filename = request.filename, projectData = request.projectData)
+            pdfWorkspaceRepository.save(newWs)
+            ResponseEntity.ok().build()
+        }
+    }
+
+    @PostMapping("/workspace/original-pdf")
+    fun uploadOriginalPdf(@RequestParam("file") file: MultipartFile, @RequestParam("filename") filename: String): ResponseEntity<Void> {
+        println("[PdfController] uploadOriginalPdf: filename=$filename, fileSize=${file.size}")
+        fileStorageService.saveOriginalPdf(file, filename)
+        val ws = pdfWorkspaceRepository.findByFilename(filename) ?: PdfWorkspace(filename = filename)
+        ws.hasOriginalPdf = true
+        ws.updatedAt = LocalDateTime.now()
+        pdfWorkspaceRepository.save(ws)
+        return ResponseEntity.ok().build()
+    }
+
+    /** Reset hasOriginalPdf flag for all workspaces (call after manually deleting originals folder) */
+    @PostMapping("/workspace/reset-originals")
+    fun resetOriginals(): ResponseEntity<String> {
+        val all = pdfWorkspaceRepository.findAll()
+        all.forEach { ws ->
+            ws.hasOriginalPdf = false
+            ws.updatedAt = LocalDateTime.now()
+            pdfWorkspaceRepository.save(ws)
+        }
+        println("[PdfController] resetOriginals: cleared hasOriginalPdf for ${all.size} workspaces")
+        return ResponseEntity.ok("Reset ${all.size} workspaces")
+    }
+
+    @GetMapping("/workspace/original-pdf")
+    fun downloadOriginalPdf(@RequestParam("filename") filename: String): ResponseEntity<org.springframework.core.io.Resource> {
+        println("[PdfController] downloadOriginalPdf: filename=$filename")
+        val path = fileStorageService.getOriginalPdf(filename)
+        if (path != null) {
+            val resource = org.springframework.core.io.UrlResource(path.toUri())
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"${filename}\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(resource)
+        }
+        println("[PdfController] downloadOriginalPdf: file NOT FOUND for filename=$filename")
+        return ResponseEntity.notFound().build()
     }
 }

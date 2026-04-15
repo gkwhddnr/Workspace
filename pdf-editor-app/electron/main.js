@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs').promises;
 
 let mainWindow;
+let forceQuit = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -15,7 +16,8 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
-      webSecurity: false
+      webSecurity: false,
+      webviewTag: true
     },
     titleBarStyle: 'default',
     autoHideMenuBar: true,
@@ -28,14 +30,43 @@ function createWindow() {
   if (isDev) {
     console.log('Development mode - Loading from localhost:5173');
     mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
+    // 사용자가 원할 때만 F12로 열기 위해 자동 실행 주석 처리
+    // mainWindow.webContents.openDevTools();
   } else {
     console.log('Production mode - Loading from dist');
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
+  // F12 키를 누르면 개발자도구(DevTools) 토글 이벤트 설정
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F12' && input.type === 'keyDown') {
+      mainWindow.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
+
+  mainWindow.on('close', (e) => {
+    if (!forceQuit) {
+      e.preventDefault();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('app:request-close');
+      }
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // 웹 서퍼(iframe) 사용을 위해 X-Frame-Options 및 CSP 헤더 강제 제거
+  const { session } = require('electron');
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = Object.assign({}, details.responseHeaders);
+    delete responseHeaders['X-Frame-Options'];
+    delete responseHeaders['x-frame-options'];
+    delete responseHeaders['Content-Security-Policy'];
+    delete responseHeaders['content-security-policy'];
+    callback({ cancel: false, responseHeaders });
   });
 
   console.log('Window created successfully');
@@ -72,6 +103,16 @@ app.on('window-all-closed', () => {
 });
 
 // ==================== IPC Handlers ====================
+
+// 강제 종료 (저장 확인 후 renderer 에서 호출)
+ipcMain.handle('app:force-quit', () => {
+  forceQuit = true;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.close();
+  }
+  setTimeout(() => app.quit(), 300);
+});
+
 
 // 파일 열기 다이얼로그
 ipcMain.handle('dialog:openFile', async (event, options = {}) => {

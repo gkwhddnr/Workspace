@@ -17,5 +17,11 @@ data class PdfWorkspace(
     var lastViewedPage: Int = 1,
 
     @Column(nullable = false)
-    var updatedAt: LocalDateTime = LocalDateTime.now()
+    var updatedAt: LocalDateTime = LocalDateTime.now(),
+
+    @Column(columnDefinition = "TEXT")
+    var projectData: String? = null,
+
+    @Column(nullable = true)
+    var hasOriginalPdf: Boolean? = false
 )

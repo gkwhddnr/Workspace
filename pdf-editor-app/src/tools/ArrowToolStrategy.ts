@@ -31,6 +31,7 @@ export class ArrowToolStrategy implements DrawingToolStrategy {
             color: settings.color,
             strokeWidth: settings.strokeWidth,
             opacity: 1.0,
+            arrowHeadSize: settings.arrowHeadSize,
         };
     }
 
@@ -61,11 +62,24 @@ export class ArrowToolStrategy implements DrawingToolStrategy {
 
     render(ctx: CanvasRenderingContext2D, annotation: DrawingAnnotation, scale: number): void {
         if (annotation.points.length < 2) return;
-        const from = annotation.points[0];
-        const to = annotation.points[1];
-        const headlen = (10 + annotation.strokeWidth * 2) * scale;
+        const pts = annotation.points;
+        const to = pts[pts.length - 1];
+        
+        // Determine the rendering path and the segment for the arrowhead
+        let renderPts: { x: number, y: number }[] = [];
+        let arrowheadSegment: { from: {x:number, y:number}, to: {x:number, y:number} };
 
-        let angle = annotation.angle ?? Math.atan2(to.y - from.y, to.x - from.x);
+        if (annotation.type.startsWith('arrow-l-') && pts.length === 2) {
+            const elbow = getElbowPoint(pts[0], pts[1], annotation.type);
+            renderPts = [pts[0], elbow, pts[1]];
+            arrowheadSegment = { from: elbow, to: pts[1] };
+        } else {
+            renderPts = pts;
+            arrowheadSegment = { from: pts[pts.length - 2], to: pts[pts.length - 1] };
+        }
+
+        const headlen = (annotation.arrowHeadSize || 12) * scale;
+        const angle = Math.atan2(arrowheadSegment.to.y - arrowheadSegment.from.y, arrowheadSegment.to.x - arrowheadSegment.from.x);
 
         ctx.save();
         ctx.strokeStyle = annotation.color;
@@ -76,18 +90,13 @@ export class ArrowToolStrategy implements DrawingToolStrategy {
 
         // Draw shaft
         ctx.beginPath();
-        ctx.moveTo(from.x * scale, from.y * scale);
-        if (annotation.type.startsWith('arrow-l-')) {
-            const elbow = getElbowPoint(from, to, annotation.type);
-            ctx.lineTo(elbow.x * scale, elbow.y * scale);
-            ctx.lineTo(to.x * scale, to.y * scale);
-            angle = Math.atan2(to.y - elbow.y, to.x - elbow.x);
-        } else {
-            ctx.lineTo(to.x * scale, to.y * scale);
+        ctx.moveTo(renderPts[0].x * scale, renderPts[0].y * scale);
+        for (let i = 1; i < renderPts.length; i++) {
+            ctx.lineTo(renderPts[i].x * scale, renderPts[i].y * scale);
         }
         ctx.stroke();
 
-        // Draw arrowhead
+        // Draw arrowhead at final destination
         ctx.beginPath();
         ctx.moveTo(to.x * scale, to.y * scale);
         ctx.lineTo(
@@ -104,16 +113,22 @@ export class ArrowToolStrategy implements DrawingToolStrategy {
     }
 
     hitTest(annotation: DrawingAnnotation, pos: { x: number; y: number }, radius: number): boolean {
-        if (annotation.points.length < 2) return false;
-        const from = annotation.points[0];
-        const to = annotation.points[1];
-
-        if (annotation.type.startsWith('arrow-l-')) {
-            const elbow = getElbowPoint(from, to, annotation.type);
-            const d1 = distancePointToSegment(pos.x, pos.y, from.x, from.y, elbow.x, elbow.y);
-            const d2 = distancePointToSegment(pos.x, pos.y, elbow.x, elbow.y, to.x, to.y);
-            return Math.min(d1, d2) < radius + 5;
+        const pts = annotation.points;
+        if (pts.length < 2) return false;
+        
+        let segments: { x: number, y: number }[] = [];
+        if (annotation.type.startsWith('arrow-l-') && pts.length === 2) {
+            const elbow = getElbowPoint(pts[0], pts[1], annotation.type);
+            segments = [pts[0], elbow, pts[1]];
+        } else {
+            segments = pts;
         }
-        return distancePointToSegment(pos.x, pos.y, from.x, from.y, to.x, to.y) < radius + 5;
+
+        for (let i = 0; i < segments.length - 1; i++) {
+            if (distancePointToSegment(pos.x, pos.y, segments[i].x, segments[i].y, segments[i+1].x, segments[i+1].y) < radius + 5) {
+                return true;
+            }
+        }
+        return false;
     }
 }

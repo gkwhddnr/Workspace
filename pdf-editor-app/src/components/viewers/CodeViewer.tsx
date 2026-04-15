@@ -33,7 +33,7 @@ body {
 }
 
 .container {
-  background: white;
+  background: white;    
   border-radius: 12px;
   padding: 2rem;
   box-shadow: 0 20px 60px rgba(0,0,0,0.2);
@@ -56,15 +56,14 @@ document.addEventListener('DOMContentLoaded', () => {
 };
 
 const CodeViewer: React.FC = () => {
-    const { codeLanguage, setCodeLanguage } = useAppStore();
-    const [code, setCode] = useState<Record<string, string>>(DEFAULT_CODE);
+    const { codeLanguage, setCodeLanguage, sharedCode, setSharedCode, setWebUrl, setActiveTab } = useAppStore();
     const [showPreview, setShowPreview] = useState(false);
 
-    const currentCode = code[codeLanguage];
+    const currentCode = sharedCode[codeLanguage];
 
     const handleCodeChange = (val?: string) => {
         if (val !== undefined) {
-            setCode((prev) => ({ ...prev, [codeLanguage]: val }));
+            setSharedCode({ ...sharedCode, [codeLanguage]: val });
         }
     };
 
@@ -87,6 +86,11 @@ const CodeViewer: React.FC = () => {
         codeLanguage === 'css' ? `<style>${currentCode}</style><div class="container"><p>CSS 미리보기</p></div>` :
             `<script>${currentCode}<\/script><p>콘솔 출력은 DevTools를 확인하세요.</p>`;
 
+    const handleSendToWeb = () => {
+        setWebUrl('workspace://preview');
+        setActiveTab('web');
+    };
+
     return (
         <div className="flex-1 flex flex-col gap-2 min-h-0">
             {/* Toolbar */}
@@ -104,10 +108,16 @@ const CodeViewer: React.FC = () => {
                 ))}
                 <div className="ml-auto flex items-center gap-2">
                     <button
+                        onClick={handleSendToWeb}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 transition-colors shadow-sm"
+                    >
+                        <Play size={13} fill="currentColor" /> 웹 서퍼에서 보기
+                    </button>
+                    <button
                         onClick={() => setShowPreview(!showPreview)}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ${showPreview ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                     >
-                        <Play size={13} /> {showPreview ? '에디터로 돌아가기' : '미리보기 실행'}
+                        {showPreview ? '에디터로 돌아가기' : '빠른 미리보기'}
                     </button>
                     <button onClick={handleCopy} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded text-xs font-medium transition-colors">
                         <Copy size={13} /> 복사
