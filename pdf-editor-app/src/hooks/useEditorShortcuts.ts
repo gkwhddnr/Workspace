@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 
 interface ShortcutProps {
-    activeTab: string;
+    activeTabs: string[];
     pdfDoc: any;
     imageDoc: any;
     numPages: number;
@@ -11,6 +11,7 @@ interface ShortcutProps {
     saveStatus: string | null;
     isInputActive: boolean;
     toolSettings: any;
+    activeTool: string | null | undefined;
     editingId: string | null;
     handleUndo: () => void;
     handleRedo: () => void;
@@ -21,10 +22,14 @@ interface ShortcutProps {
     setToolSettings: (settings: any) => void;
     toggleExitDialog: (isOpen: boolean) => void;
     showSettingIndicator: (label: string, value: any) => void;
+    showToolIndicator: (value: number) => void;
 }
 
+/**
+ * useEditorShortcuts hook manages all global keyboard shortcuts for the PDF editor.
+ */
 export const useEditorShortcuts = ({
-    activeTab,
+    activeTabs,
     pdfDoc,
     imageDoc,
     numPages,
@@ -34,6 +39,7 @@ export const useEditorShortcuts = ({
     saveStatus,
     isInputActive,
     toolSettings,
+    activeTool,
     editingId,
     handleUndo,
     handleRedo,
@@ -43,7 +49,8 @@ export const useEditorShortcuts = ({
     setCurrentPage,
     setToolSettings,
     toggleExitDialog,
-    showSettingIndicator
+    showSettingIndicator,
+    showToolIndicator
 }: ShortcutProps) => {
 
     // 1. Electron 'app:request-close' listener
@@ -70,7 +77,7 @@ export const useEditorShortcuts = ({
     // 2. Main Keyboard Shortcuts (Undo, Redo, Open, Page navigation, Tool settings)
     useEffect(() => {
         const handleKey = (e: KeyboardEvent) => {
-            if (activeTab !== 'pdf') return;
+            if (!activeTabs.includes('pdf')) return;
 
             const target = e.target as HTMLElement | null;
             const tagName = target?.tagName.toLowerCase();
@@ -114,19 +121,33 @@ export const useEditorShortcuts = ({
 
             // [ ] for strokeWidth, { } for arrowHeadSize
             const isEditingText = isInputActive || (target?.tagName.toLowerCase() === 'textarea');
-            if (!isEditingText && !isCtrl && !e.altKey) {
-                if (e.key === '[' || e.key === ']') {
-                    e.preventDefault();
-                    const delta = e.key === '[' ? -1 : 1;
-                    const next = Math.max(1, Math.min(20, (toolSettings.strokeWidth || 1) + delta));
-                    setToolSettings({ strokeWidth: next });
-                    showSettingIndicator('선 두께', `${next}px`);
-                } else if (e.key === '{' || e.key === '}') {
-                    e.preventDefault();
-                    const delta = e.key === '{' ? -1 : 1;
-                    const next = Math.max(5, Math.min(50, (toolSettings.arrowHeadSize || 12) + delta));
-                    setToolSettings({ arrowHeadSize: next });
-                    showSettingIndicator('화살표 촉 크기', next);
+            if (!isEditingText && !isCtrl) {
+                if (!e.altKey) {
+                    if (e.key === '[' || e.key === ']') {
+                        e.preventDefault();
+                        const delta = e.key === '[' ? -1 : 1;
+                        const next = Math.max(1, Math.min(20, (toolSettings.strokeWidth || 1) + delta));
+                        setToolSettings({ strokeWidth: next });
+                        showSettingIndicator?.('선 두께', `${next}px`);
+                    } else if (e.key === '{' || e.key === '}') {
+                        e.preventDefault();
+                        const delta = e.key === '{' ? -1 : 1;
+                        const next = Math.max(5, Math.min(50, (toolSettings.arrowHeadSize || 12) + delta));
+                        setToolSettings({ arrowHeadSize: next });
+                        // User request: Show bubble ONLY for Shift + { , }
+                        showToolIndicator?.(next);
+                    }
+                } else {
+                    // Alt + Arrows for Arrow size adjustment
+                    if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                        // Only if active tool is an arrow (SAFE CHECK)
+                        if (activeTool === 'arrow' || (activeTool && typeof activeTool === 'string' && activeTool.startsWith('arrow-'))) {
+                            const isIncrease = e.key === 'ArrowUp' || e.key === 'ArrowRight';
+                            const delta = isIncrease ? 1 : -1;
+                            const next = Math.max(5, Math.min(50, (toolSettings.arrowHeadSize || 12) + delta));
+                            setToolSettings({ arrowHeadSize: next });
+                        }
+                    }
                 }
             }
         };
@@ -134,9 +155,9 @@ export const useEditorShortcuts = ({
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
     }, [
-        activeTab, pdfDoc, imageDoc, numPages, currentPage, 
+        activeTabs, pdfDoc, imageDoc, numPages, currentPage, 
         handleUndo, handleRedo, handleFileOpen, setCurrentPage, 
-        toolSettings, isInputActive, setToolSettings, showSettingIndicator
+        toolSettings, activeTool, isInputActive, setToolSettings, showSettingIndicator, showToolIndicator
     ]);
 
     // 3. Save Shortcut

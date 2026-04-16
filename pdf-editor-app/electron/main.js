@@ -45,6 +45,11 @@ function createWindow() {
     }
   });
 
+  // 드래그 앤 드롭 시 파일로 페이지가 이동하는 것을 방지
+  mainWindow.webContents.on('will-navigate', (event) => {
+    event.preventDefault();
+  });
+
   mainWindow.on('close', (e) => {
     if (!forceQuit) {
       e.preventDefault();

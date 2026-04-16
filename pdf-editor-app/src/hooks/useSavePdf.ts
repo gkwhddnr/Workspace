@@ -19,7 +19,7 @@ export const useSavePdf = (
     } = usePdfEditorStore();
 
     // 1) 저장 로직
-    const handleSave = useCallback(async (): Promise<boolean> => {
+    const handleSave = useCallback(async (onSuccess?: () => void): Promise<boolean> => {
         setSaveStatus('저장 중...');
         const blob = await createEditedPdfBlob();
         if (!blob) {
@@ -56,6 +56,7 @@ export const useSavePdf = (
                     setSaveStatus('저장 완료');
                     markSaved();
                     setTimeout(() => setSaveStatus(null), 3000);
+                    if (onSuccess) onSuccess();
                     return true;
                 } else {
                     console.error('AutoSave 실패:', result);
@@ -80,6 +81,7 @@ export const useSavePdf = (
                 await workspaceApiService.saveProjectData(currentFileName, JSON.stringify({ elements }));
 
                 setSaveStatus('저장 완료');
+                if (onSuccess) onSuccess();
             }
         } catch (error) {
             console.error('워크스페이스 백업 오류:', error);
@@ -99,7 +101,7 @@ export const useSavePdf = (
     }, [currentFileName, toggleSaveAsDialog]);
 
     // 3) 다른 이름으로 저장 확정
-    const confirmSaveAs = async (isClosingAfterSaveAs: boolean) => {
+    const confirmSaveAs = async (isClosingAfterSaveAs: boolean, onSuccess?: () => void) => {
         const blob = await createEditedPdfBlob();
         if (!blob) return;
 
@@ -155,6 +157,7 @@ export const useSavePdf = (
                     if (isClosingAfterSaveAs) {
                         await anyWindow?.electronAPI?.forceQuitApp?.();
                     }
+                    if (onSuccess) onSuccess();
                 } else {
                     setSaveStatus(result?.canceled ? '저장 취소' : '저장 실패');
                     setTimeout(() => setSaveStatus(null), 3000);
@@ -174,6 +177,7 @@ export const useSavePdf = (
             setSaveStatus('다운로드 완료');
             setTimeout(() => setSaveStatus(null), 3000);
             toggleSaveAsDialog(false);
+            if (onSuccess) onSuccess();
         }
     };
 

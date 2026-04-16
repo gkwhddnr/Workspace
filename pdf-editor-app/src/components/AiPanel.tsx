@@ -4,7 +4,7 @@ import { Send, Trash2, Bot, User } from 'lucide-react';
 import axios from 'axios';
 
 const AiPanel: React.FC = () => {
-    const { aiMessages, addAiMessage, clearAiMessages, activeTab, currentFileName, webUrl, codeLanguage, aiAgent, setAiAgent } = useAppStore();
+    const { aiMessages, addAiMessage, clearAiMessages, activeTabs, currentFileName, webUrl, codeLanguage, aiAgent, setAiAgent } = useAppStore();
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -42,7 +42,7 @@ const AiPanel: React.FC = () => {
                     `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:generateContent?key=${googleKey}`,
                     {
                         system_instruction: {
-                            parts: [{ text: `당신은 Gemini AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다. 현재 사용자의 작업 컨텍스트: 현재 탭: ${activeTab}, 열린 파일: ${currentFileName || '없음'}, 웹 서퍼 주소: ${webUrl}, 코드 에디터 언어: ${codeLanguage}.` }]
+                            parts: [{ text: `당신은 Gemini AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다. 현재 사용자의 작업 컨텍스트: 현재 열린 탭: ${activeTabs.join(', ')}, 열린 파일: ${currentFileName || '없음'}, 웹 서퍼 주소: ${webUrl}, 코드 에디터 언어: ${codeLanguage}.` }]
                         },
                         contents: [
                             ...aiMessages.map((m: any) => ({
@@ -67,7 +67,7 @@ const AiPanel: React.FC = () => {
                                 role: 'system',
                                 content: `당신은 ${aiAgent} AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다. 
                                     현재 사용자의 작업 컨텍스트:
-                                    - 현재 탭: ${activeTab}
+                                    - 현재 열린 탭들: ${activeTabs.join(', ')}
                                     - 열린 파일: ${currentFileName || '없음'}
                                     - 웹 서퍼 주소: ${webUrl}
                                     - 코드 에디터 언어: ${codeLanguage}`
@@ -139,6 +139,8 @@ const AiPanel: React.FC = () => {
                 {/* Agent Switcher */}
                 <div className="ml-4 flex items-center theme-bg-panel p-0.5 rounded-lg border theme-border">
                     <select
+                        title="AI 에이전트 선택"
+                        aria-label="AI 에이전트 선택"
                         value={aiAgent}
                         onChange={(e) => setAiAgent(e.target.value as any)}
                         className="text-[10px] font-bold bg-transparent px-2 py-1 outline-none appearance-none cursor-pointer theme-text-muted hover:text-indigo-600 transition-colors"
@@ -197,6 +199,8 @@ const AiPanel: React.FC = () => {
                         className="flex-1 bg-transparent theme-text-main text-xs resize-none focus:outline-none min-h-0 leading-relaxed placeholder:theme-text-muted"
                     />
                     <button
+                        title="메시지 전송"
+                        aria-label="메시지 전송"
                         onClick={handleSend}
                         disabled={!input.trim() || isLoading}
                         className="p-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"

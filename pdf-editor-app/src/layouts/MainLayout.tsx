@@ -8,21 +8,24 @@ import WebViewer from '../components/viewers/WebViewer';
 import CodeViewer from '../components/viewers/CodeViewer';
 import ThemeModal from '../components/ThemeModal';
 import FlattenModal from '../components/FlattenModal';
+import ShortcutsModal from '../components/ShortcutsModal';
+import ShortcutsViewer from '../components/viewers/ShortcutsViewer';
 import {
     FileText, Globe, Code2, Bot, PanelLeftClose, PanelLeftOpen,
-    PanelRightClose, PanelRightOpen
+    PanelRightClose, PanelRightOpen, Keyboard
 } from 'lucide-react';
 
 const TABS: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
     { id: 'pdf', label: 'PDF 편집', icon: <FileText size={14} /> },
     { id: 'web', label: '웹 서퍼', icon: <Globe size={14} /> },
     { id: 'code', label: '코드 에디터', icon: <Code2 size={14} /> },
+    { id: 'shortcuts', label: '단축키', icon: <Keyboard size={14} /> },
 ];
 
 const MainLayout: React.FC = () => {
     const {
         themeMode, setThemeMode,
-        activeTab, setActiveTab,
+        activeTabs, toggleTab,
         isLeftPanelOpen, toggleLeftPanel,
         isRightPanelOpen, toggleRightPanel,
         setActiveTool, toolSettings, setToolSettings
@@ -30,6 +33,7 @@ const MainLayout: React.FC = () => {
 
     const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
     const [isFlattenModalOpen, setIsFlattenModalOpen] = useState(false);
+    const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
 
     // Initialize Theme on Mount
     useEffect(() => {
@@ -61,6 +65,22 @@ const MainLayout: React.FC = () => {
             if (e.altKey && e.key.toLowerCase() === 'd') {
                 e.preventDefault();
                 setIsThemeModalOpen(true);
+                return;
+            }
+
+            // Shortcuts Guide (F1 or ?)
+            if (e.key === 'F1' || e.key === '?') {
+                e.preventDefault();
+                // If shortcuts tab is not open, open it
+                useAppStore.setState(state => {
+                    if (!state.activeTabs.includes('shortcuts')) {
+                        if (state.activeTabs.length >= 3) {
+                            return { activeTabs: [...state.activeTabs.slice(1), 'shortcuts'] };
+                        }
+                        return { activeTabs: [...state.activeTabs, 'shortcuts'] };
+                    }
+                    return state;
+                });
                 return;
             }
 
@@ -159,7 +179,11 @@ const MainLayout: React.FC = () => {
     }, [handleToolChange, setToolSettings, toolSettings, isFlattenModalOpen]);
 
     return (
-        <div className="h-screen w-screen flex flex-col overflow-hidden theme-text-main">
+        <div 
+            className="h-screen w-screen flex flex-col overflow-hidden theme-text-main"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => e.preventDefault()}
+        >
 
             {/* ── Premium Header ── */}
             <header className="h-16 theme-bg-header flex items-center justify-between px-6 gap-4 z-50 shrink-0 border-b theme-border-subtle shadow-sm transition-all duration-500">
@@ -173,33 +197,27 @@ const MainLayout: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Main View Switcher */}
+                {/* Main View Switcher (Multi-Tab Toggle) */}
                 <div className="flex p-1 rounded-2xl border theme-border theme-btn">
-                    {TABS.map((tab) => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id)}
-                            className={`flex items-center gap-2 px-6 py-2 rounded-xl text-xs font-bold transition-all duration-300 ${activeTab === tab.id
-                                ? 'bg-indigo-600 text-white shadow-md scale-100'
-                                : 'theme-text-muted hover:theme-text-main theme-tool-hover'
-                                }`}
-                        >
-                            {React.cloneElement(tab.icon as React.ReactElement, { size: 16 })}
-                            <span className="hidden lg:block">{tab.label}</span>
-                        </button>
-                    ))}
+                    {TABS.map((tab) => {
+                        const isActive = activeTabs.includes(tab.id);
+                        return (
+                            <button
+                                key={tab.id}
+                                onClick={() => toggleTab(tab.id)}
+                                className={`flex items-center gap-2 px-6 py-2 rounded-xl text-xs font-bold transition-all duration-300 ${isActive
+                                    ? 'bg-indigo-600 text-white shadow-md scale-100'
+                                    : 'theme-text-muted hover:theme-text-main hover:bg-slate-500/10'
+                                    }`}
+                            >
+                                {React.cloneElement(tab.icon as React.ReactElement, { size: 16 })}
+                                <span className="hidden lg:block">{tab.label}</span>
+                            </button>
+                        );
+                    })}
                 </div>
 
                 <div className="flex items-center gap-3">
-                    {/* PDF Flatten Button */}
-                    <button
-                        onClick={() => setIsFlattenModalOpen(true)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-colors border border-indigo-200 shadow-sm mr-2"
-                        title="PDF 정리 (Ctrl+Shift+F)"
-                    >
-                        <FileText size={14} />
-                        <span className="hidden lg:block">PDF 정리</span>
-                    </button>
 
                     {/* Control Buttons */}
                     <div className="flex items-center gap-1 p-1 rounded-xl theme-border theme-btn">
@@ -261,19 +279,54 @@ const MainLayout: React.FC = () => {
                         </>
                     )}
 
-                    {/* Center view panel */}
+                    {/* Center view panel - Split View */}
                     <Panel defaultSize={50} className="flex flex-col min-w-0 bg-transparent">
                         <div className="flex-1 p-6 overflow-hidden animate-slide-up">
                             <div className="h-full flex flex-col min-h-0 theme-bg-glass rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] border theme-border overflow-hidden relative backdrop-blur-md">
-                                <div className={activeTab === 'pdf' ? 'flex-1 flex flex-col min-h-0' : 'hidden'}>
-                                    <PdfViewer />
-                                </div>
-                                <div className={activeTab === 'web' ? 'flex-1 flex flex-col min-h-0' : 'hidden'}>
-                                    <WebViewer />
-                                </div>
-                                <div className={activeTab === 'code' ? 'flex-1 flex flex-col min-h-0' : 'hidden'}>
-                                    <CodeViewer />
-                                </div>
+                                <Group orientation="horizontal" className="h-full">
+                                    {/* PDF Panel */}
+                                    {activeTabs.includes('pdf') && (
+                                        <Panel id="pane-pdf" minSize={20} className="flex flex-col min-w-0 h-full">
+                                            <PdfViewer />
+                                        </Panel>
+                                    )}
+
+                                    {/* Separator 1 */}
+                                    {activeTabs.includes('pdf') && (activeTabs.includes('web') || activeTabs.includes('code') || activeTabs.includes('shortcuts')) && (
+                                        <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                                    )}
+
+                                    {/* Web Panel */}
+                                    {activeTabs.includes('web') && (
+                                        <Panel id="pane-web" minSize={20} className="flex flex-col min-w-0 h-full">
+                                            <WebViewer />
+                                        </Panel>
+                                    )}
+
+                                    {/* Separator 2 */}
+                                    {activeTabs.includes('web') && (activeTabs.includes('code') || activeTabs.includes('shortcuts')) && (
+                                        <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                                    )}
+
+                                    {/* Code Panel */}
+                                    {activeTabs.includes('code') && (
+                                        <Panel id="pane-code" minSize={20} className="flex flex-col min-w-0 h-full">
+                                            <CodeViewer />
+                                        </Panel>
+                                    )}
+
+                                    {/* Separator 3 */}
+                                    {activeTabs.includes('code') && activeTabs.includes('shortcuts') && (
+                                        <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                                    )}
+
+                                    {/* Shortcuts Panel */}
+                                    {activeTabs.includes('shortcuts') && (
+                                        <Panel id="pane-shortcuts" minSize={20} className="flex flex-col min-w-0 h-full">
+                                            <ShortcutsViewer />
+                                        </Panel>
+                                    )}
+                                </Group>
                             </div>
                         </div>
                     </Panel>
@@ -306,6 +359,7 @@ const MainLayout: React.FC = () => {
 
             <ThemeModal isOpen={isThemeModalOpen} onClose={() => setIsThemeModalOpen(false)} />
             <FlattenModal isOpen={isFlattenModalOpen} onClose={() => setIsFlattenModalOpen(false)} />
+            <ShortcutsModal isOpen={isShortcutsModalOpen} onClose={() => setIsShortcutsModalOpen(false)} />
         </div>
     );
 };

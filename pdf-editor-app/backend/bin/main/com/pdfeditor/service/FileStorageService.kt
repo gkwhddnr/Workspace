@@ -148,6 +148,11 @@ class FileStorageService(
     fun saveOriginalPdf(file: MultipartFile, filename: String) {
         println("[FileStorageService] saveOriginalPdf: starting save for $filename")
         val path = buildTargetPath(filename)
+        // If backup already exists, skip to avoid overwriting the original
+        if (Files.exists(path)) {
+            println("[FileStorageService] saveOriginalPdf: backup already exists at ${path.toAbsolutePath()}, skipping.")
+            return
+        }
         println("[FileStorageService] saveOriginalPdf: saving to ${path.toAbsolutePath()}")
         val parent = path.parent
         if (!Files.exists(parent)) Files.createDirectories(parent)

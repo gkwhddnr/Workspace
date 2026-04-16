@@ -145,3 +145,31 @@
 #### 파일 열기 무응답 문제
 - **원인**: React `useState`에 함수를 직접 저장(`setPendingFileOpen(() => doOpen)`)하면 React가 lazy initializer로 인식해 즉시 실행
 - **해결**: `setPendingFileOpen({ fn: doOpen })` 객체로 감싸서 저장
+
+---
+
+## 2026-04-16
+
+### 완료된 작업
+
+#### 1. 멀티 탭 분할 뷰(Split View) 인터페이스 구현
+- 단일 탭 구조에서 가로 분할 스택 구조로 전환.
+- `react-resizable-panels`를 사용하여 PDF 편집, 웹 서핑, 코드 에디터, 단축키 가이드 동시 노출.
+- `useAppStore`에 `activeTabs` 전역 상태 추가하여 활성 탭 관리.
+
+#### 2. 탭 전환 시 상태 보존(State Persistence) 완성
+- 탭 언마운트 시 유실되던 PDF 바이너리 데이터를 `useAppStore.pdfOriginalData`로 전역화.
+- `PdfViewer` 마운트 시 `Auto-Restore` `useEffect`를 통해 파일 자동 재로드 구현.
+- `loadAnyDocument(file, isRestore: true)` 옵션을 도입하여 수동 오픈과 자동 복구 로직 분리 (필기 내역 보존).
+
+#### 3. 단축키 가이드 탭화 및 F1 전역 연동
+- 모달 가이드를 독립형 패널로 변경 및 `F1` 키로 즉시 토글 가능하게 연동.
+
+#### 4. 무한 로딩 버그 수정
+- 복구 과정 중의 상태 불일치로 인한 `useEffect` 무한 재귀 실행 해결 (`isRestoringRef` 도입).
+
+### 실패 및 해결
+
+#### PDF 자동 복구 중 무한 루프
+- **원인**: 의존성인 `pdfOriginalData`는 즉시 변하지만 메인 상태인 `pdfDoc`은 비동기로 변해 조건문이 계속 참으로 유지됨.
+- **해결**: `isRestoringRef` 잠금 장치 도입 및 의존성 최소화.

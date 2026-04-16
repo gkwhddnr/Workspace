@@ -53,9 +53,11 @@ const getElementRect = (el: any): [number, number, number, number] => {
 const PdfViewer: React.FC = () => {
 
     const {
-        currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTab,
+        currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTabs,
         activeTool, setActiveTool, toolSettings, setToolSettings,
-        eraserInstantDelete, setEraserInstantDelete
+        eraserInstantDelete, setEraserInstantDelete,
+        showToolIndicator,
+        pdfOriginalData, setPdfOriginalData
     } = useAppStore();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -92,10 +94,13 @@ const PdfViewer: React.FC = () => {
     const toolManager = useMemo(() => new ToolManager(usePdfEditorStore), []);
     const pdfProxies = useRef<Record<number, PdfPageProxy>>({});
     const commandHistories = useRef<Record<number, CommandHistory>>({});
+    // Flag: suppress blur handler when a file dialog is open (to prevent false freeze-release)
+    const isFileDialogOpenRef = useRef(false);
 
     // Preview element for in-progress drawing (kept as ref+state to avoid Zustand serialization)
     const previewElementRef = useRef<RenderElement | null>(null);
     const [previewRevision, setPreviewRevision] = useState(0);
+    const isRestoringRef = useRef(false);
 
     // Selection handle state for rendering
     const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
@@ -115,7 +120,16 @@ const PdfViewer: React.FC = () => {
             setSelectedElementId(id);
             setActiveHandle(handle);
         };
-    }, [toolManager]);
+        toolManager.onEditRequest = (id) => {
+            const el = elements[currentPage]?.find(e => e.id === id) as any;
+            if (el && el.type === 'text') {
+                setEditingId(id);
+                setTempText(el.text || '');
+                // Screen coordinates for editor placement
+                setInputPos({ x: el.x * scale, y: el.y * scale });
+            }
+        };
+    }, [toolManager, elements, currentPage, scale]);
 
     const getCommandHistory = useCallback((page: number) => {
         if (!commandHistories.current[page]) {
@@ -127,6 +141,44 @@ const PdfViewer: React.FC = () => {
     // Stable ref so toolManager can access getCommandHistory without closure/ordering issues
     const commandHistoriesRef = useRef(getCommandHistory);
     useEffect(() => { commandHistoriesRef.current = getCommandHistory; }, [getCommandHistory]);
+
+    // ────────────────────────────────────────────────────────────────────────
+    // 1. Auto-Restore State on Mount/Tab Toggle
+    // ────────────────────────────────────────────────────────────────────────
+    useEffect(() => {
+        // Only run if we have a path but no document loaded and not currently restoring
+        if (currentFilePath && !pdfDoc && !isRestoringRef.current && !isFileDialogOpenRef.current) {
+            const anyWindow = window as any;
+            const electronAPI = anyWindow?.electronAPI;
+
+            if (electronAPI?.readFile) {
+                const restoreFile = async () => {
+                    try {
+                        isRestoringRef.current = true;
+                        console.log('[PdfViewer] Auto-restoring PDF:', currentFilePath);
+                        const result = await electronAPI.readFile(currentFilePath);
+                        if (result) {
+                            const { data, mimeType } = result;
+                            const uint8 = new Uint8Array(data);
+                            const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
+                            const file = new File([blob], currentFileName || 'restored_file', { type: mimeType || 'application/pdf' });
+                            
+                            setPdfOriginalData(uint8.slice());
+                            await loadAnyDocument(file, true); // isRestore=true preserves elements
+                        }
+                    } catch (err) {
+                        console.error('[PdfViewer] Auto-restore failed:', err);
+                    } finally {
+                        // We keep isRestoringRef true if pdfDoc is successfully being set
+                        // to prevent the effect from re-running before the next render.
+                        // If pdfDoc is still null after some time or on error, we might reset.
+                        setTimeout(() => { if (!pdfDoc) isRestoringRef.current = false; }, 1000);
+                    }
+                };
+                restoreFile();
+            }
+        }
+    }, [currentFilePath, !!pdfDoc]); // Trigger only when path changes or document existence changes
 
 
 
@@ -241,7 +293,7 @@ const PdfViewer: React.FC = () => {
     // Show eraser mode popup when eraser tool is selected — handled in Sidebar
     const [tempText, setTempText] = useState('');
 
-    const [originalData, setOriginalData] = useState<Uint8Array | null>(null);
+    // originalData state removed (now in useAppStore)
 
     // Arrow / Image Resizing / Object Selection State (Managed via ToolManager now)
     
@@ -534,8 +586,10 @@ const PdfViewer: React.FC = () => {
         [setTextBlocks, setCanvasRevision]
     );
 
-    const resetDocumentState = useCallback(() => {
-        clearElements();
+    const resetDocumentState = useCallback((isRestore: boolean = false) => {
+        if (!isRestore) {
+            clearElements();
+        }
         setTextBlocks([]);
         // Reset all per-page command histories and page proxies
         commandHistories.current = {};
@@ -647,7 +701,7 @@ const PdfViewer: React.FC = () => {
     );
 
 
-    const loadPdf = async (file: File) => {
+    const loadPdf = async (file: File, isRestore: boolean = false) => {
         try {
             console.log('Loading PDF file:', file.name, file.size);
 
@@ -684,7 +738,7 @@ const PdfViewer: React.FC = () => {
             const uint8Array = new Uint8Array(arrayBuffer);
 
             // pdf.js might detach the buffer, so we store a separate copy for pdf-lib
-            setOriginalData(uint8Array.slice());
+            setPdfOriginalData(uint8Array.slice());
 
             const loadingTask = pdfjsLib.getDocument({
                 data: uint8Array,
@@ -703,7 +757,7 @@ const PdfViewer: React.FC = () => {
             setImageDoc(null);
             setPdfDoc(doc);
             setNumPages(doc.numPages);
-            resetDocumentState();
+            resetDocumentState(isRestore);
 
             if (targetPage > doc.numPages) targetPage = doc.numPages;
 
@@ -830,7 +884,7 @@ const PdfViewer: React.FC = () => {
         }
     };
 
-    const loadImage = async (file: File) => {
+    const loadImage = async (file: File, isRestore: boolean = false) => {
         try {
             const url = URL.createObjectURL(file);
             const img = new Image();
@@ -840,7 +894,7 @@ const PdfViewer: React.FC = () => {
                     setPdfDoc(null);
                     setImageDoc(img);
                     setNumPages(1);
-                    resetDocumentState();
+                    resetDocumentState(isRestore);
                     setCurrentPage(1);
                 } finally {
                     URL.revokeObjectURL(url);
@@ -857,16 +911,19 @@ const PdfViewer: React.FC = () => {
         }
     };
 
-    const loadAnyDocument = async (file: File) => {
+    const loadAnyDocument = async (file: File, isRestore: boolean = false) => {
         const lower = file.name.toLowerCase();
-        if (lower.endsWith('.pdf') || file.type === 'application/pdf') return loadPdf(file);
-        if (lower.endsWith('.png') || file.type === 'image/png') return loadImage(file);
+        if (lower.endsWith('.pdf') || file.type === 'application/pdf') return loadPdf(file, isRestore);
+        if (lower.endsWith('.png') || file.type === 'image/png') return loadImage(file, isRestore);
 
         alert('지원하지 않는 파일 형식입니다. (PDF, PNG)');
     };
 
     // Unsaved changes warning state
     const [pendingFileOpen, setPendingFileOpen] = useState<{ fn: () => Promise<void> } | null>(null);
+    // Flag to track if the current 'Save As' dialog was triggered from an 'Open File' flow
+    const [isSavingAsForOpen, setIsSavingAsForOpen] = useState(false);
+    
     // Show warning only if there are actual annotations drawn (not just file load revisions)
     const totalElements = Object.values(elements).reduce((sum, pageEls) => sum + pageEls.length, 0);
     const hasUnsavedChanges = currentFileName !== null && totalElements > 0 && historyRevision !== lastSavedRevision;
@@ -879,11 +936,13 @@ const PdfViewer: React.FC = () => {
             // Electron 환경: 네이티브 파일 열기 다이얼로그 사용
             if (electronAPI?.openFileDialog) {
                 try {
+                    isFileDialogOpenRef.current = true;
                     const result = await electronAPI.openFileDialog({
                         filters: [
                             { name: 'PDF / 이미지', extensions: ['pdf', 'png'] },
                         ],
                     });
+                    isFileDialogOpenRef.current = false;
                     if (result?.canceled) return;
 
                     const { fileName, filePath, data, mimeType } = result;
@@ -891,22 +950,25 @@ const PdfViewer: React.FC = () => {
                     const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
                     const file = new File([blob], fileName, { type: mimeType || 'application/pdf' });
 
-                    setOriginalData(uint8.slice());
+                    setPdfOriginalData(uint8.slice());
                     setCurrentFile(filePath, fileName);
                     await loadAnyDocument(file);
                     return;
                 } catch (error) {
+                    isFileDialogOpenRef.current = false;
                     console.error('Electron 파일 열기 오류:', error);
                     alert(`파일을 여는 동안 오류가 발생했습니다:\n${error instanceof Error ? error.message : String(error)}`);
                     return;
                 }
             }
 
-            // 브라우저 환경
+            // 브라우저 환경 — input[type=file] 클릭
             const input = document.createElement('input');
             input.type = 'file';
             input.accept = '.pdf,.png,.ppt,.pptx';
+            isFileDialogOpenRef.current = true;
             input.onchange = async (e) => {
+                isFileDialogOpenRef.current = false;
                 const file = (e.target as HTMLInputElement).files?.[0];
                 if (file) {
                     const path = (file as any).path || file.name;
@@ -914,6 +976,10 @@ const PdfViewer: React.FC = () => {
                     await loadAnyDocument(file);
                 }
             };
+            // Also clear flag if dialog is cancelled (focus returns)
+            window.addEventListener('focus', () => {
+                setTimeout(() => { isFileDialogOpenRef.current = false; }, 300);
+            }, { once: true });
             input.click();
         };
 
@@ -926,15 +992,28 @@ const PdfViewer: React.FC = () => {
         await doOpen();
     };
 
+
     const handleDrop = async (e: React.DragEvent) => {
         e.preventDefault();
         setIsDraggingOver(false);
-        const file = e.dataTransfer.files[0];
-        if (file) {
+        const files = e.dataTransfer.files;
+        if (files.length === 0) return;
+        
+        const file = files[0];
+        
+        const doOpen = async () => {
             const path = (file as any).path || file.name;
             setCurrentFile(path, file.name);
             await loadAnyDocument(file);
+        };
+
+        // If there are unsaved changes, show warning popup
+        if (hasUnsavedChanges) {
+            setPendingFileOpen({ fn: doOpen });
+            return;
         }
+
+        await doOpen();
     };
 
     const getPos = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1005,6 +1084,79 @@ const PdfViewer: React.FC = () => {
             incrementRevision();
         }
     }, [currentPage, getCommandHistory, incrementRevision]);
+
+    // ─── Global Drag & Drop Recovery ───
+    useEffect(() => {
+        const handleGlobalDragOver = (e: DragEvent) => {
+            // Prevent default to allow drop and show 'copy' cursor
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.dataTransfer) {
+                e.dataTransfer.effectAllowed = 'all';
+                e.dataTransfer.dropEffect = 'copy';
+            }
+            // Use functional update to ensure we use the latest state or just check ref if needed
+            // For now, logging to see if it fires
+            setIsDraggingOver(true);
+        };
+
+        const handleGlobalDragEnter = (e: DragEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.dataTransfer) {
+                e.dataTransfer.effectAllowed = 'all';
+                e.dataTransfer.dropEffect = 'copy';
+            }
+            console.log('Drag Enter detected');
+            setIsDraggingOver(true);
+        };
+
+        const handleGlobalDragLeave = (e: DragEvent) => {
+            // Only hide overlay if we're actually leaving the window
+            // (Checking relatedTarget to see if we moved to a child element)
+            if (!e.relatedTarget) {
+                setIsDraggingOver(false);
+            }
+        };
+
+        const handleGlobalDrop = async (e: DragEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDraggingOver(false);
+            
+            const files = e.dataTransfer?.files;
+            console.log('Drop detected, files:', files?.length);
+            
+            if (files && files.length > 0) {
+                const file = files[0];
+                
+                const doOpen = async () => {
+                    const path = (file as any).path || file.name;
+                    setCurrentFile(path, file.name);
+                    await loadAnyDocument(file);
+                };
+
+                // Check for unsaved changes before loading the dropped file
+                if (hasUnsavedChanges) {
+                    setPendingFileOpen({ fn: doOpen });
+                } else {
+                    await doOpen();
+                }
+            }
+        };
+
+        window.addEventListener('dragover', handleGlobalDragOver);
+        window.addEventListener('dragenter', handleGlobalDragEnter);
+        window.addEventListener('dragleave', handleGlobalDragLeave);
+        window.addEventListener('drop', handleGlobalDrop);
+
+        return () => {
+            window.removeEventListener('dragover', handleGlobalDragOver);
+            window.removeEventListener('dragenter', handleGlobalDragEnter);
+            window.removeEventListener('dragleave', handleGlobalDragLeave);
+            window.removeEventListener('drop', handleGlobalDrop);
+        };
+    }, [hasUnsavedChanges, setCurrentFile, loadAnyDocument]);
 
 
 
@@ -1195,14 +1347,14 @@ const PdfViewer: React.FC = () => {
 
     const { handleSave, openSaveAsDialog, confirmSaveAs } = useSavePdf(
         createEditedPdfBlob,
-        originalData,
+        pdfOriginalData,
         elements,
         currentPage
     );
 
     // Global keyboard shortcuts and lifecycle events (Moved below dependencies to avoid hoisting issues)
     useEditorShortcuts({
-        activeTab,
+        activeTabs,
         pdfDoc: pdfDoc || null,
         imageDoc: imageDoc || null,
         numPages,
@@ -1212,6 +1364,7 @@ const PdfViewer: React.FC = () => {
         saveStatus,
         isInputActive,
         toolSettings,
+        activeTool,
         editingId,
         handleUndo,
         handleRedo,
@@ -1221,7 +1374,8 @@ const PdfViewer: React.FC = () => {
         setCurrentPage,
         setToolSettings,
         toggleExitDialog,
-        showSettingIndicator: () => {}
+        showSettingIndicator: () => {},
+        showToolIndicator
     });
 
 
@@ -1318,6 +1472,32 @@ const PdfViewer: React.FC = () => {
             renderImage(imageDoc, scale);
         }
     }, [imageDoc, scale, renderImage]);
+
+    // ─── Window Blur: Force-release any active drawing when app loses focus ───
+    // Does NOT fire when a file dialog is open (isFileDialogOpenRef prevents false trigger).
+    useEffect(() => {
+        const handleWindowBlur = () => {
+            // Skip if a file/save dialog is currently open — blur is expected
+            if (isFileDialogOpenRef.current) return;
+            if (isDrawing) {
+                toolManager.onPointerUp({
+                    pos: { x: 0, y: 0 },
+                    scale,
+                    ctrlKey: false,
+                    shiftKey: false,
+                    altKey: false,
+                    activeTool,
+                    toolSettings,
+                    eraserInstantDelete,
+                    originalEvent: {} as any
+                });
+                setIsDrawing(false);
+            }
+        };
+        window.addEventListener('blur', handleWindowBlur);
+        return () => window.removeEventListener('blur', handleWindowBlur);
+    }, [isDrawing, scale, activeTool, toolSettings, eraserInstantDelete, toolManager]);
+
 
     const handleMouseLeaveCanvas = () => {
         lastMousePos.current = null;
@@ -1847,6 +2027,7 @@ const PdfViewer: React.FC = () => {
             <div
                 className={`flex-1 flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed transition-colors ${isDraggingOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white'}`}
                 onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                onDragEnter={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
                 onDragLeave={() => setIsDraggingOver(false)}
                 onDrop={handleDrop}
             >
@@ -1863,7 +2044,22 @@ const PdfViewer: React.FC = () => {
     }
 
     return (
-        <div className="flex flex-col h-full bg-transparent">
+        <div 
+            className="flex flex-col h-full bg-transparent relative"
+            onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+            onDragEnter={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+            onDragLeave={() => setIsDraggingOver(false)}
+            onDrop={handleDrop}
+        >
+            {/* Visual feedback for dragging over the whole app */}
+            {isDraggingOver && (
+                <div className="absolute inset-0 z-[500] bg-blue-500/10 border-4 border-dashed border-blue-500 flex items-center justify-center pointer-events-none transition-all animate-in fade-in">
+                    <div className="bg-white px-8 py-6 rounded-2xl shadow-2xl flex flex-col items-center gap-4 border border-blue-100">
+                        <FileUp size={48} className="text-blue-500 animate-bounce" />
+                        <span className="text-lg font-bold text-blue-600">여기에 파일을 놓아 열기</span>
+                    </div>
+                </div>
+            )}
             {/* ── Toolbar Area ── */}
             <div className="flex items-center justify-between px-6 py-3 border-b theme-border-subtle shrink-0">
                 {/* Left: Files / Controls */}
@@ -2246,12 +2442,24 @@ const PdfViewer: React.FC = () => {
                                     setPendingFileOpen(null);
                                     await fn!.fn();
                                 }}
-                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-red-50 text-red-600 hover:bg-red-100 transition-colors border border-red-200"
+                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-red-400 text-white hover:bg-red-500 transition-colors shadow-sm"
                             >
-                                저장 안 하고 열기
+                                저장하지 않고 열기
                             </button>
                             <button
-                                onClick={() => setPendingFileOpen(null)}
+                                onClick={() => {
+                                    setIsSavingAsForOpen(true);
+                                    openSaveAsDialog();
+                                }}
+                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors border border-slate-200"
+                            >
+                                다른 이름으로 저장하고 열기
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setPendingFileOpen(null);
+                                    setIsSavingAsForOpen(false);
+                                }}
                                 className="w-full px-4 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-100 transition-colors"
                             >
                                 취소
@@ -2287,13 +2495,24 @@ const PdfViewer: React.FC = () => {
                         />
                         <div className="flex justify-end gap-3">
                             <button
-                                onClick={() => toggleSaveAsDialog(false)}
+                                onClick={() => {
+                                    toggleSaveAsDialog(false);
+                                    setIsSavingAsForOpen(false);
+                                }}
                                 className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-100 transition-colors"
                             >
                                 취소
                             </button>
                             <button
-                                onClick={() => confirmSaveAs(isClosingAfterSaveAs)}
+                                onClick={() => {
+                                    const onSaved = isSavingAsForOpen && pendingFileOpen ? async () => {
+                                        const fn = pendingFileOpen;
+                                        setPendingFileOpen(null);
+                                        setIsSavingAsForOpen(false);
+                                        await fn.fn();
+                                    } : undefined;
+                                    confirmSaveAs(isClosingAfterSaveAs, onSaved);
+                                }}
                                 className="px-5 py-2.5 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-500/20 transition-all hover:-translate-y-0.5"
                             >
                                 저장하기

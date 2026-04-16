@@ -25,7 +25,11 @@ const tools: { id: DrawingTool; label: string; shortcut: string; icon: React.Rea
 
 
 const Sidebar: React.FC = () => {
-    const { activeTool, setActiveTool, toolSettings, setToolSettings, eraserInstantDelete, setEraserInstantDelete } = useAppStore();
+    const { 
+        activeTool, setActiveTool, toolSettings, setToolSettings, 
+        eraserInstantDelete, setEraserInstantDelete,
+        toolIndicator 
+    } = useAppStore();
     const strokePreviewRef = useRef<HTMLDivElement>(null);
     const [showEraserPopup, setShowEraserPopup] = useState(false);
 
@@ -56,7 +60,7 @@ const Sidebar: React.FC = () => {
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                     {tools.map((tool) => (
-                        <div key={tool.id} className={tool.id === 'eraser' ? 'relative' : ''}>
+                        <div key={tool.id} className={`relative ${activeTool === tool.id ? 'z-50' : 'z-0'}`}>
                         <button
                             id={`tool-${tool.id}`}
                             onClick={() => setActiveTool(tool.id)}
@@ -77,6 +81,20 @@ const Sidebar: React.FC = () => {
                                     {tool.shortcut}
                                 </span>
                             </div>
+
+                            {/* Active Tool Value Indicator Bubble (User request: shown under tool when size adjusted) */}
+                            {tool.id === activeTool && toolIndicator.visible && (tool.id === 'arrow' || tool.id.startsWith('arrow-')) && (
+                                <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 z-[300] animate-in fade-in zoom-in slide-in-from-top-1 duration-200 pointer-events-none">
+                                    {/* Bubble Triangle (pointing up) */}
+                                    <div className="flex justify-center -mb-1">
+                                        <div className="w-2 h-2 bg-slate-900/95 rotate-45" />
+                                    </div>
+                                    <div className="bg-slate-900/95 text-white px-3 py-1.5 rounded-full text-[11px] font-black shadow-2xl border border-white/10 flex items-center gap-1.5 whitespace-nowrap backdrop-blur-md">
+                                        <div className="w-1 h-1 rounded-full bg-blue-400" />
+                                        {toolIndicator.value}px
+                                    </div>
+                                </div>
+                            )}
                         </button>
 
                         {/* Eraser mode popup — chat bubble below the eraser button */}
@@ -202,35 +220,6 @@ const Sidebar: React.FC = () => {
                 <p className="text-center text-xs mt-1 theme-text-muted">{toolSettings.strokeWidth}px</p>
             </div>
 
-            {/* Arrowhead Size - Only show for arrow tools */}
-            {(activeTool === 'arrow' || activeTool.startsWith('arrow-')) && (                <>
-                    <div className="h-px bg-slate-200/50" />
-                    <div className="flex flex-col gap-2">
-                        <div className="flex justify-between items-center px-1">
-                            <p className="text-[10px] font-bold uppercase tracking-widest theme-text-muted">화살표 크기</p>
-                            <span className="text-[9px] font-mono font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 uppercase leading-none">
-                                {toolSettings.arrowHeadSize}
-                            </span>
-                        </div>
-                        <div className="px-1 py-1">
-                            <input
-                                type="range"
-                                min="5"
-                                max="50"
-                                step="1"
-                                value={toolSettings.arrowHeadSize}
-                                onChange={(e) => setToolSettings({ arrowHeadSize: Number(e.target.value) })}
-                                className="w-full h-1 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                                title="화살표 촉 크기 설정"
-                            />
-                            <div className="flex justify-between mt-1 text-[8px] text-slate-400 font-mono">
-                                <span>MIN</span>
-                                <span>MAX</span>
-                            </div>
-                        </div>
-                    </div>
-                </>
-            )}
 
             <div className="h-px bg-slate-200/50" />
 

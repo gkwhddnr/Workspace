@@ -17,7 +17,7 @@ export abstract class AbstractTool implements ToolState {
     /**
      * Helper to get state from the store (returns any to allow proxy-injected methods)
      */
-    protected getState(): any {
+    public getState(): any {
         return this.store.getState();
     }
 }

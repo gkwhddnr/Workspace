@@ -66,3 +66,22 @@
 
 - **규칙**: 새 도구 타입을 추가하거나 기존 도구를 수정할 때, 반드시 `ToolManager.ts`에서 해당 도구가 등록되어 있는지 확인할 것
 - **현재 등록된 도구**: pen, highlight, select, eraser, arrow, arrow-right/left/up/down, arrow-l-1/l-2, rect, circle
+
+---
+
+## 탭 전환 시 작업 상태 보존 (State Persistence across Tabs)
+
+- **문제**: 멀티 탭/분할 뷰 환경에서 컴포넌트 언마운트 시 로컬 상태(`useState`) 유실
+- **해결 패턴**:
+  1. 기저 데이터 전역화: PDF 바이너리(`pdfOriginalData`), 파일 경로, elements 등 핵심 세션 데이터는 반드시 전역 스토어(`useAppStore`, `usePdfEditorStore`)에 보관
+  2. 자동 복구(Auto-Restore): 뷰어 컴포넌트 마운트 시 `useEffect`에서 전역 파일 경로를 감지하여 파일을 자동 재로드
+  3. 무한 루프 방지: 복구 로직 실행 시 `isRestoringRef` (useRef) 잠금을 사용하여 비동기 상태 업데이트 중 중복 실행 차단
+  4. 복구 모드(`isRestore`) 구분: 자동 복구 시에는 기존 요소(`elements`)를 초기화하지 않도록 로드 함수에 플래그 전달
+
+---
+
+## 분할 레이아웃 패널 제어 (Split Layout Panel Control)
+
+- **규칙**: `react-resizable-panels` 사용 시 숨겨진 패널은 CSS `display: none`이 아닌 조건부 렌더링(`{isActive && <Panel>}`)으로 제거할 것
+- **이유**: 라이브러리가 돔에 있는 모든 패널의 너비를 계산에 포함하려 하여, 숨겨진 패널까지 공간을 차지하거나 레이아웃이 뭉개지는 현상 방지
+- **주의**: 패널이 제거되면 컴포넌트가 언마운트되므로 위의 **상태 보존 규칙**을 연계하여 구현 필수

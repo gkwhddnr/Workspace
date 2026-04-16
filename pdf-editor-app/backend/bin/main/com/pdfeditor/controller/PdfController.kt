@@ -155,9 +155,12 @@ class PdfController(
 
     @PostMapping("/workspace/original-pdf")
     fun uploadOriginalPdf(@RequestParam("file") file: MultipartFile, @RequestParam("filename") filename: String): ResponseEntity<Void> {
-        println("[PdfController] uploadOriginalPdf: filename=$filename, fileSize=${file.size}")
-        fileStorageService.saveOriginalPdf(file, filename)
-        val ws = pdfWorkspaceRepository.findByFilename(filename) ?: PdfWorkspace(filename = filename)
+        // Prefer the multipart file's original filename (Spring parses it with UTF-8 encoding filter)
+        // Fall back to the explicit filename param if originalFilename is blank
+        val resolvedFilename = file.originalFilename?.takeIf { it.isNotBlank() } ?: filename
+        println("[PdfController] uploadOriginalPdf: filename=$resolvedFilename, fileSize=${file.size}")
+        fileStorageService.saveOriginalPdf(file, resolvedFilename)
+        val ws = pdfWorkspaceRepository.findByFilename(resolvedFilename) ?: PdfWorkspace(filename = resolvedFilename)
         ws.hasOriginalPdf = true
         ws.updatedAt = LocalDateTime.now()
         pdfWorkspaceRepository.save(ws)

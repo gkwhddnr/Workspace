@@ -151,6 +151,7 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                                             type="text" 
                                             value={customThemeColor.toUpperCase()}
                                             onChange={(e) => setCustomThemeColor(e.target.value)}
+                                            onFocus={(e) => e.target.select()}
                                             className="bg-transparent border-none outline-none font-mono text-xs text-slate-700 w-full"
                                             title="HEX 코드 직접 입력"
                                             placeholder="#RRGGBB"
@@ -174,6 +175,7 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                                                     max="255"
                                                     value={c.value}
                                                     onChange={(e) => handleRgbChange(c.channel, e.target.value)}
+                                                    onFocus={(e) => e.target.select()}
                                                     className="w-full bg-transparent border-none text-center outline-none text-xs font-bold text-slate-700"
                                                     title={`${c.label} 값 조절 (0-255)`}
                                                     placeholder="0"

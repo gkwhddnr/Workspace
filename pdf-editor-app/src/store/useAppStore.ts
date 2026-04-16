@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type ActiveTab = 'pdf' | 'web' | 'code';
+export type ActiveTab = 'pdf' | 'web' | 'code' | 'shortcuts';
 export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2' | 'image';
 export type ThemeMode = 'white' | 'translucent' | 'dark' | 'custom';
 
@@ -25,8 +25,6 @@ interface AppState {
     isRightPanelOpen: boolean;
     toggleLeftPanel: () => void;
     toggleRightPanel: () => void;
-    toggleLeftPanel: () => void;
-    toggleRightPanel: () => void;
 
     // Theme (CSS Variables)
     themeMode: ThemeMode;
@@ -35,8 +33,8 @@ interface AppState {
     setCustomThemeColor: (color: string) => void;
 
     // Tab Management
-    activeTab: ActiveTab;
-    setActiveTab: (tab: ActiveTab) => void;
+    activeTabs: ActiveTab[];
+    toggleTab: (tab: ActiveTab) => void;
 
     // Drawing Tool Management
     activeTool: DrawingTool;
@@ -72,6 +70,17 @@ interface AppState {
     // PDF Text Metadata
     textBlocks: { text: string; rect: [number, number, number, number] }[];
     setTextBlocks: (blocks: { text: string; rect: [number, number, number, number] }[]) => void;
+
+    // Tool Indicator (Temporary value display in Sidebar)
+    toolIndicator: {
+        visible: boolean;
+        value: number;
+    };
+    showToolIndicator: (value: number) => void;
+
+    // PDF Persistence
+    pdfOriginalData: Uint8Array | null;
+    setPdfOriginalData: (data: Uint8Array | null) => void;
 }
 
 const getStoredThemeMode = (): ThemeMode => {
@@ -158,8 +167,21 @@ export const useAppStore = create<AppState>((set) => ({
     },
 
     // Tab defaults
-    activeTab: 'pdf',
-    setActiveTab: (tab) => set({ activeTab: tab }),
+    activeTabs: ['pdf'],
+    toggleTab: (tab) => set((s) => {
+        const isActive = s.activeTabs.includes(tab);
+        if (isActive) {
+            // Prevent closing if it's the only active tab
+            if (s.activeTabs.length <= 1) return s;
+            return { activeTabs: s.activeTabs.filter(t => t !== tab) };
+        } else {
+            // Prevent opening more than 3 tabs
+            if (s.activeTabs.length >= 3) {
+                return { activeTabs: [...s.activeTabs.slice(1), tab] };
+            }
+            return { activeTabs: [...s.activeTabs, tab] };
+        }
+    }),
 
     // Tool defaults
     activeTool: 'select',
@@ -233,4 +255,21 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
     // PDF Text Metadata defaults
     textBlocks: [],
     setTextBlocks: (blocks) => set({ textBlocks: blocks }),
+
+    // Tool Indicator defaults
+    toolIndicator: {
+        visible: false,
+        value: 0
+    },
+    showToolIndicator: (value) => {
+        set({ toolIndicator: { visible: true, value } });
+        // Auto-hide after 1.2s to match transition durations
+        setTimeout(() => {
+            set((s) => ({ toolIndicator: { ...s.toolIndicator, visible: false } }));
+        }, 1200);
+    },
+
+    // PDF Persistence
+    pdfOriginalData: null,
+    setPdfOriginalData: (data) => set({ pdfOriginalData: data }),
 }));

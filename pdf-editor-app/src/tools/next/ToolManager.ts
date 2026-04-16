@@ -7,19 +7,27 @@ import { EraserTool } from './EraserTool';
 import { RenderElement } from '../../models/RenderElement';
 import { CommandHistory } from '../../commands/CommandHistory';
 
+/**
+ * ToolManager Coordinates between drawing tools and the editing state.
+ * It manages tool switching and injects necessary cross-cutting concerns (store, callbacks).
+ */
 export class ToolManager {
     private currentState: ToolState;
     private tools: Map<string, ToolState> = new Map();
     private store: any;
+
+    // Callbacks to be injected by the UI (PdfViewer)
     public onPreviewChange: ((el: RenderElement | null) => void) | null = null;
     public getTextBlocks: (() => TextBlock[]) | null = null;
     public getTextRuns: (() => TextBlock[]) | null = null;
     public getCommandHistory: ((page: number) => CommandHistory) | null = null;
-    // Callback when selection changes (id, handle type)
     public onSelectionChange: ((id: string | null, handle: string | null) => void) | null = null;
+    public onEditRequest: ((id: string) => void) | null = null;
 
     constructor(store: any) {
         this.store = store;
+
+        // Create a proxy of the store to inject specialized preview/history handlers
         const proxyStore = new Proxy(store, {
             get: (target, prop) => {
                 if (prop === 'getState') {
@@ -40,18 +48,18 @@ export class ToolManager {
             }
         });
 
+        // Initialize Concrete Tools
         const selectTool = new SelectTool(proxyStore);
+        // Inject select-specific callbacks
         selectTool.onSelectionChange = (id, handle) => this.onSelectionChange?.(id, handle);
         selectTool.getCommandHistory = (page) => this.getCommandHistory?.(page) as CommandHistory;
         selectTool.getTextBlocks = () => this.getTextBlocks?.() ?? [];
+        selectTool.onEditRequest = (id) => this.onEditRequest?.(id);
 
-        this.tools.set('pen', new PenTool(proxyStore));
         this.tools.set('select', selectTool);
+        this.tools.set('pen', new PenTool(proxyStore));
         this.tools.set('eraser', new EraserTool(proxyStore));
-
-        const highlightTool = new ShapeTool(proxyStore, 'highlight');
-        this.tools.set('highlight', highlightTool);
-
+        this.tools.set('highlight', new ShapeTool(proxyStore, 'highlight'));
         this.tools.set('arrow', new ShapeTool(proxyStore, 'arrow'));
         this.tools.set('arrow-right', new ShapeTool(proxyStore, 'arrow-right'));
         this.tools.set('arrow-left', new ShapeTool(proxyStore, 'arrow-left'));
@@ -71,6 +79,8 @@ export class ToolManager {
             this.currentState.onDeactivate?.();
             this.currentState = nextTool;
         }
+
+        // Maintain ShapeTool-specific context injections
         if (nextTool instanceof ShapeTool) {
             nextTool.getTextBlocks = this.getTextBlocks;
             nextTool.getTextRuns = this.getTextRuns;

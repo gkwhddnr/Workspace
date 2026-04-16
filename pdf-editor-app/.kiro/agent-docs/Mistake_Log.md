@@ -54,3 +54,11 @@
 - **EraserTool store 불일치**: `EraserTool.getState()`는 `usePdfEditorStore`를 반환하므로 `useAppStore`의 값(`eraserInstantDelete`)에 접근 불가. 도구별 설정값은 `PointerEventParams`로 직접 전달해야 함.
 - **파일 로드 후 markSaved() 누락**: `loadPdf`에서 elements를 복원한 후 `markSaved()`를 호출하지 않으면 기존 필기가 "미저장 변경사항"으로 오인됨. 파일 로드 완료 시 반드시 `markSaved()` 호출할 것.
 - **projectData 저장/복원 형식 불일치 (재발)**: `saveProjectData`는 `{ elements }` 형식으로 저장하는데 `loadPdf`에서 레거시 형식만 처리하여 재오픈 시 필기 사라짐. 저장 형식과 복원 형식을 항상 일치시킬 것.
+
+---
+
+## 2026-04-16
+
+- **PDF 자동 복구 중 무한 로딩 루프**: `useEffect` 내에서 `setPdfOriginalData`를 호출하면 의존성이 변해 효과가 재트리거되는데, `pdfDoc` 상태가 비동기라 즉시 반영되지 않아 조건문(`!pdfDoc`)이 계속 통과됨. `isRestoringRef`와 같은 명시적 Lock과 간결한 의존성 설정(`[path, !!pdfDoc]`)이 필수적임.
+- **언마운트 시 로컬 상태 유실**: `PdfViewer`가 언마운트되면 `useState`(`originalData`)가 파괴됨. 재마운트 시 파일 내용은 복구해도 원본 데이터가 없어 "저장" 기능이 작동하지 않음. 컴포넌트 생명주기를 벗어나는 기저 데이터는 반드시 전역 스토어(`useAppStore`)에 보관해야 함.
+- **Panel 컴포넌트 Layout 오류**: `order` 속성 미지원 사용 및 `hidden` 속성 사용 시 `react-resizable-panels`의 자동 너비 계산이 꼬여 모든 탭이 한꺼번에 보이는 버그 발생. 조건부 렌더링으로 확실히 제어해야 함.
