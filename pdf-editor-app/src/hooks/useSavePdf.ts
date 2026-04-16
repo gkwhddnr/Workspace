@@ -56,7 +56,7 @@ export const useSavePdf = (
                     setSaveStatus('저장 완료');
                     markSaved();
                     setTimeout(() => setSaveStatus(null), 3000);
-                    if (onSuccess) onSuccess();
+                    if (typeof onSuccess === 'function') onSuccess();
                     return true;
                 } else {
                     console.error('AutoSave 실패:', result);
@@ -157,7 +157,7 @@ export const useSavePdf = (
                     if (isClosingAfterSaveAs) {
                         await anyWindow?.electronAPI?.forceQuitApp?.();
                     }
-                    if (onSuccess) onSuccess();
+                    if (typeof onSuccess === 'function') onSuccess();
                 } else {
                     setSaveStatus(result?.canceled ? '저장 취소' : '저장 실패');
                     setTimeout(() => setSaveStatus(null), 3000);
@@ -177,7 +177,7 @@ export const useSavePdf = (
             setSaveStatus('다운로드 완료');
             setTimeout(() => setSaveStatus(null), 3000);
             toggleSaveAsDialog(false);
-            if (onSuccess) onSuccess();
+            if (typeof onSuccess === 'function') onSuccess();
         }
     };
 

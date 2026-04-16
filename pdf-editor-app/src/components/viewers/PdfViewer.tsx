@@ -1285,7 +1285,7 @@ const PdfViewer: React.FC = () => {
 
 
     const createEditedPdfBlob = async (): Promise<Blob | null> => {
-        if (!originalData) return null;
+        if (!pdfOriginalData) return null;
 
         // CurrentfileName 기준으로 한 번 저장 (Background backup)
         if (currentFileName) {
@@ -1294,7 +1294,7 @@ const PdfViewer: React.FC = () => {
         }
 
         try {
-            const pdfDocLib = await PDFDocument.load(originalData, { ignoreEncryption: true });
+            const pdfDocLib = await PDFDocument.load(pdfOriginalData, { ignoreEncryption: true });
             const totalPages = pdfDocLib.getPageCount();
 
             if (!pdfDoc) {
@@ -1934,7 +1934,7 @@ const PdfViewer: React.FC = () => {
 
             if (isInContainer && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
-                const factor = Math.exp(-e.deltaY / 300);
+                const factor = Math.exp(-e.deltaY / 1200);
                 setScale(prev => Math.min(4.0, Math.max(0.1, prev * factor)));
             }
         };
@@ -2179,7 +2179,7 @@ const PdfViewer: React.FC = () => {
                 {/* Right: Save Controls & Info */}
                 <div className="flex items-center gap-3">
                     <button
-                        onClick={handleSave}
+                        onClick={() => handleSave()}
                         className="flex items-center gap-1.5 px-3 py-1.5 theme-btn-primary rounded-lg text-xs font-bold transition-colors"
                     >
                         <Save size={14} />
@@ -2202,8 +2202,9 @@ const PdfViewer: React.FC = () => {
                 </div>
             </div>
 
-            <div ref={containerRef} className="flex-1 overflow-auto bg-gray-200 rounded-lg flex items-start justify-center p-4 dark-pdf-filter">
-                <div className="relative shadow-xl">
+            <div ref={containerRef} className="flex-1 overflow-auto bg-gray-200 rounded-lg dark-pdf-filter">
+                <div className="min-h-full min-w-full flex items-center justify-center p-12">
+                    <div className="relative shadow-xl shrink-0">
                     <input
                         type="file"
                         ref={imageInputRef}
@@ -2344,6 +2345,7 @@ const PdfViewer: React.FC = () => {
                     )}
                 </div>
             </div>
+        </div>
 
             {/* 종료 확인 다이얼로그 */}
             {isExitDialogOpen && (

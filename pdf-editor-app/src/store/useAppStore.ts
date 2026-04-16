@@ -198,7 +198,7 @@ export const useAppStore = create<AppState>((set) => ({
         set((s) => ({ toolSettings: { ...s.toolSettings, ...settings } })),
 
     // Eraser mode defaults: ON = instant delete on click
-    eraserInstantDelete: true,
+    eraserInstantDelete: false,
     setEraserInstantDelete: (value) => set({ eraserInstantDelete: value }),
     currentFilePath: null,
     currentFileName: null,
