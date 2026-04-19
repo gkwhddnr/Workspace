@@ -720,9 +720,11 @@ const PdfViewer: React.FC = () => {
                     }
                     if (ws.hasOriginalPdf) {
                         const origBlob = await workspaceApiService.fetchOriginalPdf(file.name);
-                        if (origBlob) {
+                        if (origBlob && origBlob.size > 0) {
                             actualFile = new File([origBlob], file.name, { type: 'application/pdf' });
                             console.log("Loaded unflattened Original PDF from backend!");
+                        } else {
+                            console.warn("[PdfViewer] Original PDF binary is missing or empty on backend. Falling back to local/user file.");
                         }
                     } else {
                         // Upload original only if not already backed up

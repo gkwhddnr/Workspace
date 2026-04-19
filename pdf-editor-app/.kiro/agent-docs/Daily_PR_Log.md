@@ -79,33 +79,12 @@
 
 ---
 
-## 2026-04-13 (추가 작업)
-
-### 완료된 작업
-
-#### 1. 텍스트 입력 중 도구 완전 차단
-- `handlePointerDown`, `handlePointerMove`, `handlePointerUp` 모두에 `if (isInputActive) return;` 추가
-- 텍스트 박스 열린 상태에서 마우스 길게/짧게 누르기 모두 차단
-- **파일**: `src/components/viewers/PdfViewer.tsx`
-
-#### 2. 저장 후 재오픈 시 필기 복구
-- `loadPdf`에서 `parsed.elements` (새 아키텍처 형식) 처리 코드 추가
-- 기존 레거시 형식(`pageDrawings`, `pageTextAnnotations`)도 하위 호환 유지
-- path, shape, text, image 타입별 복원 로직 구현
-- **파일**: `src/components/viewers/PdfViewer.tsx`
-
-#### 3. 텍스트 입력 중 선택 상태 초기화
-- `isInputActive`가 true가 될 때 `selectedElementId`, `activeHandle`, `selectedElementIds` 초기화
-- **파일**: `src/components/viewers/PdfViewer.tsx`
-
----
-
 ## 2026-04-14
 
 ### 완료된 작업
 
 #### 1. 텍스트 도구 선택 중 이전 도구 활성화 완전 차단
-- `handlePointerDown/Move/Up` 모두에 `if (activeTool === 'text') return;` 추가
+- `handlePointerDown/Move/Up` 모두에 `if (activeTool === 'text') return;` 가드 추가
 - 텍스트 도구 선택 후 마우스 길게/짧게 누르기 시 화살표 등 이전 도구가 그려지던 문제 해결
 - **파일**: `src/components/viewers/PdfViewer.tsx`
 
@@ -123,28 +102,14 @@
 #### 4. 지우개 도구 ON/OFF 토글 기능 추가
 - **ON 모드**: 마우스 커서를 필기 위에 올리기만 해도 즉시 삭제
 - **OFF 모드**: 클릭(pointerDown)할 때만 삭제
-- `useAppStore`에 `eraserInstantDelete` 상태 추가
-- `PointerEventParams`에 `eraserInstantDelete` 파라미터 추가 (store 불일치 문제 해결)
 - 사이드바 지우개 버튼 아래 말풍선 팝업 토글 UI 추가
-- **파일**: `src/store/useAppStore.ts`, `src/tools/next/EraserTool.ts`, `src/tools/next/ToolState.ts`, `src/components/Sidebar.tsx`, `src/components/viewers/PdfViewer.tsx`
+- **파일**: `src/store/useAppStore.ts`, `src/tools/next/EraserTool.ts`, `src/components/Sidebar.tsx`
 
 #### 5. 파일 열기 전 미저장 경고 팝업
 - 필기 후 저장하지 않은 상태에서 파일 열기 시 경고 팝업 표시
 - "저장하고 열기" / "저장 안 하고 열기" / "취소" 3가지 선택지
-- `useState`에 함수 직접 저장 시 즉시 실행되는 React 버그 → `{ fn: doOpen }` 객체로 감싸서 해결
-- 파일 로드 완료 후 `markSaved()` 호출 → 기존 필기 복원 시 미저장으로 오인하던 문제 해결
-- 실제 필기 여부(`totalElements > 0`)와 revision 불일치 모두 충족 시에만 팝업 표시
+- 파일 로드 완료 후 `markSaved()` 호출
 - **파일**: `src/components/viewers/PdfViewer.tsx`
-
-### 실패 및 해결
-
-#### EraserTool ON/OFF 토글 미반영 문제
-- **원인**: `EraserTool.getState()`는 `usePdfEditorStore`를 반환하는데, `eraserInstantDelete`는 `useAppStore`에만 있어서 항상 `undefined → true(ON)` 고정
-- **해결**: `PointerEventParams`에 `eraserInstantDelete` 추가, `PdfViewer`에서 직접 전달
-
-#### 파일 열기 무응답 문제
-- **원인**: React `useState`에 함수를 직접 저장(`setPendingFileOpen(() => doOpen)`)하면 React가 lazy initializer로 인식해 즉시 실행
-- **해결**: `setPendingFileOpen({ fn: doOpen })` 객체로 감싸서 저장
 
 ---
 
@@ -172,36 +137,63 @@
 
 #### PDF 자동 복구 중 무한 루프
 - **원인**: 의존성인 `pdfOriginalData`는 즉시 변하지만 메인 상태인 `pdfDoc`은 비동기로 변해 조건문이 계속 참으로 유지됨.
+- **해결**: `isRestoringRef` 잠금 장치 도입 및 의존성 최소화.
+
 ---
-178: 
-179: ## 2026-04-17
-180: 
-181: ### 완료된 작업
-182: 
-183: #### 1. 화살표 통합 및 다중 마디 지원 (Arrow Integration & Multi-Point)
-184: - **무제한 체인 병합**: 1-2-3-4번 등 여러 개의 화살표를 하나의 경로로 병합하는 로직 구현.
-185: - **자동 중간 머리 제거**: 병합된 경로의 중간 화살표 머리를 제거하여 단일 연속 화살표로 변환.
-186: - **자석 스냅 (Interactive Snap)**: `Ctrl` 드래그 시 다른 화살표 끝점에 자석처럼 붙는 기능 구현.
-187: - **드롭 시 통합 (Merge on Drop)**: 스냅된 상태에서 마우스를 뗴면 즉시 병합되도록 개선.
-188: - **다중 마디 선택 (Hit Test)**: 병합되어 길어진 화살표의 모든 마디에서 클릭 및 선택이 작동하도록 개선.
-189: - **정밀 90도 스냅**: `Ctrl` 드래그 시 인접 점 기준 수평/수직 축으로 엄격하게 고정.
-190: 
-191: #### 2. 저장(Save) 기능 긴급 복구 및 안정화
-192: - **ReferenceError 수정**: 리팩토링 중 누락된 `pdfOriginalData` 스토어 참조 복구.
-193: - **콜백 안전성 확보**: `useSavePdf` 내 `onSuccess` 호출 전 타입 검증(`function`) 추가.
-194: - **이벤트 전파 차단**: `handleSave` 호출 시 이벤트 객체가 콜백으로 오인되지 않도록 익명 함수 래퍼 적용.
-195: 
-196: #### 3. UI/UX 폴리싱
-197: - **스크롤바 정렬 수정**: 컨테이너 레이아웃 개편을 통해 스크롤바가 패널 가장자리에 항상 붙도록 수정.
-198: - **확대/축소 감도 최적화**: `Ctrl` + 마우스 휠 감도를 4배 완화(1200)하여 정밀 조절 가능하게 변경.
-199: - **지우개 기본값 변경**: 앱 시작 시 지우개 모드를 기본 'OFF'(클릭 삭제)로 설정.
-200: 
-201: ### 실패 및 해결
-202: 
-203: #### 병합된 요소 렌더링 에러 (el.accept is not a function)
-204: - **원인**: `JSON.parse(JSON.stringify())`로 병합 요소를 생성하여 클래스 메서드가 유실됨.
-205: - **해결**: `new ShapeElement()` 생성자를 사용하여 명시적으로 인스턴스화하여 메서드 보존.
-206: 
-207: #### 다중 마디 화살표 선택 불가
-208: - **원인**: 히트 테스트 로직이 `points[0]`와 `points[1]`만 검사하여 나머지 마디가 무시됨.
-209: - **해결**: 포인트 배열 전체를 순회하며 모든 선분에 대해 거리 계산을 수행하도록 히트 테스트 개편.
+
+## 2026-04-17
+
+### 완료된 작업
+
+#### 1. 화살표 통합 및 다중 마디 지원 (Arrow Integration & Multi-Point)
+- **무제한 체인 병합**: 1-2-3-4번 등 여러 개의 화살표를 하나의 경로로 병합하는 로직 구현.
+- **자동 중간 머리 제거**: 병합된 경로의 중간 화살표 머리를 제거하여 단일 연속 화살표로 변환.
+- **자석 스냅 (Interactive Snap)**: `Ctrl` 드래그 시 다른 화살표 끝점에 자석처럼 붙는 기능 구현.
+- **드롭 시 통합 (Merge on Drop)**: 스냅된 상태에서 마우스를 뗴면 즉시 병합되도록 개선.
+- **다중 마디 선택 (Hit Test)**: 병합되어 길어진 화살표의 모든 마디에서 클릭 및 선택이 작동하도록 개선.
+- **정밀 90도 스냅**: `Ctrl` 드래그 시 인접 점 기준 수평/수직 축으로 엄격하게 고정.
+
+#### 2. 저장(Save) 기능 긴급 복구 및 안정화
+- **ReferenceError 수정**: 리팩토링 중 누락된 `pdfOriginalData` 스토어 참조 복구.
+- **콜백 안전성 확보**: `useSavePdf` 내 `onSuccess` 호출 전 타입 검증(`function`) 추가.
+- **이벤트 전파 차단**: `handleSave` 호출 시 이벤트 객체가 콜백으로 오인되지 않도록 익명 함수 래퍼 적용.
+
+#### 3. UI/UX 폴리싱
+- **스크롤바 정렬 수정**: 컨테이너 레이아웃 개편을 통해 스크롤바가 패널 가장자리에 항상 붙도록 수정.
+- **확대/축소 감도 최적화**: `Ctrl` + 마우스 휠 감도를 4배 완화(1200)하여 정밀 조절 가능하게 변경.
+- **지우개 기본값 변경**: 앱 시작 시 지우개 모드를 기본 'OFF'(클릭 삭제)로 설정.
+
+### 실패 및 해결
+
+#### 병합된 요소 렌더링 에러 (el.accept is not a function)
+- **원인**: `JSON.parse(JSON.stringify())`로 병합 요소를 생성하여 클래스 메서드가 유실됨.
+- **해결**: `new ShapeElement()` 생성자를 사용하여 명시적으로 인스턴스화하여 메서드 보존.
+
+#### 다중 마디 화살표 선택 불가
+- **원인**: 히트 테스트 로직이 `points[0]`와 `points[1]`만 검사하여 나머지 마디가 무시됨.
+- **해결**: 포인트 배열 전체를 순회하며 모든 선분에 대해 거리 계산을 수행하도록 히트 테스트 개편.
+
+---
+
+## 2026-04-19
+
+### 완료된 작업
+
+#### 1. 빈 PDF 로딩 크래시 방지 (Empty PDF Failsafe)
+- **현상**: `InvalidPDFException: The PDF file is empty` 에러와 함께 뷰어 정지.
+- **원인**: 0바이트 백업 파일이 서버에 업로드된 후, 자동 복구 시 이를 읽으려다 PDF.js에서 예외 발생.
+- **해결 (3중 방어)**:
+  - **FE (Upload)**: `useSavePdf.ts`에서 `originalData`가 0바이트면 서버 전송을 차단.
+  - **FE (Load)**: `PdfViewer.tsx`에서 서버 응답이 0바이트면 무시하고 로컬 원본으로 폴백.
+  - **BE (Storage)**: `FileStorageService.kt`에서 0바이트 파일 쓰기 요청을 거부하도록 가드 로직 추가.
+
+#### 2. 코드 에디터 내비게이션 오류 수정
+- **현상**: `CodeViewer.tsx`에서 "웹 서퍼에서 보기" 클릭 시 `setActiveTab is not a function` 린트 에러 및 런타임 오류.
+- **원인**: `useAppStore`에 존재하지 않는 `setActiveTab` 속성 호출.
+- **해결**: `toggleTab` 및 `activeTabs` 상태를 사용하여 탭 전환 로직 정상화.
+
+### 실패 및 해결
+
+#### 0바이트 백업 발생 시점 파악 미흡
+- **리스크**: 탭 전환이나 비동기 로딩 중 `originalData`가 `null`인 상태에서 저장이 호출되면 기존의 멀쩡한 백업이 0바이트로 덮어씌워질 수 있음.
+- **해결**: 모든 업로드/저장 경로에 `size > 0` 검사를 의무화하여 데이터 유실 원천 차단.

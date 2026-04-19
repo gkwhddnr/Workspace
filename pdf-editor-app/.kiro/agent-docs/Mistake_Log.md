@@ -70,4 +70,12 @@
 - **Zustand 클래스 메서드 실종 (JSON 직렬화)**: `JSON.parse(JSON.stringify(hitEl))`를 통해 병합된 요소를 생성하면 `ShapeElement` 클래스의 `accept()` 등 메서드가 유실되어 렌더링 시 `TypeError` 발생. **병합 시 반드시 `new ShapeElement(...)` 생성자를 사용하여 인스턴스화해야 함.**
 - **다중 마디 화살표 Hit Test 누락**: `hitTestElement`에서 마디가 3개 이상인 화살표의 첫 번째 세그먼트만 거리 계산을 수행하여 나머지 마디가 선택되지 않음. **모든 `points` 마디를 순회하며 선분 거리를 계산해야 함.**
 - **화살표 병합 로직 제한 (2단 제한)**: 단순히 3개의 포인트를 갖는 고정 배열로 병합하려 하여 1-2-3-4... 형태의 무제한 체인 병합이 안 되고 데이터가 꼬임. **포인트 배열 전체를 깊은 복사하여 이어 붙이는(Concatenation) 방식이어야 함.**
-- **onSuccess 콜백 타입 체크 누락**: `useSavePdf.ts` 등에서 콜백 함수를 호출할 때 `typeof === 'function'` 체크를 하지 않아, 이벤트 객체가 인자로 넘어가거나 함수가 아닌 값이 실행되려 할 때 에러 발생. **콜백 호출 전 반드시 타입 검증 필수.**
+- **onSuccess 콜백 타입 체크 누락**: `useSavePdf.ts` 등에서 콜백 함수를 호출할 때 `typeof === 'function'` 체크를 하지 않아, 이벤트 객체가 인자가 넘어가거나 함수가 아닌 값이 실행되려 할 때 에러 발생. **콜백 호출 전 반드시 타입 검증 필수.**
+
+---
+
+## 2026-04-19
+
+- **0바이트 PDF 백업 업로드 (InvalidPDFException)**: 저장 시점에 `originalData`가 비어있거나, 서버에서 잘못된 0바이트 파일을 받아올 때 PDF.js가 크래시됨. 업로드 전 size 체크와 로드 시 0바이트 폴백 로직이 누락됨.
+- **useAppStore 속성 오인 (setActiveTab)**: 스토어에 없는 `setActiveTab`을 `CodeViewer.tsx`에서 사용하려다 린트 에러 발생. 전역 상태 정의를 반드시 먼저 확인하고 사용할 것.
+- **multi_replace_file_content 범위 지정 실수**: 특정 섹션을 교체하려다 `TargetContent` 범위와 `ReplacementContent`를 잘못 설정하여 기존 로그 수십 줄을 날려버림. 대규모 텍스트 교체 시에는 범위를 좁게 잡거나 `overwrite: true`를 신중히 사용할 것.

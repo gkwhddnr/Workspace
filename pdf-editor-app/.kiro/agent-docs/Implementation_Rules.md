@@ -85,3 +85,12 @@
 - **규칙**: `react-resizable-panels` 사용 시 숨겨진 패널은 CSS `display: none`이 아닌 조건부 렌더링(`{isActive && <Panel>}`)으로 제거할 것
 - **이유**: 라이브러리가 돔에 있는 모든 패널의 너비를 계산에 포함하려 하여, 숨겨진 패널까지 공간을 차지하거나 레이아웃이 뭉개지는 현상 방지
 - **주의**: 패널이 제거되면 컴포넌트가 언마운트되므로 위의 **상태 보존 규칙**을 연계하여 구현 필수
+
+---
+
+## 0바이트 PDF 업로드 및 로딩 방지 (Empty PDF Prevention)
+
+- **규칙 1 (Upload)**: `useSavePdf.ts` 등에서 서버로 원본 PDF(`original-pdf`)를 백업할 때, 반드시 `originalData.length > 0`인 경우에만 업로드를 수행할 것
+- **규칙 2 (Load)**: `PdfViewer.tsx`의 `loadPdf`에서 서버로부터 백업 파일을 가져왔을 때, `blob.size === 0`이라면 이를 무시하고 사용자의 로컬 파일을 그대로 유지(fallback)할 것
+- **규칙 3 (Backend)**: 서버 측 저장 로직(`FileStorageService.kt`)에서도 `MultipartFile.isEmpty` 체크를 통해 빈 파일이 저장되어 백업을 오염시키는 것을 차단할 것
+- **목적**: 0바이트 파일이 백업 시스템을 오염시켜 `InvalidPDFException` 크래시를 유발하는 것을 원천 차단

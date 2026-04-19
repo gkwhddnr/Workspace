@@ -146,6 +146,10 @@ class FileStorageService(
     }
 
     fun saveOriginalPdf(file: MultipartFile, filename: String) {
+        if (file.isEmpty) {
+            println("[FileStorageService] saveOriginalPdf: Received empty file for $filename, skipping.")
+            return
+        }
         println("[FileStorageService] saveOriginalPdf: starting save for $filename")
         val path = buildTargetPath(filename)
         // If backup already exists, skip to avoid overwriting the original

@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
 };
 
 const CodeViewer: React.FC = () => {
-    const { codeLanguage, setCodeLanguage, sharedCode, setSharedCode, setWebUrl, setActiveTab } = useAppStore();
+    const { codeLanguage, setCodeLanguage, sharedCode, setSharedCode, setWebUrl, toggleTab, activeTabs } = useAppStore();
     const [showPreview, setShowPreview] = useState(false);
 
     const currentCode = sharedCode[codeLanguage];
@@ -88,7 +88,9 @@ const CodeViewer: React.FC = () => {
 
     const handleSendToWeb = () => {
         setWebUrl('workspace://preview');
-        setActiveTab('web');
+        if (!activeTabs.includes('web')) {
+            toggleTab('web');
+        }
     };
 
     return (

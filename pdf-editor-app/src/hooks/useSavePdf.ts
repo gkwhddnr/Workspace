@@ -46,7 +46,7 @@ export const useSavePdf = (
 
                 const result = await electronAPI.autoSave({ filePath: currentFilePath, data: base64 });
                 if (result?.success) {
-                    if (currentFileName && originalData) {
+                    if (currentFileName && originalData && originalData.length > 0) {
                         const pristineBlob = new Blob([originalData as any], { type: 'application/pdf' });
                         await workspaceApiService.uploadOriginalPdf(currentFileName, pristineBlob);
                     }
@@ -74,7 +74,7 @@ export const useSavePdf = (
 
         // 브라우저 환경
         try {
-            if (currentFileName && originalData) {
+            if (currentFileName && originalData && originalData.length > 0) {
                 const pristineBlob = new Blob([originalData as any], { type: 'application/pdf' });
                 await workspaceApiService.uploadOriginalPdf(currentFileName, pristineBlob);
 
@@ -133,7 +133,7 @@ export const useSavePdf = (
                 if (result?.success && result.filePath) {
                     const newFileName = result.filePath.split(/[/\\]/).pop() || name;
                     
-                    if (originalData) {
+                    if (originalData && originalData.length > 0) {
                         try {
                             const pristineBlob = new Blob([originalData as any], { type: 'application/pdf' });
                             await workspaceApiService.uploadOriginalPdf(newFileName, pristineBlob);
