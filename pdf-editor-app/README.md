@@ -296,7 +296,7 @@ graph TD
 - **AddElementCommand / DeleteElementCommand / UpdateElementCommand**: 각각 요소 추가/삭제/수정 작업을 캡슐화합니다. `undo()`로 역작업이 가능합니다.
 
 #### 7. Backend Layer
-- **WorkspaceApiService**: 백엔드 HTTP 호출을 캡슐화하는 Facade. PdfViewer는 직접 `fetch()`를 호출하지 않습니다.
+- **WorkspaceApiService**: 백엔드 HTTP 호출을 캡슐화하는 Axios 기반 Facade. 타임아웃, 인터셉터, 보안 헤더가 통합되어 있습니다.
 - **PdfController**: Spring Boot REST 컨트롤러. 저장, 워크스페이스 관리, 원본 PDF 백업 엔드포인트를 제공합니다.
 - **FileStorageService**: Template Method 패턴으로 파일 저장 전략(덮어쓰기/새 이름)을 분리합니다.
 - **PdfWorkspaceRepository**: H2 DB에 마지막 페이지, 주석 데이터, 백업 여부를 저장합니다.
@@ -304,6 +304,11 @@ graph TD
 ---
 
 ## 📋 업데이트 이력
+
+### 2026-04-27
+- **레이아웃 2.0 (공간 최적화)**: PDF 탭 내 도구창 임베딩, 탭 컨텍스트 기반 AI 패널 노출, 2분할 화면 고정으로 작업 집중도 향상
+- **AI 코파일럿 2.0**: Gemini 3 Flash, GPT-5.5, Claude Opus 4.7 등 최신 모델 라인업 지원 및 인앱 API 키 설정 기능 추가
+- **시스템 안정성 및 보안**: Axios 전환(타임아웃/인터셉터), 백엔드 CORS 캐싱 및 CSRF 방어 헤더 적용
 
 ### 2026-04-19
 - **빈 PDF 로딩 크래시 방지 (Empty PDF Failsafe)**: 0바이트 백업 파일 업로드 차단 및 로드 시 폴백 로직 구현 (`InvalidPDFException` 해결)

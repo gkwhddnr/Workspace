@@ -44,19 +44,21 @@ export class ArrowToolStrategy implements DrawingToolStrategy {
 
     endDraw(annotation: DrawingAnnotation, pos: { x: number; y: number }, settings: ToolSettings, scale: number): DrawingAnnotation {
         const finalAnnotation = this.continueDraw(annotation, pos, settings, scale);
-        // Store the final angle for straight arrows
         const from = finalAnnotation.points[0];
         const to = finalAnnotation.points[1];
-        if (!this.arrowType.startsWith('arrow-l-')) {
+        
+        if (this.arrowType.startsWith('arrow-l-')) {
+            const elbow = getElbowPoint(from, to, this.arrowType);
             return {
                 ...finalAnnotation,
-                angle: Math.atan2(to.y - from.y, to.x - from.x),
+                points: [from, elbow, to],
+                angle: Math.atan2(to.y - elbow.y, to.x - elbow.x),
             };
         }
-        const elbow = getElbowPoint(from, to, this.arrowType);
+
         return {
             ...finalAnnotation,
-            angle: Math.atan2(to.y - elbow.y, to.x - elbow.x),
+            angle: Math.atan2(to.y - from.y, to.x - from.x),
         };
     }
 

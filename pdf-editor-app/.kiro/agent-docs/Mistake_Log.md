@@ -78,4 +78,11 @@
 
 - **0바이트 PDF 백업 업로드 (InvalidPDFException)**: 저장 시점에 `originalData`가 비어있거나, 서버에서 잘못된 0바이트 파일을 받아올 때 PDF.js가 크래시됨. 업로드 전 size 체크와 로드 시 0바이트 폴백 로직이 누락됨.
 - **useAppStore 속성 오인 (setActiveTab)**: 스토어에 없는 `setActiveTab`을 `CodeViewer.tsx`에서 사용하려다 린트 에러 발생. 전역 상태 정의를 반드시 먼저 확인하고 사용할 것.
-- **multi_replace_file_content 범위 지정 실수**: 특정 섹션을 교체하려다 `TargetContent` 범위와 `ReplacementContent`를 잘못 설정하여 기존 로그 수십 줄을 날려버림. 대규모 텍스트 교체 시에는 범위를 좁게 잡거나 `overwrite: true`를 신중히 사용할 것.
+---
+
+## 2026-04-27
+
+- **패널 비율 합계(defaultSize) 초과**: 탭 조합에 따라 `defaultSize` 총합이 100%를 초과하도록 설정하면 레이아웃 엔진이 패널을 비정상적으로 압축하거나 찌그러뜨림. 모든 분기 상황에서 비율 합계가 100%가 되도록 유지해야 함.
+- **도구 패널(Sidebar) 최소 너비 누락**: 패널을 `react-resizable-panels`로 구현할 때 `minSize` (퍼센트)만 설정하면, 전체 컨테이너가 좁아질 때 내부 텍스트가 강제로 줄바꿈되어 UI가 깨짐. 텍스트가 포함된 패널은 반드시 CSS `min-width` (픽셀)를 병행 설정하여 가독성을 보호해야 함.
+- **AI 패널 `maxSize` 과도 제한**: 사용자가 AI 패널을 넓게 쓰고 싶어 함에도 `maxSize={40}`과 같은 제한을 두어 조작을 방해함. 필수 가이드라인이 없다면 사용자에게 패널 크기 조절의 최대 자유도를 부여할 것.
+- **인라인 스타일 사용 자제**: `animation-delay` 등을 JSX 인라인 스타일로 구현하면 보안 정책(CSP)이나 린트 규칙에 위배될 수 있음. 가급적 `index.css`에 클래스를 정의하여 사용할 것.

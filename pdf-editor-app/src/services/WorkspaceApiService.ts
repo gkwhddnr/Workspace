@@ -1,8 +1,31 @@
+import axios from 'axios';
+
 // WorkspaceApiService.ts
-// Facade: provides a clean, typed interface to all backend HTTP calls.
-// PdfViewer never writes raw fetch() calls — it delegates here.
+// Facade: provides a clean, typed interface to all backend HTTP calls using Axios.
+// PdfViewer never writes raw fetch/axios calls — it delegates here.
 
 const BASE = '/api/pdf';
+
+// Axios Instance Config (보안, CORS, 타임아웃, 인터셉터 강화)
+const apiClient = axios.create({
+    baseURL: BASE,
+    timeout: 30000, // 30초 제한
+    withCredentials: true, // CORS간 인증 쿠키/세션 허용
+    headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest' // CSRF 방어를 위한 기본 헤더
+    }
+});
+
+// Response Interceptor: 에러 로깅 일원화
+apiClient.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        // 네트워크 또는 서버 에러 중앙 처리
+        console.error('[WorkspaceApiService] API Error:', error.response?.status, error.message);
+        return Promise.reject(error);
+    }
+);
 
 export interface WorkspaceData {
     id: number;
@@ -17,11 +40,12 @@ export class WorkspaceApiService {
     /** Retrieve the saved workspace for the given file. Returns null if not found. */
     async fetchWorkspace(filename: string): Promise<WorkspaceData | null> {
         try {
-            const res = await fetch(`${BASE}/workspace?filename=${encodeURIComponent(filename)}`);
-            if (res.status === 404) return null;
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.json() as WorkspaceData;
-        } catch (e) {
+            const res = await apiClient.get<WorkspaceData>('/workspace', {
+                params: { filename }
+            });
+            return res.data;
+        } catch (e: any) {
+            if (e.response && e.response.status === 404) return null;
             console.warn('[WorkspaceApiService] fetchWorkspace failed:', e);
             return null;
         }
@@ -29,11 +53,8 @@ export class WorkspaceApiService {
 
     /** Persist the last viewed page for the given file (fire-and-forget). */
     saveWorkspace(filename: string, lastViewedPage: number): void {
-        fetch(`${BASE}/workspace`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename, lastViewedPage }),
-        }).catch(e => console.warn('[WorkspaceApiService] saveWorkspace failed:', e));
+        apiClient.post('/workspace', { filename, lastViewedPage })
+            .catch(e => console.warn('[WorkspaceApiService] saveWorkspace failed:', e));
     }
 
     /** Save (overwrite) the PDF file on the backend. Returns the saved history record. */
@@ -41,11 +62,9 @@ export class WorkspaceApiService {
         const formData = new FormData();
         formData.append('file', blob, filename);
         formData.append('filename', filename);
-        const res = await fetch(`${BASE}/save-overwrite`, {
-            method: 'POST',
-            body: formData,
+        await apiClient.post('/save-overwrite', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
         });
-        if (!res.ok) throw new Error(`Save failed: HTTP ${res.status}`);
     }
 
     /** Save as a new copy (no overwrite). */
@@ -53,23 +72,18 @@ export class WorkspaceApiService {
         const formData = new FormData();
         formData.append('file', blob, filename);
         formData.append('filename', filename);
-        const res = await fetch(`${BASE}/save`, {
-            method: 'POST',
-            body: formData,
+        await apiClient.post('/save', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
         });
-        if (!res.ok) throw new Error(`Save-as failed: HTTP ${res.status}`);
     }
 
     /** Save JSON project data (vectors, texts, images). */
     async saveProjectData(filename: string, projectData: string): Promise<void> {
         try {
             console.log(`[WorkspaceApiService] saveProjectData starting for ${filename}`);
-            const res = await fetch(`${BASE}/workspace/project-data`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json; charset=UTF-8' },
-                body: JSON.stringify({ filename, projectData }),
+            await apiClient.post('/workspace/project-data', { filename, projectData }, {
+                headers: { 'Content-Type': 'application/json; charset=UTF-8' }
             });
-            if (!res.ok) throw new Error(`ProjectData save failed: HTTP ${res.status}`);
             console.log(`[WorkspaceApiService] saveProjectData success for ${filename}`);
         } catch (e) {
             console.error('[WorkspaceApiService] saveProjectData failed:', e);
@@ -82,13 +96,11 @@ export class WorkspaceApiService {
             console.log(`[WorkspaceApiService] uploadOriginalPdf starting for ${filename}, size=${blob.size}`);
             const formData = new FormData();
             formData.append('file', blob, filename);
-            // Send filename as plain text — Spring's UTF-8 encoding filter handles decoding
             formData.append('filename', filename);
-            const res = await fetch(`${BASE}/workspace/original-pdf`, {
-                method: 'POST',
-                body: formData,
+            
+            await apiClient.post('/workspace/original-pdf', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
             });
-            if (!res.ok) throw new Error(`OriginalPdf upload failed: HTTP ${res.status}`);
             console.log(`[WorkspaceApiService] uploadOriginalPdf success for ${filename}`);
         } catch (e) {
             console.error('[WorkspaceApiService] uploadOriginalPdf failed:', e);
@@ -100,20 +112,22 @@ export class WorkspaceApiService {
     async fetchOriginalPdf(filename: string): Promise<Blob | null> {
         try {
             console.log(`[WorkspaceApiService] fetchOriginalPdf requesting for ${filename}`);
-            const res = await fetch(`${BASE}/workspace/original-pdf?filename=${encodeURIComponent(filename)}`);
-            if (res.status === 404) {
+            const res = await apiClient.get<Blob>('/workspace/original-pdf', {
+                params: { filename },
+                responseType: 'blob' // Blob 데이터 수신 설정
+            });
+            console.log(`[WorkspaceApiService] fetchOriginalPdf success for ${filename}`);
+            return res.data;
+        } catch (e: any) {
+            if (e.response && e.response.status === 404) {
                 console.warn(`[WorkspaceApiService] fetchOriginalPdf: 404 NOT FOUND for ${filename}`);
                 return null;
             }
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            console.log(`[WorkspaceApiService] fetchOriginalPdf success for ${filename}`);
-            return await res.blob();
-        } catch (e) {
             console.error('[WorkspaceApiService] fetchOriginalPdf failed:', e);
             return null;
         }
     }
 }
 
-// Singleton export — import { workspaceApiService } in PdfViewer.
+// Singleton export
 export const workspaceApiService = new WorkspaceApiService();

@@ -35,6 +35,7 @@ export class ToolFactory {
             case 'circle':
                 strategy = new ShapeToolStrategy('circle');
                 break;
+            case 'arrow':
             case 'arrow-up':
             case 'arrow-down':
             case 'arrow-left':

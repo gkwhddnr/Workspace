@@ -128,7 +128,7 @@ export class CanvasRenderVisitor implements ElementVisitor {
             this.ctx.beginPath();
             this.ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
             this.ctx.stroke();
-        } else if (shapeType.startsWith('arrow-') && points.length >= 2) {
+        } else if ((shapeType === 'arrow' || shapeType.startsWith('arrow-')) && points.length >= 2) {
             // Arrow rendering using points array
             const pts = points;
             let renderPts: { x: number, y: number }[];

@@ -1214,19 +1214,35 @@ const PdfViewer: React.FC = () => {
                 };
 
                 if (selEl.shapeType?.startsWith('arrow-') && selEl.points?.length >= 2) {
-                    // Arrow: start (green) and end (red) handles
-                    ctx.fillStyle = '#22c55e';
-                    drawHandle(selEl.points[0].x, selEl.points[0].y);
-                    ctx.fillStyle = '#ef4444';
-                    drawHandle(selEl.points[1].x, selEl.points[1].y);
+                    // Arrow: Iterate through all points
+                    for (let i = 0; i < selEl.points.length; i++) {
+                        const p = selEl.points[i];
+                        if (i === 0) ctx.fillStyle = '#22c55e'; // Start (green)
+                        else if (i === selEl.points.length - 1) ctx.fillStyle = '#ef4444'; // End (red)
+                        else ctx.fillStyle = '#3b82f6'; // Intermediate (blue)
+                        drawHandle(p.x, p.y);
+                    }
 
-                    // Dashed selection line
+                    // Draw middle handles (ghost handles) for segment splitting
+                    ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+                    for (let i = 0; i < selEl.points.length - 1; i++) {
+                        const p1 = selEl.points[i];
+                        const p2 = selEl.points[i+1];
+                        ctx.beginPath();
+                        ctx.arc((p1.x + p2.x) / 2 * scale, (p1.y + p2.y) / 2 * scale, HANDLE_R * 0.8, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+                    }
+
+                    // Dashed selection path connecting all points
                     ctx.setLineDash([4, 4]);
                     ctx.strokeStyle = '#3b82f6';
                     ctx.lineWidth = 1;
                     ctx.beginPath();
                     ctx.moveTo(selEl.points[0].x * scale, selEl.points[0].y * scale);
-                    ctx.lineTo(selEl.points[1].x * scale, selEl.points[1].y * scale);
+                    for (let i = 1; i < selEl.points.length; i++) {
+                        ctx.lineTo(selEl.points[i].x * scale, selEl.points[i].y * scale);
+                    }
                     ctx.stroke();
                 } else if (selEl.x !== undefined) {
                     // Shape/Image: dashed bounding box + corner handles

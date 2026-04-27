@@ -61,11 +61,15 @@ interface AppState {
     setSharedCode: (code: { html: string; css: string; javascript: string }) => void;
 
     // AI Copilot
-    aiAgent: 'gemini' | 'chatgpt' | 'cursor' | 'antigravity';
-    setAiAgent: (agent: 'gemini' | 'chatgpt' | 'cursor' | 'antigravity') => void;
+    aiAgent: 'gemini' | 'chatgpt' | 'claude';
+    setAiAgent: (agent: 'gemini' | 'chatgpt' | 'claude') => void;
     aiMessages: { role: 'user' | 'assistant'; content: string; agent?: string }[];
     addAiMessage: (role: 'user' | 'assistant', content: string) => void;
     clearAiMessages: () => void;
+
+    // AI API Keys (localStorage persistent)
+    apiKeys: { gemini: string; chatgpt: string; claude: string };
+    setApiKey: (provider: 'gemini' | 'chatgpt' | 'claude', key: string) => void;
 
     // PDF Text Metadata
     textBlocks: { text: string; rect: [number, number, number, number] }[];
@@ -175,8 +179,8 @@ export const useAppStore = create<AppState>((set) => ({
             if (s.activeTabs.length <= 1) return s;
             return { activeTabs: s.activeTabs.filter(t => t !== tab) };
         } else {
-            // Prevent opening more than 3 tabs
-            if (s.activeTabs.length >= 3) {
+            // Prevent opening more than 2 tabs
+            if (s.activeTabs.length >= 2) {
                 return { activeTabs: [...s.activeTabs.slice(1), tab] };
             }
             return { activeTabs: [...s.activeTabs, tab] };
@@ -251,6 +255,17 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
     addAiMessage: (role, content) =>
         set((s) => ({ aiMessages: [...s.aiMessages, { role, content, agent: s.aiAgent }] })),
     clearAiMessages: () => set({ aiMessages: [] }),
+
+    // AI API Keys — localStorage에서 복원
+    apiKeys: {
+        gemini:  localStorage.getItem('apiKey_gemini')  || '',
+        chatgpt: localStorage.getItem('apiKey_chatgpt') || '',
+        claude:  localStorage.getItem('apiKey_claude')  || '',
+    },
+    setApiKey: (provider, key) => {
+        localStorage.setItem(`apiKey_${provider}`, key);
+        set((s) => ({ apiKeys: { ...s.apiKeys, [provider]: key } }));
+    },
 
     // PDF Text Metadata defaults
     textBlocks: [],

@@ -11,8 +11,7 @@ import FlattenModal from '../components/FlattenModal';
 import ShortcutsModal from '../components/ShortcutsModal';
 import ShortcutsViewer from '../components/viewers/ShortcutsViewer';
 import {
-    FileText, Globe, Code2, Bot, PanelLeftClose, PanelLeftOpen,
-    PanelRightClose, PanelRightOpen, Keyboard
+    FileText, Globe, Code2, Bot, Keyboard
 } from 'lucide-react';
 
 const TABS: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
@@ -26,8 +25,6 @@ const MainLayout: React.FC = () => {
     const {
         themeMode, setThemeMode,
         activeTabs, toggleTab,
-        isLeftPanelOpen, toggleLeftPanel,
-        isRightPanelOpen, toggleRightPanel,
         setActiveTool, toolSettings, setToolSettings
     } = useAppStore();
 
@@ -35,113 +32,63 @@ const MainLayout: React.FC = () => {
     const [isFlattenModalOpen, setIsFlattenModalOpen] = useState(false);
     const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
 
-    // Initialize Theme on Mount
     useEffect(() => {
         setThemeMode(themeMode);
     }, []);
 
     const handleToolChange = (toolId: DrawingTool) => {
         setActiveTool(toolId);
-        // Ensure the sidebar scrolls to the selected tool so the user sees it
         setTimeout(() => {
             const el = document.getElementById(`tool-${toolId}`);
-            if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }, 50);
     };
 
-    // Global Keyboard Shortcuts
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            // Ignore events from input fields, textareas, etc.
             const target = e.target as HTMLElement | null;
             const tagName = target?.tagName.toLowerCase();
-            if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) {
-                return;
-            }
+            if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) return;
 
-            // Theme Switcher (Alt + D)
-            if (e.altKey && e.key.toLowerCase() === 'd') {
-                e.preventDefault();
-                setIsThemeModalOpen(true);
-                return;
-            }
-
-            // Shortcuts Guide (F1 or ?)
+            if (e.altKey && e.key.toLowerCase() === 'd') { e.preventDefault(); setIsThemeModalOpen(true); return; }
             if (e.key === 'F1' || e.key === '?') {
                 e.preventDefault();
-                // If shortcuts tab is not open, open it
                 useAppStore.setState(state => {
                     if (!state.activeTabs.includes('shortcuts')) {
-                        if (state.activeTabs.length >= 3) {
-                            return { activeTabs: [...state.activeTabs.slice(1), 'shortcuts'] };
-                        }
+                        if (state.activeTabs.length >= 2) return { activeTabs: [...state.activeTabs.slice(1), 'shortcuts'] };
                         return { activeTabs: [...state.activeTabs, 'shortcuts'] };
                     }
                     return state;
                 });
                 return;
             }
+            if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); setIsFlattenModalOpen(true); return; }
+            if (isFlattenModalOpen) return;
 
-            // PDF Flatten Modal (Ctrl + Shift + F)
-            if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') {
-                e.preventDefault();
-                setIsFlattenModalOpen(true);
-                return;
-            }
-
-            // 모달이 열려 있는 상태라면 다른 모든 단축키(Tools Switcher 등)의 작동을 차단합니다.
-            if (isFlattenModalOpen) {
-                return;
-            }
-
-            // Color Picker Focus (Alt + C)
             if (e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c') {
                 e.preventDefault();
-                const colorInput = document.getElementById('custom-color-picker');
-                if (colorInput) {
-                    colorInput.click();
-                }
+                document.getElementById('custom-color-picker')?.click();
                 return;
             }
-
-            // Color Navigation (Alt + Shift + Arrows)
             if (e.altKey && e.shiftKey) {
                 const arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
                 if (arrowKeys.includes(e.key)) {
                     e.preventDefault();
-                    const currentSetColor = toolSettings.color.toUpperCase();
-                    const currentIndex = PRESET_COLORS.findIndex(c => c.toUpperCase() === currentSetColor);
-                    
-                    // If current color is custom, default to first preset
-                    const index = currentIndex === -1 ? 0 : currentIndex;
-                    let nextIndex = index;
-
-                    if (e.key === 'ArrowRight') nextIndex = (index + 1) % PRESET_COLORS.length;
-                    else if (e.key === 'ArrowLeft') nextIndex = (index - 1 + PRESET_COLORS.length) % PRESET_COLORS.length;
-                    else if (e.key === 'ArrowDown') nextIndex = (index + 4) % PRESET_COLORS.length;
-                    else if (e.key === 'ArrowUp') nextIndex = (index - 4 + PRESET_COLORS.length) % PRESET_COLORS.length;
-
-                    setToolSettings({ color: PRESET_COLORS[nextIndex] });
-                    
-                    // Auto-scroll to color palette in sidebar
-                    setTimeout(() => {
-                        const el = document.getElementById('color-palette-section');
-                        if (el) {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                        }
-                    }, 50);
-                    
+                    const cur = toolSettings.color.toUpperCase();
+                    const idx = PRESET_COLORS.findIndex(c => c.toUpperCase() === cur);
+                    const i = idx === -1 ? 0 : idx;
+                    let next = i;
+                    if (e.key === 'ArrowRight') next = (i + 1) % PRESET_COLORS.length;
+                    else if (e.key === 'ArrowLeft') next = (i - 1 + PRESET_COLORS.length) % PRESET_COLORS.length;
+                    else if (e.key === 'ArrowDown') next = (i + 4) % PRESET_COLORS.length;
+                    else if (e.key === 'ArrowUp') next = (i - 4 + PRESET_COLORS.length) % PRESET_COLORS.length;
+                    setToolSettings({ color: PRESET_COLORS[next] });
+                    setTimeout(() => document.getElementById('color-palette-section')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
                     return;
                 }
             }
-
-            // No modifier keys for these shortcuts
             if (!e.ctrlKey && !e.metaKey && !e.altKey) {
                 const key = e.key.toLowerCase();
-
-                // Tools Switcher
                 if (key === 's') handleToolChange('select');
                 else if (key === 'p') handleToolChange('pen');
                 else if (key === 'h') handleToolChange('highlight');
@@ -153,38 +100,27 @@ const MainLayout: React.FC = () => {
                 else if (key === '1') handleToolChange('arrow-l-1');
                 else if (key === '2') handleToolChange('arrow-l-2');
                 else if (key === 'i') handleToolChange('image');
-
-                // Settings adjustments
-                else if (key === '[') {
-                    e.preventDefault();
-                    setToolSettings({ strokeWidth: Math.max(1, toolSettings.strokeWidth - 1) });
-                }
-                else if (key === ']') {
-                    e.preventDefault();
-                    setToolSettings({ strokeWidth: Math.min(20, toolSettings.strokeWidth + 1) });
-                }
-                else if (key === '-' || (e.altKey && e.key === '-')) {
-                    e.preventDefault();
-                    setToolSettings({ fontSize: Math.max(8, toolSettings.fontSize - 2) });
-                }
-                else if (key === '=' || (e.altKey && e.key === '+')) {
-                    e.preventDefault();
-                    setToolSettings({ fontSize: Math.min(100, toolSettings.fontSize + 2) });
-                }
+                else if (key === '[') { e.preventDefault(); setToolSettings({ strokeWidth: Math.max(1, toolSettings.strokeWidth - 1) }); }
+                else if (key === ']') { e.preventDefault(); setToolSettings({ strokeWidth: Math.min(20, toolSettings.strokeWidth + 1) }); }
+                else if (key === '-') { e.preventDefault(); setToolSettings({ fontSize: Math.max(8, toolSettings.fontSize - 2) }); }
+                else if (key === '=') { e.preventDefault(); setToolSettings({ fontSize: Math.min(100, toolSettings.fontSize + 2) }); }
             }
         };
-
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [handleToolChange, setToolSettings, toolSettings, isFlattenModalOpen]);
 
+    const hasPdf = activeTabs.includes('pdf');
+    const hasOther = activeTabs.some(t => t !== 'pdf');
+    // AI 코파일럿: 웹 또는 코드 탭이 열릴 때만 표시
+    const showAiPanel = activeTabs.includes('web') || activeTabs.includes('code');
+
     return (
-        <div 
+        <div
             className="h-screen w-screen flex flex-col overflow-hidden theme-text-main"
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => e.preventDefault()}
         >
-
             {/* ── Premium Header ── */}
             <header className="h-16 theme-bg-header flex items-center justify-between px-6 gap-4 z-50 shrink-0 border-b theme-border-subtle shadow-sm transition-all duration-500">
                 <div className="flex items-center gap-3">
@@ -197,7 +133,7 @@ const MainLayout: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Main View Switcher (Multi-Tab Toggle) */}
+                {/* Tab switcher */}
                 <div className="flex p-1 rounded-2xl border theme-border theme-btn">
                     {TABS.map((tab) => {
                         const isActive = activeTabs.includes(tab.id);
@@ -206,7 +142,7 @@ const MainLayout: React.FC = () => {
                                 key={tab.id}
                                 onClick={() => toggleTab(tab.id)}
                                 className={`flex items-center gap-2 px-6 py-2 rounded-xl text-xs font-bold transition-all duration-300 ${isActive
-                                    ? 'bg-indigo-600 text-white shadow-md scale-100'
+                                    ? 'bg-indigo-600 text-white shadow-md'
                                     : 'theme-text-muted hover:theme-text-main hover:bg-slate-500/10'
                                     }`}
                             >
@@ -217,124 +153,121 @@ const MainLayout: React.FC = () => {
                     })}
                 </div>
 
-                <div className="flex items-center gap-3">
-
-                    {/* Control Buttons */}
-                    <div className="flex items-center gap-1 p-1 rounded-xl theme-border theme-btn">
-                        <button
-                            onClick={toggleLeftPanel}
-                            className={`p-2 rounded-lg transition-all ${isLeftPanelOpen ? 'text-indigo-600 bg-white/20 shadow-sm' : 'theme-text-muted theme-tool-hover'}`}
-                        >
-                            {isLeftPanelOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-                        </button>
-                        <button
-                            onClick={toggleRightPanel}
-                            className={`p-2 rounded-lg transition-all ${isRightPanelOpen ? 'text-purple-600 bg-white/20 shadow-sm' : 'theme-text-muted theme-tool-hover'}`}
-                        >
-                            {isRightPanelOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
-                        </button>
+                {/* AI Pilot badge */}
+                <div className="flex items-center bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 rounded-xl px-3 py-1.5 gap-2 shadow-sm">
+                    <div className="relative">
+                        <Bot size={16} className="text-purple-600" />
+                        <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-green-500 border-2 border-white animate-pulse" />
                     </div>
-
-                    <div className="h-8 w-px theme-bg-panel mx-1" />
-
-                    <div className="flex items-center bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 rounded-xl px-3 py-1.5 gap-2 shadow-sm">
-                        <div className="relative">
-                            <Bot size={16} className="text-purple-600" />
-                            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-green-500 border-2 border-white animate-pulse" />
-                        </div>
-                        <span className="text-xs text-purple-700 font-bold hidden xl:block uppercase tracking-wider">AI Pilot Live</span>
-                    </div>
+                    <span className="text-xs text-purple-700 font-bold hidden xl:block uppercase tracking-wider">AI Pilot Live</span>
                 </div>
             </header>
 
-            {/* ── Main Workspace ── */}
+            {/* ── Main Workspace ──
+                최상위 수평 분할 (합계 = 100%):
+                • PDF만:            PDF(100%)
+                • PDF + 기타(AI없): PDF(55%) + Other(45%)
+                • PDF + 기타(AI있): PDF(44%) + Other(28%) + AI(28%)
+                • 기타만(AI없):     Other(100%)
+                • 기타만(AI있):     Other(72%) + AI(28%)
+            */}
             <div className="flex-1 overflow-hidden">
                 <Group orientation="horizontal" className="h-full">
-                    {/* Left Sidebar Panel */}
-                    {isLeftPanelOpen && (
+
+                    {/* ① PDF 편집: [도구창 | PDF 뷰어] */}
+                    {hasPdf && (
                         <>
                             <Panel
-                                defaultSize={25}
-                                minSize={2}
-                                className="theme-bg-panel border-r theme-border overflow-hidden flex flex-col shrink-0"
+                                defaultSize={
+                                    !hasOther ? 100
+                                        : showAiPanel ? 44
+                                            : 55
+                                }
+                                minSize={25}
+                                className="flex flex-col min-w-0"
                             >
-                                <div className="h-12 border-b theme-border-subtle flex items-center px-4 shrink-0 bg-black/5">
-                                    <span className="text-[10px] font-black theme-text-muted uppercase tracking-[0.2em]">Tools & Filters</span>
-                                </div>
-                                <div className="flex-1 overflow-y-auto">
-                                    <Sidebar />
+                                <div className="flex-1 p-6 overflow-hidden animate-slide-up h-full">
+                                    <div className="h-full flex flex-col min-h-0 theme-bg-glass rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] border theme-border overflow-hidden relative backdrop-blur-md">
+                                        <Group orientation="horizontal" className="h-full">
+                                            {/* Tool Sidebar: maxSize 없애고 minSize만 */}
+                                            <Panel
+                                                defaultSize={50}
+                                                minSize={50}
+                                                className="theme-bg-panel border-r theme-border overflow-hidden flex flex-col min-w-[90px]"
+                                            >
+                                                <div className="h-12 border-b theme-border-subtle flex items-center px-4 shrink-0 bg-black/5">
+                                                    <span className="text-[10px] font-black theme-text-muted uppercase tracking-[0.2em]">Tools &amp; Filters</span>
+                                                </div>
+                                                <div className="flex-1 overflow-y-auto">
+                                                    <Sidebar />
+                                                </div>
+                                            </Panel>
+                                            <Separator
+                                                onPointerUp={(e) => (e.target as HTMLElement).blur()}
+                                                className="w-4 -mx-1.5 bg-transparent hover:bg-indigo-500/10 transition-all cursor-col-resize active:bg-indigo-500/20 z-20 group relative"
+                                            >
+                                                <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[1px] theme-bg-glass group-hover:bg-indigo-500/50 transition-colors" />
+                                                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-10 theme-bg-panel border theme-border rounded-lg shadow-md flex flex-col items-center justify-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all scale-90 group-hover:scale-100">
+                                                    <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
+                                                    <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
+                                                    <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
+                                                </div>
+                                            </Separator>
+                                            <Panel id="pane-pdf" minSize={20} className="flex flex-col min-w-0 h-full">
+                                                <PdfViewer />
+                                            </Panel>
+                                        </Group>
+                                    </div>
                                 </div>
                             </Panel>
-                            <Separator 
-                                onPointerUp={(e) => (e.target as HTMLElement).blur()}
-                                className="w-4 -mx-1.5 bg-transparent hover:bg-indigo-500/10 transition-all cursor-col-resize active:bg-indigo-500/20 z-20 group relative"
-                            >
-                                <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[1px] theme-bg-glass group-hover:bg-indigo-500/50 transition-colors" />
-                                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-10 theme-bg-panel border theme-border rounded-lg shadow-md flex flex-col items-center justify-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all scale-90 group-hover:scale-100">
-                                    <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
-                                    <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
-                                    <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
-                                </div>
-                            </Separator>
+
+                            {hasOther && (
+                                <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                            )}
                         </>
                     )}
 
-                    {/* Center view panel - Split View */}
-                    <Panel defaultSize={50} className="flex flex-col min-w-0 bg-transparent">
-                        <div className="flex-1 p-6 overflow-hidden animate-slide-up">
-                            <div className="h-full flex flex-col min-h-0 theme-bg-glass rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] border theme-border overflow-hidden relative backdrop-blur-md">
-                                <Group orientation="horizontal" className="h-full">
-                                    {/* PDF Panel */}
-                                    {activeTabs.includes('pdf') && (
-                                        <Panel id="pane-pdf" minSize={20} className="flex flex-col min-w-0 h-full">
-                                            <PdfViewer />
-                                        </Panel>
-                                    )}
+                    {/* ② 웹/코드/단축키 */}
+                    {hasOther && (
+                        <Panel
+                            defaultSize={
+                                hasPdf
+                                    ? (showAiPanel ? 28 : 45)
+                                    : (showAiPanel ? 72 : 100)
+                            }
+                            minSize={15}
+                            className="flex flex-col min-w-0"
+                        >
+                            <Group orientation="horizontal" className="h-full">
+                                {activeTabs.includes('web') && (
+                                    <Panel id="pane-web" minSize={20} className="flex flex-col min-w-0 h-full">
+                                        <WebViewer />
+                                    </Panel>
+                                )}
+                                {activeTabs.includes('web') && (activeTabs.includes('code') || activeTabs.includes('shortcuts')) && (
+                                    <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                                )}
+                                {activeTabs.includes('code') && (
+                                    <Panel id="pane-code" minSize={20} className="flex flex-col min-w-0 h-full">
+                                        <CodeViewer />
+                                    </Panel>
+                                )}
+                                {activeTabs.includes('code') && activeTabs.includes('shortcuts') && (
+                                    <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                                )}
+                                {activeTabs.includes('shortcuts') && (
+                                    <Panel id="pane-shortcuts" minSize={20} className="flex flex-col min-w-0 h-full">
+                                        <ShortcutsViewer />
+                                    </Panel>
+                                )}
+                            </Group>
+                        </Panel>
+                    )}
 
-                                    {/* Separator 1 */}
-                                    {activeTabs.includes('pdf') && (activeTabs.includes('web') || activeTabs.includes('code') || activeTabs.includes('shortcuts')) && (
-                                        <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
-                                    )}
-
-                                    {/* Web Panel */}
-                                    {activeTabs.includes('web') && (
-                                        <Panel id="pane-web" minSize={20} className="flex flex-col min-w-0 h-full">
-                                            <WebViewer />
-                                        </Panel>
-                                    )}
-
-                                    {/* Separator 2 */}
-                                    {activeTabs.includes('web') && (activeTabs.includes('code') || activeTabs.includes('shortcuts')) && (
-                                        <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
-                                    )}
-
-                                    {/* Code Panel */}
-                                    {activeTabs.includes('code') && (
-                                        <Panel id="pane-code" minSize={20} className="flex flex-col min-w-0 h-full">
-                                            <CodeViewer />
-                                        </Panel>
-                                    )}
-
-                                    {/* Separator 3 */}
-                                    {activeTabs.includes('code') && activeTabs.includes('shortcuts') && (
-                                        <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
-                                    )}
-
-                                    {/* Shortcuts Panel */}
-                                    {activeTabs.includes('shortcuts') && (
-                                        <Panel id="pane-shortcuts" minSize={20} className="flex flex-col min-w-0 h-full">
-                                            <ShortcutsViewer />
-                                        </Panel>
-                                    )}
-                                </Group>
-                            </div>
-                        </div>
-                    </Panel>
-
-                    {/* Right AI Panel */}
-                    {isRightPanelOpen && (
+                    {/* ③ AI 코파일럿: 최상위 고정 패널 (비율 유지) */}
+                    {showAiPanel && (
                         <>
-                            <Separator 
+                            <Separator
                                 onPointerUp={(e) => (e.target as HTMLElement).blur()}
                                 className="w-4 -mx-1.5 bg-transparent hover:bg-purple-500/10 transition-all cursor-col-resize active:bg-purple-500/20 z-20 group relative"
                             >
@@ -346,14 +279,15 @@ const MainLayout: React.FC = () => {
                                 </div>
                             </Separator>
                             <Panel
-                                defaultSize={25}
-                                minSize={2}
+                                defaultSize={28}
+                                minSize={15}
                                 className="theme-bg-panel border-l theme-border flex flex-col shrink-0"
                             >
                                 <AiPanel />
                             </Panel>
                         </>
                     )}
+
                 </Group>
             </div>
 

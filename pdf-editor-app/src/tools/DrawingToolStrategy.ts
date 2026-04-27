@@ -3,7 +3,7 @@
 
 export type DrawingTool =
     | 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle'
-    | 'eraser' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right'
+    | 'eraser' | 'arrow' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right'
     | 'arrow-l-1' | 'arrow-l-2' | 'image';
 
 export interface DrawingAnnotation {

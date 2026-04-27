@@ -27,6 +27,9 @@ export class ShapeTool extends AbstractTool {
     // Each run: { text, rect: [x, y, w, h] } where rect is in canvas-pixel coords
     public getTextRuns: (() => TextBlock[]) | null = null;
 
+    private startSnapPartner: { id: string, isEnd: boolean } | null = null;
+    private snapPartner: { id: string, isEnd: boolean } | null = null;
+
     constructor(store: any, toolName: string) {
         super(store);
         this.name = toolName;
@@ -104,22 +107,26 @@ export class ShapeTool extends AbstractTool {
     private snapToNearestTextBoundary(
         pos: { x: number; y: number },
         scale: number
-    ): { x: number; y: number } | null {
+    ): { x: number; y: number; partner?: { id: string; isEnd: boolean } } | null {
         // [CUSTOMIZE] snap threshold in canvas pixels (default: 20px)
         const thresholdPx = 20;
-        let best: { x: number; y: number } | null = null;
+        let best: { x: number; y: number; partner?: { id: string; isEnd: boolean } } | null = null;
         let minDist = Infinity;
 
         // pos is in logical coords; convert to canvas-pixel for distance comparison
         const posCanvasX = pos.x * scale;
         const posCanvasY = pos.y * scale;
 
-        const checkCanvas = (cx: number, cy: number) => {
+        const checkCanvas = (cx: number, cy: number, partnerId?: string, isEnd?: boolean) => {
             // cx, cy in canvas-pixel coords
             const d = Math.hypot(posCanvasX - cx, posCanvasY - cy);
             if (d < thresholdPx && d < minDist) {
                 minDist = d;
-                best = { x: cx / scale, y: cy / scale };
+                best = {
+                    x: cx / scale,
+                    y: cy / scale,
+                    partner: partnerId ? { id: partnerId, isEnd: !!isEnd } : undefined
+                };
             }
         };
 
@@ -141,12 +148,15 @@ export class ShapeTool extends AbstractTool {
         // 2. All drawn elements (logical coords → convert to canvas-pixel)
         if (this.getPageElements) {
             for (const el of this.getPageElements()) {
-                const checkLogical = (lx: number, ly: number) => checkCanvas(lx * scale, ly * scale);
+                const checkLogical = (lx: number, ly: number, pid?: string, isEnd?: boolean) =>
+                    checkCanvas(lx * scale, ly * scale, pid, isEnd);
 
-                // Arrow: snap to endpoints
-                if (el.shapeType?.startsWith('arrow-') && el.points?.length >= 2) {
-                    checkLogical(el.points[0].x, el.points[0].y);
-                    checkLogical(el.points[1].x, el.points[1].y);
+                // Arrow: snap to all points (start, elbows, end)
+                if ((el.shapeType === 'arrow' || el.shapeType?.startsWith('arrow-')) && el.points?.length >= 2) {
+                    const expanded = this.getExpandedPoints(el);
+                    expanded.forEach((p, idx) => {
+                        checkLogical(p.x, p.y, el.id, idx === expanded.length - 1);
+                    });
                 } else if (el.x !== undefined && el.width !== undefined) {
                     // Shape / image / text box: snap to corners and edge midpoints
                     const { x, y, width: w, height: h } = el;
@@ -165,6 +175,22 @@ export class ShapeTool extends AbstractTool {
         return best;
     }
 
+    private getExpandedPoints(el: any): { x: number, y: number }[] {
+        if (!el.points || el.points.length < 2) return [];
+        const type = el.shapeType || el.type || '';
+        if (type === 'arrow-l-1' || type === 'arrow-l-2') {
+            if (el.points.length === 2) {
+                const p0 = el.points[0];
+                const p1 = el.points[1];
+                const elbow = (type === 'arrow-l-1')
+                    ? { x: p1.x, y: p0.y } // Horizontal elbow (L-shape 1)
+                    : { x: p0.x, y: p1.y }; // Vertical elbow (L-shape 2)
+                return [p0, elbow, p1];
+            }
+        }
+        return el.points;
+    }
+
     private isArrowTool(): boolean {
         return this.name === 'arrow' || this.name.startsWith('arrow-');
     }
@@ -181,7 +207,14 @@ export class ShapeTool extends AbstractTool {
         // Arrow + Ctrl: snap start point to nearest text block boundary
         if (this.isArrowTool() && ctrlKey) {
             const snapped = this.snapToNearestTextBoundary(normalizedPos, scale);
-            if (snapped) normalizedPos = snapped;
+            if (snapped) {
+                normalizedPos = { x: snapped.x, y: snapped.y };
+                this.startSnapPartner = snapped.partner || null;
+            } else {
+                this.startSnapPartner = null;
+            }
+        } else {
+            this.startSnapPartner = null;
         }
 
         this.startPos = normalizedPos;
@@ -220,7 +253,14 @@ export class ShapeTool extends AbstractTool {
         // Arrow + Ctrl: snap end point to nearest text block boundary
         if (this.isArrowTool() && ctrlKey) {
             const snapped = this.snapToNearestTextBoundary(normalizedPos, scale);
-            if (snapped) normalizedPos = snapped;
+            if (snapped) {
+                normalizedPos = { x: snapped.x, y: snapped.y };
+                this.snapPartner = snapped.partner || null;
+            } else {
+                this.snapPartner = null;
+            }
+        } else {
+            this.snapPartner = null;
         }
 
         let x = Math.min(this.startPos.x, normalizedPos.x);
@@ -236,18 +276,10 @@ export class ShapeTool extends AbstractTool {
         this.previewElement.height = h;
         this.previewElement.points = [this.startPos, normalizedPos];
 
-        // For unified 'arrow' tool, update preview direction in real-time
+        // If generic 'arrow' tool, no direction forcing needed
         if (this.name === 'arrow') {
-            const rawDx = normalizedPos.x - this.startPos.x;
-            const rawDy = normalizedPos.y - this.startPos.y;
-            let resolvedType: ShapeType;
-            if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-                resolvedType = rawDx >= 0 ? 'arrow-right' : 'arrow-left';
-            } else {
-                resolvedType = rawDy >= 0 ? 'arrow-down' : 'arrow-up';
-            }
-            this.previewElement.shapeType = resolvedType;
-            this.previewElement.type = resolvedType;
+            this.previewElement.shapeType = 'arrow';
+            this.previewElement.type = 'arrow' as any;
         }
 
         const state = this.getState();
@@ -265,7 +297,14 @@ export class ShapeTool extends AbstractTool {
         // Arrow + Ctrl: snap end point on release
         if (this.isArrowTool() && ctrlKey) {
             const snapped = this.snapToNearestTextBoundary(normalizedPos, scale);
-            if (snapped) normalizedPos = snapped;
+            if (snapped) {
+                normalizedPos = { x: snapped.x, y: snapped.y };
+                this.snapPartner = snapped.partner || null;
+            } else {
+                this.snapPartner = null;
+            }
+        } else {
+            this.snapPartner = null;
         }
 
         const dx = Math.abs(normalizedPos.x - this.startPos.x);
@@ -276,8 +315,6 @@ export class ShapeTool extends AbstractTool {
             this.startPos = null;
             return;
         }
-
-        // Apply final text snap on release: expand to cover all text that overlaps the drag rect
         if (this.isTextSnapTool()) {
             const snapped = this.computeTextSnapRect(this.startPos, normalizedPos, scale);
             if (snapped) {
@@ -300,31 +337,70 @@ export class ShapeTool extends AbstractTool {
             this.previewElement.height = Math.abs(normalizedPos.y - this.startPos.y);
         }
 
-        // If unified 'arrow' tool, determine direction from drag vector
-        if (this.name === 'arrow') {
-            const rawDx = normalizedPos.x - this.startPos.x;
-            const rawDy = normalizedPos.y - this.startPos.y;
-            let resolvedType: ShapeType;
-            if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-                resolvedType = rawDx >= 0 ? 'arrow-right' : 'arrow-left';
-            } else {
-                resolvedType = rawDy >= 0 ? 'arrow-down' : 'arrow-up';
-            }
-            this.previewElement.shapeType = resolvedType;
-            this.previewElement.type = resolvedType;
-        }
+        // --- NEW: Merge Logic in ShapeTool ---
+        const sp = this.snapPartner || this.startSnapPartner;
+        const isDrawingEndSnapped = !!this.snapPartner;
+        
+        if (sp && this.isArrowTool()) {
+            const partnerId = sp.id;
+            const isPartnerEnd = sp.isEnd;
+            
+            // Condition: Merge only if Head-to-Tail or Tail-to-Head
+            const isDrawingHeadMeetingTails = isDrawingEndSnapped && !isPartnerEnd;
+            const isDrawingTailMeetingHeads = !isDrawingEndSnapped && isPartnerEnd;
 
-        const command = new AddElementCommand(state.currentPage, this.previewElement, state.setElements);
-        // Use CommandHistory.push() which calls execute() internally — enables undo/redo
-        const history = state.getCommandHistory?.(state.currentPage);
-        if (history) {
-            history.push(command); // push calls execute() internally
+            if (isDrawingHeadMeetingTails || isDrawingTailMeetingHeads) {
+                state.setElements(state.currentPage, (prev: any[]) => {
+                    const partner = prev.find(e => e.id === partnerId);
+                    if (!partner || !partner.points) return prev;
+                    
+                    const p1 = this.previewElement!.points;
+                    const points1 = this.getExpandedPoints({ shapeType: this.previewElement!.shapeType, points: p1 });
+                    const points2 = this.getExpandedPoints(partner);
+                    
+                    let mergedPoints: {x:number, y:number}[] = [];
+                    if (isDrawingHeadMeetingTails) {
+                        mergedPoints = [...points1, ...points2.slice(1)];
+                    } else {
+                        mergedPoints = [...points2, ...points1.slice(1)];
+                    }
+                    
+                    const filtered = prev.filter(e => e.id !== partnerId);
+                    const xs = mergedPoints.map(p => p.x);
+                    const ys = mergedPoints.map(p => p.y);
+                    const minX = Math.min(...xs), minY = Math.min(...ys);
+                    
+                    const merged = new ShapeElement(
+                        'merged-' + Date.now(),
+                        this.previewElement!.style.copy({}),
+                        'arrow',
+                        minX, minY,
+                        Math.max(...xs) - minX, Math.max(...ys) - minY,
+                        mergedPoints
+                    );
+                    return [...filtered, merged];
+                });
+                state.incrementRevision();
+            } else {
+                // Partner snapped but Head-to-Head (no merge) - add normally
+                const command = new AddElementCommand(state.currentPage, this.previewElement, state.setElements);
+                const history = state.getCommandHistory?.(state.currentPage);
+                if (history) history.push(command);
+                else command.execute();
+                state.incrementRevision();
+            }
         } else {
-            command.execute(); // fallback if history not available
+            // No partner snapped - add normally
+            const command = new AddElementCommand(state.currentPage, this.previewElement, state.setElements);
+            const history = state.getCommandHistory?.(state.currentPage);
+            if (history) history.push(command);
+            else command.execute();
+            state.incrementRevision();
         }
-        state.incrementRevision();
 
         this.previewElement = null;
         this.startPos = null;
+        this.snapPartner = null;
+        this.startSnapPartner = null;
     }
 }

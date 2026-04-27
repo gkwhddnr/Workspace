@@ -14,7 +14,7 @@ interface ISelectSubState {
     onPointerUp(params: PointerEventParams): ISelectSubState;
 }
 
-type DragHandle = 'body' | 'arrow-start' | 'arrow-end' | 'shape-tl' | 'shape-tr' | 'shape-bl' | 'shape-br';
+type DragHandle = 'body' | 'arrow-start' | 'arrow-end' | 'shape-tl' | 'shape-tr' | 'shape-bl' | 'shape-br' | `arrow-point-${number}` | `arrow-mid-${number}`;
 
 /**
  * Concrete State: SelectTool
@@ -55,7 +55,7 @@ export class SelectTool extends AbstractTool {
     // Helper methods shared by sub-states
     public hitTestElement(el: RenderElement, pos: { x: number; y: number }, scale: number): boolean {
         const hitRadius = 10 / scale;
-        if ((el as any).shapeType?.startsWith('arrow-') && (el as any).points?.length >= 2) {
+        if (((el as any).shapeType === 'arrow' || (el as any).shapeType?.startsWith('arrow-')) && (el as any).points?.length >= 2) {
             const s = el as any;
             for (let i = 0; i < s.points.length - 1; i++) {
                 if (this.distToSegment(pos, s.points[i], s.points[i + 1]) <= hitRadius) return true;
@@ -70,11 +70,24 @@ export class SelectTool extends AbstractTool {
     public hitTestHandles(el: RenderElement, canvasPos: { x: number; y: number }, scale: number): DragHandle | null {
         const r = this.HANDLE_RADIUS;
         const s = el as any;
-        if (s.shapeType?.startsWith('arrow-') && s.points?.length >= 2) {
-            const pStart = { x: s.points[0].x * scale, y: s.points[0].y * scale };
-            const pEnd = { x: s.points[s.points.length - 1].x * scale, y: s.points[s.points.length - 1].y * scale };
-            if (Math.hypot(canvasPos.x - pStart.x, canvasPos.y - pStart.y) <= r) return 'arrow-start';
-            if (Math.hypot(canvasPos.x - pEnd.x, canvasPos.y - pEnd.y) <= r) return 'arrow-end';
+        if ((s.shapeType === 'arrow' || s.shapeType?.startsWith('arrow-')) && s.points?.length >= 2) {
+            for (let i = 0; i < s.points.length; i++) {
+                const p = { x: s.points[i].x * scale, y: s.points[i].y * scale };
+                if (Math.hypot(canvasPos.x - p.x, canvasPos.y - p.y) <= r) {
+                    if (i === 0) return 'arrow-start';
+                    if (i === s.points.length - 1) return 'arrow-end';
+                    return `arrow-point-${i}` as DragHandle;
+                }
+            }
+            // Middle handles for segment splitting
+            for (let i = 0; i < s.points.length - 1; i++) {
+                const p1 = s.points[i];
+                const p2 = s.points[i+1];
+                const mid = { x: (p1.x + p2.x) / 2 * scale, y: (p1.y + p2.y) / 2 * scale };
+                if (Math.hypot(canvasPos.x - mid.x, canvasPos.y - mid.y) <= r) {
+                    return `arrow-mid-${i}` as DragHandle;
+                }
+            }
         } else if (s.shapeType === 'rect' || s.shapeType === 'circle' || s.shapeType === 'highlight' || el.type === 'image' || el.type === 'text') {
             const bbox = el.getBoundingBox();
             const corners = [
@@ -96,6 +109,22 @@ export class SelectTool extends AbstractTool {
         if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
         const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
         return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+    }
+
+    public getExpandedPoints(el: any): { x: number, y: number }[] {
+        if (!el.points || el.points.length < 2) return [];
+        const type = el.shapeType || el.type || '';
+        if (type === 'arrow-l-1' || type === 'arrow-l-2') {
+            if (el.points.length === 2) {
+                const p0 = el.points[0];
+                const p1 = el.points[1];
+                const elbow = (type === 'arrow-l-1')
+                    ? { x: p1.x, y: p0.y } // Horizontal elbow (L-shape 1)
+                    : { x: p0.x, y: p1.y }; // Vertical elbow (L-shape 2)
+                return [p0, elbow, p1];
+            }
+        }
+        return el.points;
     }
 
     // Helper: Merges two arrow point arrays correctly based on shared endpoint
@@ -127,6 +156,19 @@ class SelectIdleSubState implements ISelectSubState {
             if (selected) {
                 const handle = this.tool.hitTestHandles(selected, pos, scale);
                 if (handle) {
+                    if (handle.startsWith('arrow-mid-')) {
+                        const idx = parseInt(handle.split('-')[2]);
+                        const p1 = (selected as any).points[idx];
+                        const p2 = (selected as any).points[idx+1];
+                        const newPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+                        
+                        // Insert point and switch handle
+                        (selected as any).points.splice(idx + 1, 0, newPoint);
+                        const newHandle = `arrow-point-${idx + 1}` as DragHandle;
+                        
+                        state.incrementRevision();
+                        return new SelectDraggingSubState(this.tool, selected, newHandle, normalizedPos);
+                    }
                     return new SelectDraggingSubState(this.tool, selected, handle, normalizedPos);
                 }
             }
@@ -143,7 +185,7 @@ class SelectIdleSubState implements ISelectSubState {
 
         if (hitEl) {
             // [NEW] Arrow Integration: Ctrl + Click on arrow handle to merge
-            if (params.ctrlKey && (hitEl as any).shapeType?.startsWith('arrow-')) {
+            if (params.ctrlKey && ((hitEl as any).shapeType === 'arrow' || (hitEl as any).shapeType?.startsWith('arrow-'))) {
                 const handle = this.tool.hitTestHandles(hitEl, pos, scale);
                 if (handle === 'arrow-start' || handle === 'arrow-end') {
                     const isEnd1 = handle === 'arrow-end';
@@ -151,7 +193,7 @@ class SelectIdleSubState implements ISelectSubState {
 
                     // Find another arrow that shares this endpoint
                     const otherArrowIndex = elements.findIndex((e: RenderElement) => {
-                        if (e.id === hitEl!.id || !(e as any).shapeType?.startsWith('arrow-')) return false;
+                        if (e.id === hitEl!.id || !((e as any).shapeType === 'arrow' || (e as any).shapeType?.startsWith('arrow-'))) return false;
                         const s = e as any;
                         const distStart = Math.hypot(s.points[0].x - hitPoint.x, s.points[0].y - hitPoint.y);
                         const distEnd = Math.hypot(s.points[s.points.length - 1].x - hitPoint.x, s.points[s.points.length - 1].y - hitPoint.y);
@@ -240,43 +282,71 @@ class SelectDraggingSubState implements ISelectSubState {
 
         this.snapPartner = null;
 
-        // Interactive Snapping & Orthogonal snapping
-        if (params.ctrlKey && (this.handle === 'arrow-start' || this.handle === 'arrow-end')) {
-            const elements = state.elements[state.currentPage] || [];
-            
-            // 1. Try Object Snapping
-            for (const el of elements) {
-                if (el.id === this.element.id || !(el as any).shapeType?.startsWith('arrow-')) continue;
-                const s = el as any;
-                const distStart = Math.hypot(s.points[0].x - normalizedPos.x, s.points[0].y - normalizedPos.y);
-                const distEnd = Math.hypot(s.points[s.points.length - 1].x - normalizedPos.x, s.points[s.points.length - 1].y - normalizedPos.y);
+        // Interactive Snapping
+        const isArrowHandle = this.handle === 'arrow-start' || this.handle === 'arrow-end' || this.handle.startsWith('arrow-point-');
+        if (params.ctrlKey && isArrowHandle) {
+            const thresholdPx = 20;
+            const posCanvasX = normalizedPos.x * scale;
+            const posCanvasY = normalizedPos.y * scale;
 
-                if (distStart < 20 / scale) {
-                    normalizedPos = { ...s.points[0] };
-                    this.snapPartner = { id: el.id, isEnd: false };
-                    break;
+            let best: { x: number, y: number } | null = null;
+            let minDist = Infinity;
+
+            const checkCanvas = (cx: number, cy: number, partnerId: string | null = null, isEnd: boolean = false) => {
+                const d = Math.hypot(posCanvasX - cx, posCanvasY - cy);
+                if (d < thresholdPx && d < minDist) {
+                    minDist = d;
+                    best = { x: cx / scale, y: cy / scale };
+                    if (partnerId) {
+                        this.snapPartner = { id: partnerId, isEnd };
+                    } else {
+                        this.snapPartner = null;
+                    }
                 }
-                if (distEnd < 20 / scale) {
-                    normalizedPos = { ...s.points[s.points.length - 1] };
-                    this.snapPartner = { id: el.id, isEnd: true };
-                    break;
+            };
+
+            // 1. Snap to other Drawn Elements
+            const elements = state.elements[state.currentPage] || [];
+            for (const el of elements) {
+                if (el.id === this.element.id) continue;
+                const s = el as any;
+
+                if ((s.shapeType === 'arrow' || s.shapeType?.startsWith('arrow-')) && s.points?.length >= 2) {
+                    const expanded = this.tool.getExpandedPoints(el);
+                    expanded.forEach((p, idx) => {
+                        checkCanvas(p.x * scale, p.y * scale, el.id, idx === expanded.length - 1);
+                    });
+                } else if (s.x !== undefined && s.width !== undefined) {
+                    // Rect / Circle / Image / Text boxes
+                    const { x, y, width: w, height: h } = s;
+                    const checkLogical = (lx: number, ly: number) => checkCanvas(lx * scale, ly * scale);
+                    checkLogical(x, y);
+                    checkLogical(x + w, y);
+                    checkLogical(x, y + h);
+                    checkLogical(x + w, y + h);
+                    checkLogical(x + w / 2, y);
+                    checkLogical(x + w / 2, y + h);
+                    checkLogical(x, y + h / 2);
+                    checkLogical(x + w, y + h / 2);
                 }
             }
 
-            // 2. If no object snap, try Orthogonal snapping
-            if (!this.snapPartner) {
-                const s = this.element as any;
-                const points = s.points;
-                const adjIdx = this.handle === 'arrow-start' ? 1 : points.length - 2;
-                const adjPos = points[adjIdx];
+            // 2. Snap to PDF Text Blocks
+            const pdfBlocks = this.tool.getTextBlocks?.() || [];
+            for (const b of pdfBlocks) {
+                const [bx, by, bw, bh] = b.rect;
+                checkCanvas(bx, by);
+                checkCanvas(bx + bw, by);
+                checkCanvas(bx, by + bh);
+                checkCanvas(bx + bw, by + bh);
+                checkCanvas(bx + bw / 2, by);
+                checkCanvas(bx + bw / 2, by + bh);
+                checkCanvas(bx, by + bh / 2);
+                checkCanvas(bx + bw, by + bh / 2);
+            }
 
-                if (adjPos) {
-                    if (Math.abs(normalizedPos.x - adjPos.x) > Math.abs(normalizedPos.y - adjPos.y)) {
-                        normalizedPos.y = adjPos.y;
-                    } else {
-                        normalizedPos.x = adjPos.x;
-                    }
-                }
+            if (best) {
+                normalizedPos = best;
             }
         }
 
@@ -296,6 +366,12 @@ class SelectDraggingSubState implements ISelectSubState {
                 this.syncArrowBBox(s);
             } else if (this.handle === 'arrow-end' && snap.points) {
                 s.points = [...snap.points.slice(0, -1), normalizedPos];
+                this.syncArrowBBox(s);
+            } else if (this.handle.startsWith('arrow-point-') && snap.points) {
+                const idx = parseInt(this.handle.split('-')[2]);
+                const newPoints = [...snap.points];
+                newPoints[idx] = normalizedPos;
+                s.points = newPoints;
                 this.syncArrowBBox(s);
             } else if (this.handle === 'shape-br') {
                 s.width = Math.max(10 / scale, normalizedPos.x - snap.x);
@@ -328,14 +404,21 @@ class SelectDraggingSubState implements ISelectSubState {
         // [NEW] Merge on Drop logic
         if (params.ctrlKey && this.snapPartner) {
             const elements = state.elements[state.currentPage] || [];
-            const partner = elements.find(e => e.id === this.snapPartner!.id) as any;
-            if (partner) {
-                const isEnd1 = this.handle === 'arrow-end';
+            const partner = elements.find((e: any) => e.id === this.snapPartner!.id) as any;
+            const myLatest = elements.find((e: any) => e.id === this.element.id) as any;
+
+            if (myLatest && partner) {
+                const isEnd1 = this.handle === 'arrow-end' || this.handle === 'arrow-point-' + (myLatest.points.length - 1);
                 const isEnd2 = this.snapPartner.isEnd;
-                const mergedPoints = this.tool.mergePoints((this.element as any).points, isEnd1, partner.points, isEnd2);
+
+                // [NEW] Only merge Head-to-Tail or Tail-to-Head (isEnd1 !== isEnd2)
+                if (isEnd1 !== isEnd2) {
+                    const points1 = this.tool.getExpandedPoints(myLatest);
+                    const points2 = this.tool.getExpandedPoints(partner);
+                    const mergedPoints = this.tool.mergePoints(points1, isEnd1, points2, isEnd2);
 
                 state.setElements(state.currentPage, (prev: RenderElement[]) => {
-                    const filtered = prev.filter(e => e.id !== this.element.id && e.id !== partner.id);
+                    const filtered = prev.filter((e: any) => e.id !== this.element.id && e.id !== partner.id);
                     
                     const mergedPointsLogical = mergedPoints;
                     const minX = Math.min(...mergedPointsLogical.map((p: any) => p.x));
@@ -346,7 +429,7 @@ class SelectDraggingSubState implements ISelectSubState {
                     const merged = new ShapeElement(
                         'merged-' + Date.now(),
                         (this.element as any).style.copy({}),
-                        (this.element as any).shapeType,
+                        'arrow', // Use generic polyline arrow type
                         minX,
                         minY,
                         maxX - minX,
@@ -356,6 +439,7 @@ class SelectDraggingSubState implements ISelectSubState {
 
                     return [...filtered, merged];
                 });
+                }
             }
         }
 
@@ -379,9 +463,12 @@ class SelectDraggingSubState implements ISelectSubState {
     }
 
     private syncArrowBBox(s: any) {
-        s.x = Math.min(s.points[0].x, s.points[1].x);
-        s.y = Math.min(s.points[0].y, s.points[1].y);
-        s.width = Math.abs(s.points[1].x - s.points[0].x);
-        s.height = Math.abs(s.points[1].y - s.points[0].y);
+        if (!s.points || s.points.length === 0) return;
+        const xs = s.points.map((p: any) => p.x);
+        const ys = s.points.map((p: any) => p.y);
+        s.x = Math.min(...xs);
+        s.y = Math.min(...ys);
+        s.width = Math.max(...xs) - s.x;
+        s.height = Math.max(...ys) - s.y;
     }
 }

@@ -93,4 +93,23 @@
 - **규칙 1 (Upload)**: `useSavePdf.ts` 등에서 서버로 원본 PDF(`original-pdf`)를 백업할 때, 반드시 `originalData.length > 0`인 경우에만 업로드를 수행할 것
 - **규칙 2 (Load)**: `PdfViewer.tsx`의 `loadPdf`에서 서버로부터 백업 파일을 가져왔을 때, `blob.size === 0`이라면 이를 무시하고 사용자의 로컬 파일을 그대로 유지(fallback)할 것
 - **규칙 3 (Backend)**: 서버 측 저장 로직(`FileStorageService.kt`)에서도 `MultipartFile.isEmpty` 체크를 통해 빈 파일이 저장되어 백업을 오염시키는 것을 차단할 것
-- **목적**: 0바이트 파일이 백업 시스템을 오염시켜 `InvalidPDFException` 크래시를 유발하는 것을 원천 차단
+---
+
+## API 통신 표준화 (Axios & Centralized API Service)
+
+- **규칙**: 백엔드와의 모든 HTTP 통신은 `fetch` 대신 `WorkspaceApiService.ts`의 `apiClient` (Axios 인스턴스)를 사용해야 함
+- **설정**:
+  - `timeout`: 대용량 PDF 처리를 고려하여 최소 30,000ms 이상 설정
+  - `withCredentials`: CORS간 세션 유지를 위해 반드시 `true` 설정
+  - `X-Requested-With`: CSRF 방어를 위해 모든 요청 헤더에 포함
+- **에러 처리**: 개별 컴포넌트에서 에러를 처리하기 전, `apiClient.interceptors.response`를 통해 전역 로깅을 수행하여 디버깅 편의성 확보
+
+---
+
+## 분할 레이아웃 가독성 확보 (Panel Min-Width & Adaptive Layout)
+
+- **문제**: 3분할 이상의 레이아웃에서 특정 패널이 지나치게 좁아져 내부 텍스트가 줄바꿈되거나 UI가 겹치는 현상
+- **해결**:
+  - `Panel` 컴포넌트의 `className`에 Tailwind의 `min-w-[Npx]` 또는 인라인 스타일 `minWidth`를 명시적으로 부여하여 최소한의 가독성 폭을 확보할 것 (예: 도구 패널은 최소 160px)
+  - `defaultSize` 설정 시 전체 합계가 100%가 되도록 탭 조합별 분기 로직을 정밀하게 작성할 것 (초과 시 레이아웃 엔진에 의해 패널이 강제로 압축됨)
+- **컨텍스트 기반 렌더링**: AI 패널과 같이 특정 상황(웹/코드 편집)에서만 필요한 패널은 `activeTabs` 상태에 따라 조건부 렌더링하여 작업 공간을 동적으로 확보함

@@ -4,7 +4,7 @@ import { ElementVisitor } from './ElementVisitor';
 import { GraphicStyle } from './GraphicStyle';
 import { Point } from './PathElement';
 
-export type ShapeType = 'rect' | 'circle' | 'highlight' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2';
+export type ShapeType = 'rect' | 'circle' | 'highlight' | 'arrow' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2';
 
 /**
  * Leaf: ShapeElement
