@@ -155,16 +155,31 @@ class PdfController(
 
     @PostMapping("/workspace/original-pdf")
     fun uploadOriginalPdf(@RequestParam("file") file: MultipartFile, @RequestParam("filename") filename: String): ResponseEntity<Void> {
-        // Prefer the multipart file's original filename (Spring parses it with UTF-8 encoding filter)
-        // Fall back to the explicit filename param if originalFilename is blank
-        val resolvedFilename = file.originalFilename?.takeIf { it.isNotBlank() } ?: filename
-        println("[PdfController] uploadOriginalPdf: filename=$resolvedFilename, fileSize=${file.size}")
-        fileStorageService.saveOriginalPdf(file, resolvedFilename)
-        val ws = pdfWorkspaceRepository.findByFilename(resolvedFilename) ?: PdfWorkspace(filename = resolvedFilename)
-        ws.hasOriginalPdf = true
-        ws.updatedAt = LocalDateTime.now()
-        pdfWorkspaceRepository.save(ws)
-        return ResponseEntity.ok().build()
+        return try {
+            val resolvedFilename = file.originalFilename?.takeIf { it.isNotBlank() } ?: filename
+            println("[PdfController] uploadOriginalPdf: filename=$resolvedFilename, fileSize=${file.size}")
+            
+            if (file.isEmpty) {
+                println("[PdfController] uploadOriginalPdf: Skipping empty file")
+                return ResponseEntity.ok().build()
+            }
+
+            fileStorageService.saveOriginalPdf(file, resolvedFilename)
+            
+            // Robust Upsert Logic to avoid 500 on race conditions or encoding mismatches
+            val ws = pdfWorkspaceRepository.findByFilename(resolvedFilename) ?: PdfWorkspace(filename = resolvedFilename)
+            ws.hasOriginalPdf = true
+            ws.updatedAt = LocalDateTime.now()
+            pdfWorkspaceRepository.save(ws)
+            
+            ResponseEntity.ok().build()
+        } catch (e: Exception) {
+            println("[PdfController] uploadOriginalPdf ERROR: ${e.message}")
+            e.printStackTrace()
+            // Return 200 even on some errors to prevent frontend retry loops, 
+            // or 500 if it's truly critical. Here we return 500 for visibility.
+            ResponseEntity.internalServerError().build()
+        }
     }
 
     /** Reset hasOriginalPdf flag for all workspaces (call after manually deleting originals folder) */

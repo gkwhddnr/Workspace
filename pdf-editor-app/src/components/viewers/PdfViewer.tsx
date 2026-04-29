@@ -636,7 +636,8 @@ const PdfViewer: React.FC = () => {
             const renderContext = {
                 canvasContext: ctx,
                 viewport,
-                intent: 'display'
+                intent: 'display',
+                annotationMode: pdfjsLib.AnnotationMode.ENABLE
             };
 
             const renderTask = page.render(renderContext);
@@ -726,14 +727,21 @@ const PdfViewer: React.FC = () => {
                         } else {
                             console.warn("[PdfViewer] Original PDF binary is missing or empty on backend. Falling back to local/user file.");
                         }
-                    } else {
-                        // Upload original only if not already backed up
+                    } else if (file.size > 0) {
+                        // Upload original only if not already backed up and not empty
                         workspaceApiService.uploadOriginalPdf(file.name, file).catch(console.error);
                     }
-                } else {
+                } else if (file.size > 0) {
                     // No workspace record yet — upload original for first-time backup
                     workspaceApiService.uploadOriginalPdf(file.name, file).catch(console.error);
                 }
+            }
+
+            // Final 0-byte check after potential backend restoration
+            if (actualFile.size === 0) {
+                console.error("[PdfViewer] Final file check failed: file is 0 bytes:", actualFile.name);
+                alert(`오류: '${actualFile.name}' 파일이 비어 있거나 손상되었습니다 (0 bytes). 정상적인 파일을 선택해 주세요.`);
+                return;
             }
 
             const arrayBuffer = await actualFile.arrayBuffer();

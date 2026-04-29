@@ -12,6 +12,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    icon: path.join(__dirname, '../public/window-icon.ico'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -213,7 +214,7 @@ ipcMain.handle('file:read', async (event, filePath) => {
     const fileBuffer = await fs.readFile(filePath);
     return {
       success: true,
-      data: fileBuffer.toString('base64'),
+      data: fileBuffer,
       size: fileBuffer.length
     };
   } catch (error) {

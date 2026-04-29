@@ -11,8 +11,10 @@ import FlattenModal from '../components/FlattenModal';
 import ShortcutsModal from '../components/ShortcutsModal';
 import ShortcutsViewer from '../components/viewers/ShortcutsViewer';
 import {
-    FileText, Globe, Code2, Bot, Keyboard
+    FileText, Globe, Code2, Bot, Keyboard,
+    Download, ChevronDown, Image, FileCode, Presentation, FileDown
 } from 'lucide-react';
+import { exportService, ExportFormat } from '../services/ExportService';
 
 const TABS: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
     { id: 'pdf', label: 'PDF 편집', icon: <FileText size={14} /> },
@@ -30,6 +32,27 @@ const MainLayout: React.FC = () => {
 
     const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
     const [isFlattenModalOpen, setIsFlattenModalOpen] = useState(false);
+    const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
+    const [isExporting, setIsExporting] = useState(false);
+    
+    const { pdfOriginalData, currentFileName } = useAppStore();
+
+    const handleExport = async (format: ExportFormat) => {
+        if (!pdfOriginalData) {
+            alert('현재 열려있는 PDF 파일이 없습니다.');
+            return;
+        }
+        
+        setIsExportDropdownOpen(false);
+        setIsExporting(true);
+        try {
+            await exportService.exportPdf(pdfOriginalData, currentFileName || 'document.pdf', { format });
+        } catch (error) {
+            console.error('Export failed:', error);
+        } finally {
+            setIsExporting(false);
+        }
+    };
     const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
 
     useEffect(() => {
@@ -152,14 +175,94 @@ const MainLayout: React.FC = () => {
                         );
                     })}
                 </div>
+                <div className="flex items-center gap-3">
+                    {/* 파일 정리 버튼 */}
+                    <button
+                        onClick={() => setIsFlattenModalOpen(true)}
+                        className="flex items-center gap-2 px-4 py-1.5 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-xl text-xs font-bold shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5"
+                        title="PDF 정리 (Ctrl+Shift+F)"
+                    >
+                        <FileText size={14} />
+                        <span className="hidden lg:inline">파일 정리</span>
+                    </button>
 
-                {/* AI Pilot badge */}
-                <div className="flex items-center bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 rounded-xl px-3 py-1.5 gap-2 shadow-sm">
+                    {/* 변환 및 내보내기 드롭다운 */}
                     <div className="relative">
-                        <Bot size={16} className="text-purple-600" />
-                        <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-green-500 border-2 border-white animate-pulse" />
+                        <button
+                            onClick={() => setIsExportDropdownOpen(!isExportDropdownOpen)}
+                            disabled={!hasPdf || isExporting}
+                            className={`flex items-center gap-2 px-4 py-1.5 rounded-xl text-xs font-bold shadow-sm transition-all hover:-translate-y-0.5 disabled:opacity-50 ${
+                                isExportDropdownOpen 
+                                ? 'bg-slate-800 text-white' 
+                                : 'bg-white border theme-border text-slate-700 hover:bg-slate-50'
+                            }`}
+                        >
+                            {isExporting ? (
+                                <div className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                                <Download size={14} className="text-indigo-500" />
+                            )}
+                            <span>내보내기</span>
+                            <ChevronDown size={12} className={`transition-transform duration-200 ${isExportDropdownOpen ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {isExportDropdownOpen && (
+                            <div className="absolute right-0 mt-2 w-48 bg-white rounded-2xl shadow-2xl border theme-border py-2 z-[100] animate-in fade-in zoom-in-95 duration-200">
+                                <div className="px-4 py-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b theme-border-subtle mb-1">
+                                    파일 형식 변환
+                                </div>
+                                <button
+                                    onClick={() => handleExport('jpg')}
+                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 transition-colors"
+                                >
+                                    <Image size={14} className="text-orange-500" />
+                                    <span>이미지로 저장 (JPG)</span>
+                                </button>
+                                <button
+                                    onClick={() => handleExport('png')}
+                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 transition-colors"
+                                >
+                                    <Image size={14} className="text-blue-500" />
+                                    <span>이미지로 저장 (PNG)</span>
+                                </button>
+                                <button
+                                    onClick={() => handleExport('ppt')}
+                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 transition-colors"
+                                >
+                                    <Presentation size={14} className="text-red-500" />
+                                    <span>파워포인트 (PPTX)</span>
+                                </button>
+                                <div className="h-px bg-slate-100 my-1" />
+                                <button
+                                    onClick={() => handleExport('hwp')}
+                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 transition-colors"
+                                >
+                                    <FileDown size={14} className="text-blue-600" />
+                                    <span>한글 문서 (HWP)</span>
+                                </button>
+                                <button
+                                    onClick={() => handleExport('hwpx')}
+                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 transition-colors"
+                                >
+                                    <FileCode size={14} className="text-blue-400" />
+                                    <span>한글 표준 (HWPX)</span>
+                                </button>
+                            </div>
+                        )}
+                        {/* 클릭 시 닫히도록 투명 배경 레이어 */}
+                        {isExportDropdownOpen && (
+                            <div className="fixed inset-0 z-[90]" onClick={() => setIsExportDropdownOpen(false)} />
+                        )}
                     </div>
-                    <span className="text-xs text-purple-700 font-bold hidden xl:block uppercase tracking-wider">AI Pilot Live</span>
+
+                    {/* AI Pilot badge */}
+                    <div className="flex items-center bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 rounded-xl px-3 py-1.5 gap-2 shadow-sm">
+                        <div className="relative">
+                            <Bot size={16} className="text-purple-600" />
+                            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-green-500 border-2 border-white animate-pulse" />
+                        </div>
+                        <span className="text-xs text-purple-700 font-bold hidden xl:block uppercase tracking-wider">AI Pilot Live</span>
+                    </div>
                 </div>
             </header>
 
@@ -189,10 +292,11 @@ const MainLayout: React.FC = () => {
                                 <div className="flex-1 p-6 overflow-hidden animate-slide-up h-full">
                                     <div className="h-full flex flex-col min-h-0 theme-bg-glass rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] border theme-border overflow-hidden relative backdrop-blur-md">
                                         <Group orientation="horizontal" className="h-full">
-                                            {/* Tool Sidebar: maxSize 없애고 minSize만 */}
+                                            {/* Tool Sidebar */}
                                             <Panel
-                                                defaultSize={50}
-                                                minSize={50}
+                                                id="sidebar-panel"
+                                                defaultSize={20}
+                                                minSize={15}
                                                 className="theme-bg-panel border-r theme-border overflow-hidden flex flex-col min-w-[90px]"
                                             >
                                                 <div className="h-12 border-b theme-border-subtle flex items-center px-4 shrink-0 bg-black/5">
@@ -213,7 +317,12 @@ const MainLayout: React.FC = () => {
                                                     <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
                                                 </div>
                                             </Separator>
-                                            <Panel id="pane-pdf" minSize={20} className="flex flex-col min-w-0 h-full">
+                                            <Panel 
+                                                id="pdf-panel" 
+                                                defaultSize={80} 
+                                                minSize={20} 
+                                                className="flex flex-col min-w-0 h-full"
+                                            >
                                                 <PdfViewer />
                                             </Panel>
                                         </Group>
