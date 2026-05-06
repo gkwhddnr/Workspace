@@ -232,21 +232,6 @@ const MainLayout: React.FC = () => {
                                     <Presentation size={14} className="text-red-500" />
                                     <span>파워포인트 (PPTX)</span>
                                 </button>
-                                <div className="h-px bg-slate-100 my-1" />
-                                <button
-                                    onClick={() => handleExport('hwp')}
-                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 transition-colors"
-                                >
-                                    <FileDown size={14} className="text-blue-600" />
-                                    <span>한글 문서 (HWP)</span>
-                                </button>
-                                <button
-                                    onClick={() => handleExport('hwpx')}
-                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 transition-colors"
-                                >
-                                    <FileCode size={14} className="text-blue-400" />
-                                    <span>한글 표준 (HWPX)</span>
-                                </button>
                             </div>
                         )}
                         {/* 클릭 시 닫히도록 투명 배경 레이어 */}

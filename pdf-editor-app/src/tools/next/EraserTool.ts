@@ -24,7 +24,8 @@ export class EraserTool extends AbstractTool {
 
     onPointerMove(params: PointerEventParams): void {
         // ON mode: erase whenever cursor moves over an element (no click needed)
-        if (params.eraserInstantDelete) {
+        // OR OFF mode: erase if the mouse button is currently held down
+        if (params.eraserInstantDelete || this.isPressed) {
             this.erase(params);
         }
     }

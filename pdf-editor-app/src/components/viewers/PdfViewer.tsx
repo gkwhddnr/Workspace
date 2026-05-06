@@ -87,6 +87,43 @@ const PdfViewer: React.FC = () => {
 
     const currentPageElements = useMemo(() => elements[currentPage] || [], [elements, currentPage]);
 
+    // 1.5. 통합 텍스트 런 (PDF 원본 + 사용자 추가 텍스트 라인)
+    // 형광펜/도형 도구가 사용자 텍스트의 줄 범위를 인식할 수 있게 합니다.
+    const combinedTextRuns = useMemo(() => {
+        const runs = [...textBlocks]; // PDF 원본 런 복사
+
+        // [CUSTOMIZE] 사용자 추가 텍스트의 라인 높이 배율 (기본 1.2)
+        const LINE_HEIGHT_SCALE = 1.2;
+
+        currentPageElements.forEach(el => {
+            if (el.type === 'text') {
+                const textEl = el as any;
+                const rect = getElementRect(textEl);
+                const annFontSize = (Number(textEl.fontSize) || 20) * scale;
+                const lineHeight = annFontSize * LINE_HEIGHT_SCALE;
+                const text = textEl.text || '';
+                const lines = text.split('\n');
+
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d')!;
+                ctx.font = `${annFontSize}px ${textEl.fontFamily || 'Outfit, sans-serif'}`;
+
+                lines.forEach((line: string, lineIdx: number) => {
+                    if (line.trim().length === 0) return;
+
+                    const ty = (rect[1] * scale) + (lineIdx * lineHeight);
+                    const lineWidth = ctx.measureText(line).width;
+
+                    runs.push({
+                        text: line,
+                        rect: [rect[0] * scale, ty, lineWidth, annFontSize]
+                    });
+                });
+            }
+        });
+        return runs;
+    }, [textBlocks, currentPageElements, scale]);
+
 
     const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
     const [imageDoc, setImageDoc] = useState<HTMLImageElement | null>(null);
@@ -162,7 +199,7 @@ const PdfViewer: React.FC = () => {
                             const uint8 = new Uint8Array(data);
                             const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
                             const file = new File([blob], currentFileName || 'restored_file', { type: mimeType || 'application/pdf' });
-                            
+
                             setPdfOriginalData(uint8.slice());
                             await loadAnyDocument(file, true); // isRestore=true preserves elements
                         }
@@ -274,8 +311,8 @@ const PdfViewer: React.FC = () => {
     useEffect(() => { wordBlocksRef.current = wordBlocks; }, [wordBlocks]);
 
     // Ref for raw textBlocks (text runs, canvas-pixel coords) — used for highlight snap
-    const textBlocksRef = useRef(textBlocks);
-    useEffect(() => { textBlocksRef.current = textBlocks; }, [textBlocks]);
+    const textBlocksRef = useRef(combinedTextRuns);
+    useEffect(() => { textBlocksRef.current = combinedTextRuns; }, [combinedTextRuns]);
 
     const [editingId, setEditingId] = useState<string | null>(null);
     const [inputPos, setInputPos] = useState<{ x: number; y: number } | null>(null);
@@ -296,7 +333,7 @@ const PdfViewer: React.FC = () => {
     // originalData state removed (now in useAppStore)
 
     // Arrow / Image Resizing / Object Selection State (Managed via ToolManager now)
-    
+
     // Editor Dimension States for perfect persistence
     const [editorWidth, setEditorWidth] = useState<number>(120);
     const [editorHeight, setEditorHeight] = useState<number>(18);
@@ -309,7 +346,7 @@ const PdfViewer: React.FC = () => {
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
     const [guideLineY, setGuideLineY] = useState<number | null>(null); // Horizontal dashed line
     const [guideLineX, setGuideLineX] = useState<number | null>(null); // Vertical dashed line
-    const [activeSnapPoint, setActiveSnapPoint] = useState<{x: number, y: number} | null>(null); // Snap indicator
+    const [activeSnapPoint, setActiveSnapPoint] = useState<{ x: number, y: number } | null>(null); // Snap indicator
 
     // Effect to render alignment guides on a separate canvas
     useEffect(() => {
@@ -432,7 +469,7 @@ const PdfViewer: React.FC = () => {
                 [targetX, targetY, w, h],
                 '#000000'
             ) as ImageElement;
-            
+
             if (newElement) {
                 newElement.imageSrc = src;
                 const command = new AddElementCommand(currentPage, newElement, setElements);
@@ -486,7 +523,7 @@ const PdfViewer: React.FC = () => {
 
     // Keyboard shortcuts for delete are now handled within ToolStates in ToolManager (Phase 3)
     // or through the unified onKeyDown in ToolManager.
-    
+
     // (Legacy selection effects removed. Selection & Property updates are now handled via ToolManager & Commands)
 
 
@@ -628,8 +665,8 @@ const PdfViewer: React.FC = () => {
             if (renderTaskRef.current) {
                 try {
                     renderTaskRef.current.cancel();
-                    await renderTaskRef.current.promise.catch(() => {});
-                } catch (_) {}
+                    await renderTaskRef.current.promise.catch(() => { });
+                } catch (_) { }
                 renderTaskRef.current = null;
             }
 
@@ -675,10 +712,10 @@ const PdfViewer: React.FC = () => {
             if (!pdfProxies.current[pageNum]) {
                 pdfProxies.current[pageNum] = new PdfPageProxy(doc, pageNum);
             }
-            
+
             const proxy = pdfProxies.current[pageNum];
             const page = await proxy.load();
-            
+
             await renderPage(page, s);
 
             // Extract text content for snapping
@@ -694,7 +731,7 @@ const PdfViewer: React.FC = () => {
             }).filter(b => b.text.trim().length > 0);
 
             setTextBlocks(blocks);
-            
+
             // Note: We don't release immediately to keep the snapshot logic working for snapping/rendering
             // Release would happen when current page changes or document closes.
         },
@@ -844,7 +881,7 @@ const PdfViewer: React.FC = () => {
                             parsed.pageDrawings[pg].forEach((d: any) => {
                                 const type = d.type === 'rectangle' ? 'rect' : d.type;
                                 const element = ElementFactory.create(type, d.id, d.rect || [], d.color || '#000000');
-                                
+
                                 if (element) {
                                     element.style = element.style.copy({ opacity: d.opacity ?? 1 });
                                     if (element.type === 'image' && d.imageSrc) {
@@ -933,7 +970,7 @@ const PdfViewer: React.FC = () => {
     const [pendingFileOpen, setPendingFileOpen] = useState<{ fn: () => Promise<void> } | null>(null);
     // Flag to track if the current 'Save As' dialog was triggered from an 'Open File' flow
     const [isSavingAsForOpen, setIsSavingAsForOpen] = useState(false);
-    
+
     // Show warning only if there are actual annotations drawn (not just file load revisions)
     const totalElements = Object.values(elements).reduce((sum, pageEls) => sum + pageEls.length, 0);
     const hasUnsavedChanges = currentFileName !== null && totalElements > 0 && historyRevision !== lastSavedRevision;
@@ -1008,9 +1045,9 @@ const PdfViewer: React.FC = () => {
         setIsDraggingOver(false);
         const files = e.dataTransfer.files;
         if (files.length === 0) return;
-        
+
         const file = files[0];
-        
+
         const doOpen = async () => {
             const path = (file as any).path || file.name;
             setCurrentFile(path, file.name);
@@ -1133,13 +1170,13 @@ const PdfViewer: React.FC = () => {
             e.preventDefault();
             e.stopPropagation();
             setIsDraggingOver(false);
-            
+
             const files = e.dataTransfer?.files;
             console.log('Drop detected, files:', files?.length);
-            
+
             if (files && files.length > 0) {
                 const file = files[0];
-                
+
                 const doOpen = async () => {
                     const path = (file as any).path || file.name;
                     setCurrentFile(path, file.name);
@@ -1235,7 +1272,7 @@ const PdfViewer: React.FC = () => {
                     ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
                     for (let i = 0; i < selEl.points.length - 1; i++) {
                         const p1 = selEl.points[i];
-                        const p2 = selEl.points[i+1];
+                        const p2 = selEl.points[i + 1];
                         ctx.beginPath();
                         ctx.arc((p1.x + p2.x) / 2 * scale, (p1.y + p2.y) / 2 * scale, HANDLE_R * 0.8, 0, Math.PI * 2);
                         ctx.fill();
@@ -1332,16 +1369,19 @@ const PdfViewer: React.FC = () => {
                 const pageElements = elements[i] || [];
                 if (pageElements.length > 0) {
                     const page = await pdfDoc.getPage(i);
-                    const viewport = page.getViewport({ scale: 2.0 });
+                    // [CUSTOMIZE] 필기 이미지 해상도 배율 (1.1로 축소하여 용량 최소화)
+                    // 원본 텍스트는 벡터로 유지되므로, 이 배율은 오직 '사용자가 그린 펜/도형'의 선명도에만 영향을 줍니다.
+                    const viewport = page.getViewport({ scale: 1.4 });
 
                     const tempCanvas = document.createElement('canvas');
                     tempCanvas.width = viewport.width;
                     tempCanvas.height = viewport.height;
                     const tempCtx = tempCanvas.getContext('2d')!;
 
-                    await page.render({ canvasContext: tempCtx, viewport }).promise;
+                    // 핵심 수정: 원본 PDF 페이지를 캔버스에 그리지 않음 (배경 투명화)
+                    // await page.render({ canvasContext: tempCtx, viewport }).promise;
 
-                    const visitor = new CanvasRenderVisitor(tempCtx, 2.0);
+                    const visitor = new CanvasRenderVisitor(tempCtx, 1.4);
                     const iterator = new LayerIterator(pageElements);
 
                     while (iterator.hasNext()) {
@@ -1351,10 +1391,9 @@ const PdfViewer: React.FC = () => {
                         }
                     }
 
-
-
-                    const imgData = tempCanvas.toDataURL('image/jpeg', 0.95);
-                    const image = await pdfDocLib.embedJpg(imgData);
+                    // 핵심 수정: 투명 배경이 유지되는 PNG 형식으로 저장하여 원본 텍스트를 가리지 않음
+                    const imgData = tempCanvas.toDataURL('image/png');
+                    const image = await pdfDocLib.embedPng(imgData);
 
                     const pdfPage = pdfDocLib.getPage(i - 1);
                     const { width, height } = pdfPage.getSize();
@@ -1400,7 +1439,7 @@ const PdfViewer: React.FC = () => {
         setCurrentPage,
         setToolSettings,
         toggleExitDialog,
-        showSettingIndicator: () => {},
+        showSettingIndicator: () => { },
         showToolIndicator
     });
 
@@ -2070,7 +2109,7 @@ const PdfViewer: React.FC = () => {
     }
 
     return (
-        <div 
+        <div
             className="flex flex-col h-full bg-transparent relative"
             onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
             onDragEnter={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
@@ -2231,147 +2270,147 @@ const PdfViewer: React.FC = () => {
             <div ref={containerRef} className="flex-1 overflow-auto bg-gray-200 rounded-lg dark-pdf-filter">
                 <div className="min-h-full min-w-full flex items-center justify-center p-12">
                     <div className="relative shadow-xl shrink-0">
-                    <input
-                        type="file"
-                        ref={imageInputRef}
-                        className="hidden"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        title="이미지 업로드"
-                    />
-                    <canvas ref={canvasRef} className="block" />
-                    <canvas
-                        ref={overlayCanvasRef}
-                        className="pdf-overlay-canvas"
-                        data-active-tool={activeTool}
-                        onMouseDown={handlePointerDown}
-                        onMouseMove={handlePointerMove}
-                        onMouseUp={handlePointerUp}
-                        onMouseLeave={handleMouseLeaveCanvas}
-                        onClick={handleTextClick}
-                    />
-                    <canvas
-                        ref={guideCanvasRef}
-                        className="pdf-guide-canvas"
-                    />
+                        <input
+                            type="file"
+                            ref={imageInputRef}
+                            className="hidden"
+                            accept="image/*"
+                            onChange={handleImageUpload}
+                            title="이미지 업로드"
+                        />
+                        <canvas ref={canvasRef} className="block" />
+                        <canvas
+                            ref={overlayCanvasRef}
+                            className="pdf-overlay-canvas"
+                            data-active-tool={activeTool}
+                            onMouseDown={handlePointerDown}
+                            onMouseMove={handlePointerMove}
+                            onMouseUp={handlePointerUp}
+                            onMouseLeave={handleMouseLeaveCanvas}
+                            onClick={handleTextClick}
+                        />
+                        <canvas
+                            ref={guideCanvasRef}
+                            className="pdf-guide-canvas"
+                        />
 
-                    {/* Floating Text Input */}
-                    {isInputActive && inputPos && (
-                        <div
-                            ref={floatingInputRef}
-                            className="pdf-floating-input-container animate-in fade-in zoom-in duration-200"
-                            style={{
-                                '--text-bg-opacity': toolSettings.textBgOpacity
-                            } as React.CSSProperties}
-                        >
-                            {/* Font Size Indicator Tooltip */}
-                            <div className={`absolute -top-10 left-1/2 -translate-x-1/2 transition-all duration-300 pointer-events-none z-[120] ${fontSizeIndicator.visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}>
-                                <div className="bg-slate-900/90 text-white px-3 py-1.5 rounded-full text-[13px] font-black shadow-xl ring-2 ring-white/20 whitespace-nowrap flex items-center gap-1.5 backdrop-blur-md">
-                                    <span className="text-blue-400">AA</span>
-                                    {fontSizeIndicator.size}px
-                                </div>
-                                <div className="w-2 h-2 bg-slate-900/90 rotate-45 absolute -bottom-1 left-1/2 -translate-x-1/2" />
-                            </div>
-
-                            {/* (Top Toolbar Removed to fix vertical jump) */}
-
-
+                        {/* Floating Text Input */}
+                        {isInputActive && inputPos && (
                             <div
-                                className="relative group p-2 border-2 border-dashed border-blue-400/50 bg-blue-50/10 rounded-lg cursor-move pointer-events-auto"
-                                onMouseDown={handleBoxMouseDown}
+                                ref={floatingInputRef}
+                                className="pdf-floating-input-container animate-in fade-in zoom-in duration-200"
+                                style={{
+                                    '--text-bg-opacity': toolSettings.textBgOpacity
+                                } as React.CSSProperties}
                             >
-                                <textarea
-                                    ref={textareaRef}
-                                    value={tempText}
-                                    onChange={(e) => {
-                                        setTempText(e.target.value);
-                                        setTimeout(recalculateEditorSize, 0);
-                                    }}
-                                    onKeyDown={handleInputKeyDown}
-                                    className="pdf-text-editor-textarea"
-                                    title="텍스트 입력"
-                                    placeholder="내용을 입력하세요..."
-                                />
-                                {/* Explicit Completion Button - Positioned smartly */}
-                                <button
-                                    onMouseDown={(e) => { e.stopPropagation(); handleInputComplete(); }}
-                                    className={`absolute bg-green-600 hover:bg-green-700 text-white w-7 h-7 rounded-full shadow-lg border-2 border-white flex items-center justify-center transition-all hover:scale-110 z-[110] 
-                                        ${(() => {
-                                            if (!inputPos) return '-right-3 -top-3';
-                                            // getBoundingClientRect().width returns the real CSS pixel width,
-                                            // which matches inputPos coordinates (canvas logical pixels).
-                                            const canvasW = canvasRef.current?.getBoundingClientRect().width || 9999;
-                                            const boxW = textareaRef.current?.offsetWidth || 120;
-                                            const boxH = textareaRef.current?.offsetHeight || 40;
-
-                                            // inputPos.x/y are logical canvas coords (same space as getBoundingClientRect)
-                                            // The outer wrapper starts at (inputPos.x - 20, inputPos.y - 20)
-                                            const isHittingRight = (inputPos.x - 20 + boxW + 32) > canvasW;
-                                            const isHittingTop = (inputPos.y - 55) < 0;
-
-                                            if (isHittingRight && isHittingTop) return '-left-3 -bottom-3';
-                                            if (isHittingRight) return '-left-3 -top-3';
-                                            if (isHittingTop) return '-right-3 -bottom-3';
-                                            return '-right-3 -top-3';
-                                        })()}`}
-                                    title="작업 완료"
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                    </svg>
-                                </button>
-                                {/* Resize Handles */}
-                                <div
-                                    className="absolute -right-1 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-400/30 rounded-r"
-                                    onMouseDown={(e) => { e.stopPropagation(); setResizingType('width'); }}
-                                />
-                                <div
-                                    className="absolute -bottom-1 left-0 right-0 h-2 cursor-ns-resize hover:bg-blue-400/30 rounded-b"
-                                    onMouseDown={(e) => { e.stopPropagation(); setResizingType('height'); }}
-                                />
-                                <div
-                                    className="absolute -right-2 -bottom-2 w-5 h-5 cursor-nwse-resize flex items-center justify-center bg-blue-600 rounded-full shadow-lg border-2 border-white hover:scale-110 transition-transform z-10"
-                                    onMouseDown={(e) => { e.stopPropagation(); setResizingType('both'); }}
-                                >
-                                    <div className="w-1.5 h-1.5 border-r-2 border-b-2 border-white rotate-[-45deg] translate-x-[-1px] translate-y-[-1px]" />
-                                </div>
-                            </div>
-
-                            {/* Floating Toolbar (Opacity - Bottom and Finish - Top) */}
-                            {/* 1. Status Bar (Moved to Top Right) */}
-                            <div className="absolute -top-8 right-0 pointer-events-auto">
-                                <div className="bg-blue-600 text-white text-[6px] font-bold px-1.5 py-1 rounded-md uppercase tracking-tighter shadow-lg whitespace-nowrap border border-blue-500/50">
-                                    Ctrl+Enter 완료
-                                </div>
-                            </div>
-
-                            {/* 2. Transparency Bar (Moved to Bottom Left, Expanded Width) */}
-                            <div className="absolute -bottom-6 left-0 pointer-events-auto">
-                                <div className="bg-white/95 backdrop-blur-md px-1 py-0.5 rounded-md border border-slate-200 shadow-lg flex items-center gap-1.5 w-[120px]">
-                                    <div className="flex flex-col min-w-[30px]">
-                                        <span className="text-[5px] font-black text-slate-400 uppercase leading-none mb-0.5">박스 투명도</span>
-                                        <span className="text-[7px] font-mono font-black text-blue-600 leading-none">
-                                            {Math.round(toolSettings.textBgOpacity * 100)}%
-                                        </span>
+                                {/* Font Size Indicator Tooltip */}
+                                <div className={`absolute -top-10 left-1/2 -translate-x-1/2 transition-all duration-300 pointer-events-none z-[120] ${fontSizeIndicator.visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}>
+                                    <div className="bg-slate-900/90 text-white px-3 py-1.5 rounded-full text-[13px] font-black shadow-xl ring-2 ring-white/20 whitespace-nowrap flex items-center gap-1.5 backdrop-blur-md">
+                                        <span className="text-blue-400">AA</span>
+                                        {fontSizeIndicator.size}px
                                     </div>
-                                    <input
-                                        type="range"
-                                        min="0"
-                                        max="1"
-                                        step="0.01"
-                                        value={toolSettings.textBgOpacity}
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                        onChange={(e) => setToolSettings({ textBgOpacity: Number(e.target.value) })}
-                                        className="pdf-text-editor-slider-mini w-[70px] h-0.5"
-                                        title="배경 투명도 조절"
+                                    <div className="w-2 h-2 bg-slate-900/90 rotate-45 absolute -bottom-1 left-1/2 -translate-x-1/2" />
+                                </div>
+
+                                {/* (Top Toolbar Removed to fix vertical jump) */}
+
+
+                                <div
+                                    className="relative group p-2 border-2 border-dashed border-blue-400/50 bg-blue-50/10 rounded-lg cursor-move pointer-events-auto"
+                                    onMouseDown={handleBoxMouseDown}
+                                >
+                                    <textarea
+                                        ref={textareaRef}
+                                        value={tempText}
+                                        onChange={(e) => {
+                                            setTempText(e.target.value);
+                                            setTimeout(recalculateEditorSize, 0);
+                                        }}
+                                        onKeyDown={handleInputKeyDown}
+                                        className="pdf-text-editor-textarea"
+                                        title="텍스트 입력"
+                                        placeholder="내용을 입력하세요..."
                                     />
+                                    {/* Explicit Completion Button - Positioned smartly */}
+                                    <button
+                                        onMouseDown={(e) => { e.stopPropagation(); handleInputComplete(); }}
+                                        className={`absolute bg-green-600 hover:bg-green-700 text-white w-7 h-7 rounded-full shadow-lg border-2 border-white flex items-center justify-center transition-all hover:scale-110 z-[110] 
+                                        ${(() => {
+                                                if (!inputPos) return '-right-3 -top-3';
+                                                // getBoundingClientRect().width returns the real CSS pixel width,
+                                                // which matches inputPos coordinates (canvas logical pixels).
+                                                const canvasW = canvasRef.current?.getBoundingClientRect().width || 9999;
+                                                const boxW = textareaRef.current?.offsetWidth || 120;
+                                                const boxH = textareaRef.current?.offsetHeight || 40;
+
+                                                // inputPos.x/y are logical canvas coords (same space as getBoundingClientRect)
+                                                // The outer wrapper starts at (inputPos.x - 20, inputPos.y - 20)
+                                                const isHittingRight = (inputPos.x - 20 + boxW + 32) > canvasW;
+                                                const isHittingTop = (inputPos.y - 55) < 0;
+
+                                                if (isHittingRight && isHittingTop) return '-left-3 -bottom-3';
+                                                if (isHittingRight) return '-left-3 -top-3';
+                                                if (isHittingTop) return '-right-3 -bottom-3';
+                                                return '-right-3 -top-3';
+                                            })()}`}
+                                        title="작업 완료"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                        </svg>
+                                    </button>
+                                    {/* Resize Handles */}
+                                    <div
+                                        className="absolute -right-1 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-400/30 rounded-r"
+                                        onMouseDown={(e) => { e.stopPropagation(); setResizingType('width'); }}
+                                    />
+                                    <div
+                                        className="absolute -bottom-1 left-0 right-0 h-2 cursor-ns-resize hover:bg-blue-400/30 rounded-b"
+                                        onMouseDown={(e) => { e.stopPropagation(); setResizingType('height'); }}
+                                    />
+                                    <div
+                                        className="absolute -right-2 -bottom-2 w-5 h-5 cursor-nwse-resize flex items-center justify-center bg-blue-600 rounded-full shadow-lg border-2 border-white hover:scale-110 transition-transform z-10"
+                                        onMouseDown={(e) => { e.stopPropagation(); setResizingType('both'); }}
+                                    >
+                                        <div className="w-1.5 h-1.5 border-r-2 border-b-2 border-white rotate-[-45deg] translate-x-[-1px] translate-y-[-1px]" />
+                                    </div>
+                                </div>
+
+                                {/* Floating Toolbar (Opacity - Bottom and Finish - Top) */}
+                                {/* 1. Status Bar (Moved to Top Right) */}
+                                <div className="absolute -top-8 right-0 pointer-events-auto">
+                                    <div className="bg-blue-600 text-white text-[6px] font-bold px-1.5 py-1 rounded-md uppercase tracking-tighter shadow-lg whitespace-nowrap border border-blue-500/50">
+                                        Ctrl+Enter 완료
+                                    </div>
+                                </div>
+
+                                {/* 2. Transparency Bar (Moved to Bottom Left, Expanded Width) */}
+                                <div className="absolute -bottom-6 left-0 pointer-events-auto">
+                                    <div className="bg-white/95 backdrop-blur-md px-1 py-0.5 rounded-md border border-slate-200 shadow-lg flex items-center gap-1.5 w-[120px]">
+                                        <div className="flex flex-col min-w-[30px]">
+                                            <span className="text-[5px] font-black text-slate-400 uppercase leading-none mb-0.5">박스 투명도</span>
+                                            <span className="text-[7px] font-mono font-black text-blue-600 leading-none">
+                                                {Math.round(toolSettings.textBgOpacity * 100)}%
+                                            </span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="1"
+                                            step="0.01"
+                                            value={toolSettings.textBgOpacity}
+                                            onMouseDown={(e) => e.stopPropagation()}
+                                            onChange={(e) => setToolSettings({ textBgOpacity: Number(e.target.value) })}
+                                            className="pdf-text-editor-slider-mini w-[70px] h-0.5"
+                                            title="배경 투명도 조절"
+                                        />
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    )}
+                        )}
+                    </div>
                 </div>
             </div>
-        </div>
 
             {/* 종료 확인 다이얼로그 */}
             {isExitDialogOpen && (

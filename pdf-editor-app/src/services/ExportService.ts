@@ -1,9 +1,8 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 import pptxgen from 'pptxgenjs';
-import axios from 'axios';
 
-export type ExportFormat = 'jpg' | 'png' | 'ppt' | 'hwp' | 'hwpx';
+export type ExportFormat = 'jpg' | 'png' | 'ppt';
 
 export interface ExportOptions {
     format: ExportFormat;
@@ -22,8 +21,6 @@ class ExportService {
             await this.exportAsImages(pdfData, fileName, options);
         } else if (format === 'ppt') {
             await this.exportAsPpt(pdfData, fileName, options);
-        } else if (format === 'hwp' || format === 'hwpx') {
-            await this.exportViaBackend(pdfData, fileName, options);
         }
     }
 
@@ -107,31 +104,6 @@ class ExportService {
         }
 
         await pptx.writeFile({ fileName: `${baseName}.pptx` });
-    }
-
-    /**
-     * HWP/HWPX 변환은 백엔드 API를 이용합니다.
-     * 이미지를 먼저 추출하여 서버로 보내거나, 원본 PDF를 보내서 서버에서 처리합니다.
-     * 여기서는 구현의 단순함과 정확도를 위해 원본 PDF를 서버로 전송하여 처리하도록 합니다.
-     */
-    private async exportViaBackend(pdfData: Uint8Array, fileName: string, options: ExportOptions): Promise<void> {
-        const baseName = fileName.replace(/\.[^/.]+$/, "");
-        const formData = new FormData();
-        const blob = new Blob([pdfData.buffer as ArrayBuffer], { type: 'application/pdf' });
-        formData.append('file', blob, fileName);
-        formData.append('format', options.format);
-
-        try {
-            const response = await axios.post('http://localhost:8080/api/export/convert', formData, {
-                responseType: 'blob'
-            });
-
-            const extension = options.format;
-            this.downloadBlob(response.data, `${baseName}.${extension}`);
-        } catch (error) {
-            console.error('Backend conversion failed:', error);
-            alert('백엔드 변환 중 오류가 발생했습니다. 서버 상태를 확인해주세요.');
-        }
     }
 
     private downloadBlob(blob: Blob, fileName: string): void {
