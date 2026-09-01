@@ -1388,8 +1388,7 @@ const PdfViewer: React.FC = () => {
     const { handleSave, openSaveAsDialog, confirmSaveAs } = useSavePdf(
         createEditedPdfBlob,
         pdfOriginalData,
-        elements,
-        currentPage
+        elements
     );
 
     // Global keyboard shortcuts and lifecycle events (Moved below dependencies to avoid hoisting issues)

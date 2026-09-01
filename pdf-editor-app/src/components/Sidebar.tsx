@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { useAppStore, DrawingTool, PRESET_COLORS } from '../store/useAppStore';
 import {
     MousePointer2, Pencil, Type, Square, Circle, Eraser,

@@ -1,7 +1,5 @@
-import { Command } from './Command';
+import { Command, SetElements as Setter } from './Command';
 import { RenderElement } from '../models/RenderElement';
-
-type Setter = (page: number, updater: RenderElement[] | ((prev: RenderElement[]) => RenderElement[])) => void;
 
 export class UpdateElementCommand implements Command {
     private oldState: Record<string, any>;

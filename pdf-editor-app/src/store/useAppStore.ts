@@ -12,12 +12,6 @@ export const PRESET_COLORS = [
 ];
 
 interface AppState {
-    // Layout
-    isLeftPanelOpen: boolean;
-    isRightPanelOpen: boolean;
-    toggleLeftPanel: () => void;
-    toggleRightPanel: () => void;
-
     // Theme (CSS Variables)
     themeMode: ThemeMode;
     setThemeMode: (mode: ThemeMode) => void;
@@ -143,12 +137,6 @@ const removeCustomThemeVariables = () => {
 };
 
 export const useAppStore = create<AppState>((set) => ({
-    // Layout defaults
-    isLeftPanelOpen: true,
-    isRightPanelOpen: true,
-    toggleLeftPanel: () => set((s) => ({ isLeftPanelOpen: !s.isLeftPanelOpen })),
-    toggleRightPanel: () => set((s) => ({ isRightPanelOpen: !s.isRightPanelOpen })),
-
     // Theme defaults
     themeMode: getStoredThemeMode(),
     setThemeMode: (mode) => {
