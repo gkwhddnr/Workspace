@@ -1,11 +1,6 @@
 import axios from 'axios';
-import { AI_PROVIDERS } from './aiProviders';
 
 export type AiProvider = 'gemini' | 'chatgpt' | 'claude';
-
-// 제공자별 기본 모델은 aiProviders.ts의 modelDefault 단일 소스에서 파생
-const defaultModelFor = (id: AiProvider): string =>
-    (AI_PROVIDERS.find(p => p.id === id)?.modelDefault) ?? '';
 
 export interface AiMessage {
     role: 'user' | 'assistant';
@@ -14,11 +9,11 @@ export interface AiMessage {
 }
 
 // ─── Gemini ───────────────────────────────────────────────────────────────────
-async function callGemini(
+export async function callGemini(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model = defaultModelFor('gemini')
+    model = 'gemini-3-flash'
 ): Promise<string> {
     const response = await axios.post(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -36,11 +31,11 @@ async function callGemini(
 }
 
 // ─── ChatGPT (OpenAI) ─────────────────────────────────────────────────────────
-async function callChatGPT(
+export async function callChatGPT(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model = defaultModelFor('chatgpt')
+    model = 'gpt-5.5'
 ): Promise<string> {
     const response = await axios.post(
         'https://api.openai.com/v1/chat/completions',
@@ -62,11 +57,11 @@ async function callChatGPT(
 }
 
 // ─── Claude (Anthropic) ───────────────────────────────────────────────────────
-async function callClaude(
+export async function callClaude(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model = defaultModelFor('claude')
+    model = 'claude-opus-4-7-20250514'
 ): Promise<string> {
     const response = await axios.post(
         'https://api.anthropic.com/v1/messages',

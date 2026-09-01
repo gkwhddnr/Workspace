@@ -1,5 +1,6 @@
 // AbstractTool.ts
 import { ToolState, PointerEventParams } from './ToolState';
+import { PdfEditorState } from '../../store/usePdfEditorStore';
 
 /**
  * Base class for tools to provide common access to the editor state/store.

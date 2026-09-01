@@ -153,6 +153,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
                     ? { ...e, active: false, context: undefined }
                     : e
             ),
+            activeView: s.activeView?.pluginId === id ? null : s.activeView,
         }));
         savePersisted(get().entries);
     },

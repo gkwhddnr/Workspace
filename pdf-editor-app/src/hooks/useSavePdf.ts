@@ -6,7 +6,8 @@ import { workspaceApiService } from '../services/WorkspaceApiService';
 export const useSavePdf = (
     createEditedPdfBlob: () => Promise<Blob | null>,
     originalData: Uint8Array | null,
-    elements: Record<number, any>
+    elements: Record<number, any>,
+    currentPage: number
 ) => {
     const { 
         currentFilePath, currentFileName, setCurrentFile 
@@ -90,7 +91,7 @@ export const useSavePdf = (
         }
         setTimeout(() => setSaveStatus(null), 3000);
         return true;
-    }, [createEditedPdfBlob, currentFilePath, currentFileName, originalData, elements, setSaveStatus, markSaved]);
+    }, [createEditedPdfBlob, currentFilePath, currentFileName, originalData, elements, currentPage, setSaveStatus, markSaved]);
 
     // 2) 다른 이름으로 저장 다이얼로그
     const openSaveAsDialog = useCallback(() => {

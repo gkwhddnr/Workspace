@@ -1,5 +1,7 @@
-import { Command, SetElements as Setter } from './Command';
+import { Command } from './Command';
 import { RenderElement } from '../models/RenderElement';
+
+type Setter = (page: number, updater: RenderElement[] | ((prev: RenderElement[]) => RenderElement[])) => void;
 
 export class AddElementCommand implements Command {
     constructor(

@@ -2,50 +2,36 @@
 import { AbstractTool } from './AbstractTool';
 import { PointerEventParams } from './ToolState';
 import { DeleteElementCommand } from '../../commands/DeleteElementCommand';
-import { CompositeCommand } from '../../commands/CompositeCommand';
-import { Command } from '../../commands/Command';
 import { RenderElement } from '../../models/RenderElement';
 
 /**
  * Concrete State: EraserTool
  * 
- * - Drag erase mode (always OFF): erases on pointerDown and pointerMove while pressed.
- * - Saves all deleted elements during a single drag session into one CompositeCommand for Undo.
+ * - Instant mode (ON):  erases whenever the mouse moves over an element (hover erase)
+ * - Click mode  (OFF): erases only on pointerDown (single click)
  */
 export class EraserTool extends AbstractTool {
     public name = 'eraser';
     private isPressed = false;
-    private pendingDeletes: Command[] = [];
 
     onPointerDown(params: PointerEventParams): void {
         this.isPressed = true;
-        this.pendingDeletes = [];
-        this.erase(params);
-    }
-
-    onPointerMove(params: PointerEventParams): void {
-        if (this.isPressed) {
+        // OFF mode: erase on click
+        if (!params.eraserInstantDelete) {
             this.erase(params);
         }
     }
 
-    onPointerUp(params: PointerEventParams): void {
-        this.isPressed = false;
-        
-        if (this.pendingDeletes.length > 0) {
-            const state = this.getState();
-            const history = state.getCommandHistory?.(state.currentPage);
-            
-            // Push all collected deletes as a single undoable action
-            if (history) {
-                // Since they were already executed individually during drag,
-                // we don't want history.push() to re-execute them, 
-                // but our CommandHistory push() automatically executes.
-                // However, DeleteElementCommand execute() filters by ID, so calling it again is harmless.
-                history.push(new CompositeCommand(this.pendingDeletes));
-            }
-            this.pendingDeletes = [];
+    onPointerMove(params: PointerEventParams): void {
+        // ON mode: erase whenever cursor moves over an element (no click needed)
+        // OR OFF mode: erase if the mouse button is currently held down
+        if (params.eraserInstantDelete || this.isPressed) {
+            this.erase(params);
         }
+    }
+
+    onPointerUp(_params: PointerEventParams): void {
+        this.isPressed = false;
     }
 
     private erase(params: PointerEventParams): void {
@@ -66,8 +52,7 @@ export class EraserTool extends AbstractTool {
         if (toDelete.length > 0) {
             toDelete.forEach((el: RenderElement) => {
                 const command = new DeleteElementCommand(state.currentPage, el, state.setElements);
-                command.execute(); // Immediate visual feedback
-                this.pendingDeletes.push(command); // Collect for history
+                command.execute();
             });
             state.incrementRevision();
         }

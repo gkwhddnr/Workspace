@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { usePluginStore } from '../store/usePluginStore';
 import { pluginLoader } from '../services/PluginLoaderService';
-import { PluginInstallSection, PluginListItem, PluginOutputPanel } from './plugin';
+import { PluginInstallSection, PluginListItem } from './plugin';
+import AiPanel from './AiPanel';
+import { registerAiCopilotPlugin } from '../plugins/builtin/aiCopilot';
 import { Puzzle, X, CheckCircle2, AlertTriangle, Info } from 'lucide-react';
 
 const iconByType = (t: string) => {
@@ -15,8 +17,8 @@ const iconByType = (t: string) => {
 
 const PluginManagerPanel: React.FC = () => {
     const {
-        entries, activeView, runningPluginId,
-        toggleActive, removeEntry, runPlugin, stopView,
+        entries, runningPluginId,
+        toggleActive, removeEntry, runPlugin,
         notifications, dismissNotification, clearNotifications,
     } = usePluginStore();
 
@@ -97,13 +99,18 @@ const PluginManagerPanel: React.FC = () => {
                     )}
                 </div>
             </div>
-
-            {/* 실행 뷰 (html 렌더러 결과) */}
-            {activeView?.html && (
-                <PluginOutputPanel html={activeView.html} onClose={stopView} />
-            )}
         </div>
     );
 };
 
 export default PluginManagerPanel;
+
+// AI 코파일럿을 빌트인 플러그인으로 등록 (설치된 플러그인 목록에 표시)
+if (typeof window !== 'undefined') {
+    const hasBuiltin = usePluginStore
+        .getState()
+        .entries.find(e => e.definition.id === 'ai-copilot');
+    if (!hasBuiltin) {
+        registerAiCopilotPlugin(AiPanel);
+    }
+}

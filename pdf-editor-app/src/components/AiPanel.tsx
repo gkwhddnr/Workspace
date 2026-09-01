@@ -1,23 +1,74 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { useAiStore } from '../store/useAiStore';
-import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, ChevronDown, X } from 'lucide-react';
+import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, ChevronDown } from 'lucide-react';
 import { callAi, refineError, AiProvider } from '../services/AiService';
-import { AI_PROVIDERS } from '../services/aiProviders';
+
+// ─── AI 제공자 설정 ─────────────────────────────────────────────────────────────
+const PROVIDERS: {
+    id: AiProvider;
+    label: string;
+    color: string;
+    badge: string;
+    placeholder: string;
+    modelDefault: string;
+    modelOptions: { value: string; label: string }[];
+    keyPrefix: string;
+    docUrl: string;
+}[] = [
+    {
+        id: 'gemini',
+        label: 'Gemini',
+        color: 'from-blue-500 to-cyan-400',
+        badge: 'bg-blue-100 text-blue-700',
+        placeholder: 'AIza...',
+        modelDefault: 'gemini-3-flash',
+        modelOptions: [
+            { value: 'gemini-3-flash', label: 'Gemini 3 Flash' },
+            { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+            { value: 'gemini-1.5-pro-latest', label: 'Gemini 1.5 Pro' },
+        ],
+        keyPrefix: 'AIza',
+        docUrl: 'https://aistudio.google.com/app/apikey',
+    },
+    {
+        id: 'chatgpt',
+        label: 'ChatGPT',
+        color: 'from-emerald-500 to-green-400',
+        badge: 'bg-emerald-100 text-emerald-700',
+        placeholder: 'sk-...',
+        modelDefault: 'gpt-5.5',
+        modelOptions: [
+            { value: 'gpt-5.5', label: 'GPT-5.5' },
+            { value: 'gpt-4o', label: 'GPT-4o' },
+            { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+        ],
+        keyPrefix: 'sk-',
+        docUrl: 'https://platform.openai.com/api-keys',
+    },
+    {
+        id: 'claude',
+        label: 'Claude',
+        color: 'from-orange-500 to-amber-400',
+        badge: 'bg-orange-100 text-orange-700',
+        placeholder: 'sk-ant-...',
+        modelDefault: 'claude-opus-4-7-20250514',
+        modelOptions: [
+            { value: 'claude-opus-4-7-20250514', label: 'Claude Opus 4.7' },
+            { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
+            { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
+        ],
+        keyPrefix: 'sk-ant-',
+        docUrl: 'https://console.anthropic.com/settings/keys',
+    },
+];
 
 // ─── 컴포넌트 ───────────────────────────────────────────────────────────────────
-interface AiPanelProps {
-    onClose?: () => void;
-}
-
-const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
+const AiPanel: React.FC = () => {
     const {
         aiMessages, addAiMessage, clearAiMessages,
+        activeTabs, currentFileName, webUrl, codeLanguage,
         aiAgent, setAiAgent,
         apiKeys, setApiKey,
-    } = useAiStore();
-    const {
-        activeTabs, currentFileName, webUrl, codeLanguage,
     } = useAppStore();
 
     const [input, setInput] = useState('');
@@ -26,11 +77,11 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
     const [showKeys, setShowKeys] = useState<Record<AiProvider, boolean>>({
         gemini: false, chatgpt: false, claude: false
     });
-    const [selectedModel, setSelectedModel] = useState<Record<AiProvider, string>>(
-        Object.fromEntries(
-            AI_PROVIDERS.map(p => [p.id, p.modelDefault])
-        ) as Record<AiProvider, string>
-    );
+    const [selectedModel, setSelectedModel] = useState<Record<AiProvider, string>>({
+        gemini:  'gemini-3-flash',
+        chatgpt: 'gpt-5.5',
+        claude:  'claude-opus-4-7-20250514',
+    });
     const [tempKeys, setTempKeys] = useState<Record<AiProvider, string>>({
         gemini: apiKeys.gemini,
         chatgpt: apiKeys.chatgpt,
@@ -44,7 +95,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
     }, [aiMessages]);
 
     // 현재 선택된 제공자 정보
-    const currentProvider = AI_PROVIDERS.find(p => p.id === aiAgent)!;
+    const currentProvider = PROVIDERS.find(p => p.id === aiAgent)!;
 
     // API 키 저장 핸들러
     const handleSaveKeys = () => {
@@ -60,7 +111,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
     const isKeyValid = (provider: AiProvider): boolean | null => {
         const key = apiKeys[provider];
         if (!key) return null; // 미입력
-        const p = AI_PROVIDERS.find(x => x.id === provider)!;
+        const p = PROVIDERS.find(x => x.id === provider)!;
         return key.startsWith(p.keyPrefix);
     };
 
@@ -107,20 +158,20 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
     };
 
     return (
-        <div className="flex-1 flex flex-col min-h-0 min-w-0 bg-transparent overflow-hidden">
+        <div className="flex-1 flex flex-col min-h-0 bg-transparent">
 
             {/* ── 헤더 ── */}
-            <div className="h-14 border-b theme-border-subtle flex items-center px-4 theme-bg-header shrink-0 shadow-sm z-10 gap-2 min-w-0 overflow-hidden">
+            <div className="h-14 border-b theme-border-subtle flex items-center px-4 theme-bg-header shrink-0 shadow-sm z-10 gap-2">
                 {/* 아바타 */}
                 <div className={`p-1.5 bg-gradient-to-br ${currentProvider.color} rounded-lg shadow-md shrink-0`}>
                     <Bot size={16} className="text-white" />
                 </div>
 
-                <div className="flex-1 min-w-0 flex flex-col justify-center">
-                    <h2 className="font-bold theme-text-main text-xs truncate">AI 코파일럿</h2>
-                    <div className="flex items-center gap-1 min-w-0">
-                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse shrink-0" />
-                        <span className="text-[9px] theme-text-muted font-bold uppercase tracking-wider truncate block">
+                <div className="flex-1 min-w-0">
+                    <h2 className="font-bold theme-text-main text-xs">AI 코파일럿</h2>
+                    <div className="flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                        <span className="text-[9px] theme-text-muted font-bold uppercase tracking-wider">
                             {isLoading ? 'Thinking...' : 'Online & Ready'}
                         </span>
                     </div>
@@ -134,7 +185,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
                         onChange={(e) => setAiAgent(e.target.value as AiProvider)}
                         className="text-[11px] font-bold bg-transparent px-2 py-1.5 outline-none appearance-none cursor-pointer theme-text-muted hover:text-indigo-600 transition-colors border theme-border rounded-lg pr-6"
                     >
-                        {AI_PROVIDERS.map(p => (
+                        {PROVIDERS.map(p => (
                             <option key={p.id} value={p.id}>{p.label}</option>
                         ))}
                     </select>
@@ -158,17 +209,6 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
                 >
                     <Trash2 size={14} />
                 </button>
-
-                {/* 플러그인 닫기 */}
-                {onClose && (
-                    <button
-                        onClick={onClose}
-                        title="플러그인 닫기"
-                        className="p-2 theme-tool-hover rounded-xl theme-text-muted hover:text-red-500 transition-all border theme-border"
-                    >
-                        <X size={14} />
-                    </button>
-                )}
             </div>
 
             {/* ── API 키 설정 패널 ── */}
@@ -177,7 +217,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
                     <div className="p-4 space-y-4">
                         <p className="text-[11px] theme-text-muted font-semibold uppercase tracking-wider">API 키 설정</p>
 
-                        {AI_PROVIDERS.map(provider => {
+                        {PROVIDERS.map(provider => {
                             const valid = isKeyValid(provider.id);
                             return (
                                 <div key={provider.id} className="space-y-1.5">
@@ -260,7 +300,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
                                 </button>
                             );
                             return (
-                                <span className="text-[10px] text-green-600 bg-green-50 border border-green-200 px-2 py-1 rounded-lg w-full block truncate">
+                                <span className="text-[10px] text-green-600 bg-green-50 border border-green-200 px-2 py-1 rounded-lg w-full">
                                     ✅ {currentProvider.label} 연결됨 · {selectedModel[aiAgent]}
                                 </span>
                             );
@@ -270,7 +310,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
             )}
 
             {/* ── 메시지 목록 ── */}
-            <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-2 flex flex-col gap-3 bg-transparent min-w-0">
+            <div className="flex-1 overflow-y-auto px-4 py-2 flex flex-col gap-3 bg-transparent">
                 {aiMessages.map((msg: any, idx: number) => (
                     <div
                         key={idx}
@@ -283,13 +323,13 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
                             }`}>
                             {msg.role === 'user' ? <User size={13} /> : <Bot size={13} />}
                         </div>
-                        <div className="flex flex-col gap-1 max-w-[85%] min-w-0">
+                        <div className="flex flex-col gap-1 max-w-[85%]">
                             {msg.role === 'assistant' && msg.agent && (
                                 <span className="text-[9px] font-black text-indigo-400 uppercase tracking-widest px-1">
                                     {msg.agent}
                                 </span>
                             )}
-                            <div className={`text-[11px] leading-relaxed px-3 py-2.5 rounded-2xl shadow-sm whitespace-pre-wrap break-words overflow-hidden
+                            <div className={`text-[11px] leading-relaxed px-3 py-2.5 rounded-2xl shadow-sm whitespace-pre-wrap
                                 ${msg.role === 'user'
                                     ? 'bg-indigo-600 text-white rounded-tr-none'
                                     : 'theme-bg-panel theme-text-main border theme-border rounded-tl-none font-medium'
@@ -317,7 +357,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
             </div>
 
             {/* ── 입력창 ── */}
-            <div className="p-3 border-t theme-border-subtle theme-bg-glass shrink-0 min-w-0 overflow-hidden">
+            <div className="p-3 border-t theme-border-subtle theme-bg-glass shrink-0">
                 <div className="flex items-end gap-2 theme-bg-panel border theme-border rounded-xl p-2 shadow-inner focus-within:border-indigo-400 transition-colors">
                     <textarea
                         rows={2}
@@ -326,7 +366,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
                         onKeyDown={handleKeyDown}
                         disabled={isLoading}
                         placeholder={`${currentProvider.label}에게 메시지 보내기... (Enter로 전송)`}
-                        className="flex-1 bg-transparent theme-text-main text-xs resize-none focus:outline-none min-h-0 min-w-0 leading-relaxed placeholder:theme-text-muted disabled:opacity-50"
+                        className="flex-1 bg-transparent theme-text-main text-xs resize-none focus:outline-none min-h-0 leading-relaxed placeholder:theme-text-muted disabled:opacity-50"
                     />
                     <button
                         title="메시지 전송"

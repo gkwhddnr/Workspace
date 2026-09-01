@@ -4,7 +4,6 @@ import { PointerEventParams } from './ToolState';
 import { ShapeElement, ShapeType } from '../../models/ShapeElement';
 import { GraphicStyle } from '../../models/GraphicStyle';
 import { AddElementCommand } from '../../commands/AddElementCommand';
-import { getExpandedPoints } from '../../utils/geometry';
 
 // Text block type for snap-to-text feature
 export type TextBlock = { text: string; rect: [number, number, number, number] };
@@ -154,7 +153,7 @@ export class ShapeTool extends AbstractTool {
 
                 // Arrow: snap to all points (start, elbows, end)
                 if ((el.shapeType === 'arrow' || el.shapeType?.startsWith('arrow-')) && el.points?.length >= 2) {
-                    const expanded = getExpandedPoints(el);
+                    const expanded = this.getExpandedPoints(el);
                     expanded.forEach((p, idx) => {
                         checkLogical(p.x, p.y, el.id, idx === expanded.length - 1);
                     });
@@ -174,6 +173,22 @@ export class ShapeTool extends AbstractTool {
         }
 
         return best;
+    }
+
+    private getExpandedPoints(el: any): { x: number, y: number }[] {
+        if (!el.points || el.points.length < 2) return [];
+        const type = el.shapeType || el.type || '';
+        if (type === 'arrow-l-1' || type === 'arrow-l-2') {
+            if (el.points.length === 2) {
+                const p0 = el.points[0];
+                const p1 = el.points[1];
+                const elbow = (type === 'arrow-l-1')
+                    ? { x: p1.x, y: p0.y } // Horizontal elbow (L-shape 1)
+                    : { x: p0.x, y: p1.y }; // Vertical elbow (L-shape 2)
+                return [p0, elbow, p1];
+            }
+        }
+        return el.points;
     }
 
     private isArrowTool(): boolean {
@@ -340,8 +355,8 @@ export class ShapeTool extends AbstractTool {
                     if (!partner || !partner.points) return prev;
                     
                     const p1 = this.previewElement!.points;
-                    const points1 = getExpandedPoints({ shapeType: this.previewElement!.shapeType, points: p1 });
-                    const points2 = getExpandedPoints(partner);
+                    const points1 = this.getExpandedPoints({ shapeType: this.previewElement!.shapeType, points: p1 });
+                    const points2 = this.getExpandedPoints(partner);
                     
                     let mergedPoints: {x:number, y:number}[] = [];
                     if (isDrawingHeadMeetingTails) {

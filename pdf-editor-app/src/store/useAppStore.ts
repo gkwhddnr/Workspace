@@ -1,6 +1,4 @@
 import { create } from 'zustand';
-import { ToolSettings } from '../types/toolSettings';
-import { hexToRgb } from '../utils/color';
 
 export type ActiveTab = 'pdf' | 'web' | 'code' | 'shortcuts' | 'plugins';
 export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2' | 'image';
@@ -12,7 +10,22 @@ export const PRESET_COLORS = [
     '#FFFFFF', '#000000', '#FBBF24', '#10B981',
 ];
 
+interface ToolSettings {
+    color: string;
+    fontSize: number;
+    fontFamily: string;
+    strokeWidth: number;
+    textBgOpacity: number;
+    arrowHeadSize: number;
+}
+
 interface AppState {
+    // Layout
+    isLeftPanelOpen: boolean;
+    isRightPanelOpen: boolean;
+    toggleLeftPanel: () => void;
+    toggleRightPanel: () => void;
+
     // Theme (CSS Variables)
     themeMode: ThemeMode;
     setThemeMode: (mode: ThemeMode) => void;
@@ -28,11 +41,6 @@ interface AppState {
     setActiveTool: (tool: DrawingTool) => void;
     toolSettings: ToolSettings;
     setToolSettings: (settings: Partial<ToolSettings>) => void;
-    customColors: string[];
-    addCustomColor: (color: string) => void;
-    removeCustomColor: (color: string) => void;
-    isColorPickerActive: boolean;
-    setColorPickerActive: (active: boolean) => void;
     // Eraser mode: true = instant delete on click, false = drag to erase
     eraserInstantDelete: boolean;
     setEraserInstantDelete: (value: boolean) => void;
@@ -51,6 +59,17 @@ interface AppState {
     setCodeLanguage: (lang: 'html' | 'css' | 'javascript') => void;
     sharedCode: { html: string; css: string; javascript: string };
     setSharedCode: (code: { html: string; css: string; javascript: string }) => void;
+
+    // AI Copilot
+    aiAgent: 'gemini' | 'chatgpt' | 'claude';
+    setAiAgent: (agent: 'gemini' | 'chatgpt' | 'claude') => void;
+    aiMessages: { role: 'user' | 'assistant'; content: string; agent?: string }[];
+    addAiMessage: (role: 'user' | 'assistant', content: string) => void;
+    clearAiMessages: () => void;
+
+    // AI API Keys (localStorage persistent)
+    apiKeys: { gemini: string; chatgpt: string; claude: string };
+    setApiKey: (provider: 'gemini' | 'chatgpt' | 'claude', key: string) => void;
 
     // PDF Text Metadata
     textBlocks: { text: string; rect: [number, number, number, number] }[];
@@ -77,16 +96,11 @@ const getStoredCustomColor = (): string => {
     return localStorage.getItem('customThemeColor') || '#fceabb';
 };
 
-const getStoredCustomColors = (): string[] => {
-    try {
-        const stored = localStorage.getItem('customColors');
-        if (stored) return JSON.parse(stored);
-    } catch (e) {}
-    return [];
-};
-
 const calculateLuminance = (hex: string) => {
-    const { r, g, b } = hexToRgb(hex);
+    const h = hex.startsWith('#') ? hex : '#' + hex;
+    const r = parseInt(h.slice(1, 3), 16) || 0;
+    const g = parseInt(h.slice(3, 5), 16) || 0;
+    const b = parseInt(h.slice(5, 7), 16) || 0;
     // Standard relative luminance formula
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 };
@@ -122,6 +136,12 @@ const removeCustomThemeVariables = () => {
 };
 
 export const useAppStore = create<AppState>((set) => ({
+    // Layout defaults
+    isLeftPanelOpen: true,
+    isRightPanelOpen: true,
+    toggleLeftPanel: () => set((s) => ({ isLeftPanelOpen: !s.isLeftPanelOpen })),
+    toggleRightPanel: () => set((s) => ({ isRightPanelOpen: !s.isRightPanelOpen })),
+
     // Theme defaults
     themeMode: getStoredThemeMode(),
     setThemeMode: (mode) => {
@@ -180,30 +200,6 @@ export const useAppStore = create<AppState>((set) => ({
     },
     setToolSettings: (settings) =>
         set((s) => ({ toolSettings: { ...s.toolSettings, ...settings } })),
-    customColors: getStoredCustomColors(),
-    addCustomColor: (color) => set((s) => {
-        let sanitized = color;
-        if (!sanitized.startsWith('#')) sanitized = '#' + sanitized;
-        sanitized = '#' + sanitized.replace(/^#+/, '').toUpperCase();
-        
-        // Prevent duplicates
-        if (s.customColors.includes(sanitized)) return s;
-        
-        const newColors = [sanitized, ...s.customColors.filter(c => c !== sanitized)].slice(0, 8); // Keep up to 8 colors, move to front if exists
-        localStorage.setItem('customColors', JSON.stringify(newColors));
-        return { customColors: newColors, isColorPickerActive: false };
-    }),
-    removeCustomColor: (color) => set((s) => {
-        let sanitized = color;
-        if (!sanitized.startsWith('#')) sanitized = '#' + sanitized;
-        sanitized = '#' + sanitized.replace(/^#+/, '').toUpperCase();
-        
-        const newColors = s.customColors.filter(c => c !== sanitized);
-        localStorage.setItem('customColors', JSON.stringify(newColors));
-        return { customColors: newColors };
-    }),
-    isColorPickerActive: false,
-    setColorPickerActive: (active) => set({ isColorPickerActive: active }),
 
     // Eraser mode defaults: ON = instant delete on click
     eraserInstantDelete: false,
@@ -249,6 +245,27 @@ body {
 console.log('실시간 프리뷰가 작동 중입니다!');`
     },
     setSharedCode: (code) => set({ sharedCode: code }),
+
+    // AI Copilot defaults
+    aiAgent: 'gemini',
+    setAiAgent: (agent) => set({ aiAgent: agent }),
+    aiMessages: [
+        { role: 'assistant', content: '안녕하세요! 저는 AI 코파일럿입니다. PDF 편집, 코드 작성, 웹 검색 등 어떤 것이든 도와드릴 수 있습니다. 무엇을 도와드릴까요?' }
+    ],
+    addAiMessage: (role, content) =>
+        set((s) => ({ aiMessages: [...s.aiMessages, { role, content, agent: s.aiAgent }] })),
+    clearAiMessages: () => set({ aiMessages: [] }),
+
+    // AI API Keys — localStorage에서 복원
+    apiKeys: {
+        gemini:  localStorage.getItem('apiKey_gemini')  || '',
+        chatgpt: localStorage.getItem('apiKey_chatgpt') || '',
+        claude:  localStorage.getItem('apiKey_claude')  || '',
+    },
+    setApiKey: (provider, key) => {
+        localStorage.setItem(`apiKey_${provider}`, key);
+        set((s) => ({ apiKeys: { ...s.apiKeys, [provider]: key } }));
+    },
 
     // PDF Text Metadata defaults
     textBlocks: [],

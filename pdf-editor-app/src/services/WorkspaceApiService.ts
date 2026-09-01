@@ -57,6 +57,26 @@ export class WorkspaceApiService {
             .catch(e => console.warn('[WorkspaceApiService] saveWorkspace failed:', e));
     }
 
+    /** Save (overwrite) the PDF file on the backend. Returns the saved history record. */
+    async savePdf(blob: Blob, filename: string): Promise<void> {
+        const formData = new FormData();
+        formData.append('file', blob, filename);
+        formData.append('filename', filename);
+        await apiClient.post('/save-overwrite', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        });
+    }
+
+    /** Save as a new copy (no overwrite). */
+    async savePdfAs(blob: Blob, filename: string): Promise<void> {
+        const formData = new FormData();
+        formData.append('file', blob, filename);
+        formData.append('filename', filename);
+        await apiClient.post('/save', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        });
+    }
+
     /** Save JSON project data (vectors, texts, images). */
     async saveProjectData(filename: string, projectData: string): Promise<void> {
         try {

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import { RenderElement } from '../models/RenderElement';
+import { ToolSettings } from '../tools/DrawingToolStrategy';
 
 export interface PdfEditorState {
     // 1. 도큐먼트 상태
@@ -13,7 +14,10 @@ export interface PdfEditorState {
     elements: Record<number, RenderElement[]>;
     
     // 3. 편집기 UI 상태
+    activeTool: string;
+    toolSettings: ToolSettings;
     selectedElementIds: string[];
+    isDragging: boolean;
     isSaveAsDialogOpen: boolean;
     saveAsName: string;
     isExitDialogOpen: boolean;
@@ -28,6 +32,8 @@ export interface PdfEditorState {
     setCurrentPage: (page: number | ((prev: number) => number)) => void;
     setNumPages: (count: number) => void;
     setScale: (scale: number | ((prev: number) => number)) => void;
+    setActiveTool: (tool: string) => void;
+    setToolSettings: (settings: Partial<ToolSettings>) => void;
     setElements: (page: number, updater: RenderElement[] | ((prev: RenderElement[]) => RenderElement[])) => void;
     setAllElements: (elements: Record<number, RenderElement[]>) => void;
     setSelectedElements: (ids: string[]) => void;
@@ -42,10 +48,11 @@ export interface PdfEditorState {
     incrementRevision: () => void;
     markSaved: () => void;
     clearElements: () => void;
+    getPageHistory: (page: number) => RenderElement[];
 }
 
 
-export const usePdfEditorStore = create<PdfEditorState>((set) => ({
+export const usePdfEditorStore = create<PdfEditorState>((set, get) => ({
     docType: null,
     currentPage: 1,
     numPages: 0,
@@ -53,7 +60,17 @@ export const usePdfEditorStore = create<PdfEditorState>((set) => ({
     
     elements: {},
     
+    activeTool: 'select',
+    toolSettings: {
+        color: '#000000',
+        strokeWidth: 2,
+        fontSize: 20,
+        fontFamily: 'Outfit, sans-serif',
+        arrowHeadSize: 12,
+        textBgOpacity: 0.5,
+    },
     selectedElementIds: [],
+    isDragging: false,
     isSaveAsDialogOpen: false,
     saveAsName: '',
     isExitDialogOpen: false,
@@ -81,6 +98,10 @@ export const usePdfEditorStore = create<PdfEditorState>((set) => ({
     
     setAllElements: (elements) => set({ elements }),
     setSelectedElements: (ids) => set({ selectedElementIds: ids }),
+    setActiveTool: (tool) => set({ activeTool: tool }),
+    setToolSettings: (settings) => set((state) => ({
+        toolSettings: { ...state.toolSettings, ...settings }
+    })),
 
     setSaveStatus: (status) => set({ saveStatus: status }),
     toggleSaveAsDialog: (isOpen, name) => set({ 
@@ -93,4 +114,5 @@ export const usePdfEditorStore = create<PdfEditorState>((set) => ({
     incrementRevision: () => set((state) => ({ historyRevision: state.historyRevision + 1 })),
     markSaved: () => set((state) => ({ lastSavedRevision: state.historyRevision })),
     clearElements: () => set({ elements: {} }),
+    getPageHistory: (page) => get().elements[page] || [],
 }));
