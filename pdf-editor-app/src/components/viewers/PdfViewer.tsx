@@ -3,7 +3,6 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { useAppStore, DrawingTool } from '../../store/useAppStore';
 import { usePdfEditorStore } from '../../store/usePdfEditorStore';
 import { FileUp, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Save } from 'lucide-react';
-import { jsPDF } from 'jspdf';
 import { PDFDocument } from 'pdf-lib';
 import { RenderElement } from '../../models/RenderElement';
 import { ElementFactory } from '../../models/ElementFactory';
@@ -12,7 +11,6 @@ import { CanvasRenderVisitor } from '../../renderers/CanvasRenderVisitor';
 import { LayerIterator } from '../../renderers/LayerIterator';
 import { PdfPageProxy } from '../../services/PdfPageProxy';
 import { workspaceApiService } from '../../services/WorkspaceApiService';
-import { pdfRenderService } from '../../services/PdfRenderService';
 import { useSavePdf } from '../../hooks/useSavePdf';
 import { useEditorShortcuts } from '../../hooks/useEditorShortcuts';
 import { ImageElement } from '../../models/ImageElement';
@@ -25,20 +23,6 @@ import './PdfViewer.css';
 // pdfjs worker setup
 // pdfjs worker setup - using absolute local path for maximum reliability
 pdfjsLib.GlobalWorkerOptions.workerSrc = window.location.origin + '/pdf.worker.min.js';
-
-// Geometry helpers live in utils/geometry.ts — import from there.
-import { distancePointToSegment } from '../../utils/geometry';
-
-// L-shape elbow helper (still needed for select-tool hit-testing in this file)
-const getElbowPoint = (startP: { x: number, y: number }, endP: { x: number, y: number }, type: string) => {
-    switch (type) {
-        case 'arrow-l-1': return { x: endP.x, y: startP.y };
-        case 'arrow-l-2': return { x: startP.x, y: endP.y };
-        default: return { x: endP.x, y: startP.y };
-    }
-}
-
-// (Re-definition removed, importing from DrawingToolStrategy instead)
 
 // Helper to safely get rect [x, y, w, h] from any element (legacy or class-based)
 const getElementRect = (el: any): [number, number, number, number] => {
@@ -336,7 +320,7 @@ const PdfViewer: React.FC = () => {
 
     // Editor Dimension States for perfect persistence
     const [editorWidth, setEditorWidth] = useState<number>(120);
-    const [editorHeight, setEditorHeight] = useState<number>(18);
+    const [editorHeight, setEditorHeight] = useState<number>(24);
 
     // Exit confirmation state
     const [isClosingAfterSaveAs, setIsClosingAfterSaveAs] = useState(false);
@@ -1633,7 +1617,7 @@ const PdfViewer: React.FC = () => {
             ctx.font = `${baseFontSize * scale}px ${h.fontFamily || 'Outfit, sans-serif'}`;
 
             let w = Number(h.width ? h.width * scale : Math.max(120, ctx.measureText(h.text || '').width + 32));
-            let h_val = Math.max(18, Number(h.height || 0) * scale);
+            let h_val = Math.max(24, Number(h.height || 0) * scale);
             setEditorWidth(w);
             setEditorHeight(h_val);
         } else {
@@ -1641,7 +1625,7 @@ const PdfViewer: React.FC = () => {
             setTempText('');
             setInputPos({ x: pos.x, y: pos.y });
             setEditorWidth(120);
-            setEditorHeight(18);
+            setEditorHeight(24);
         }
     };
 
@@ -1752,13 +1736,14 @@ const PdfViewer: React.FC = () => {
         const currentFontFamily = (ann ? ann.fontFamily : toolSettings.fontFamily) || 'Outfit, sans-serif';
 
         mCtx.font = `${currentFontSize}px ${currentFontFamily}`;
-        const lines = tempText.split('\n');
-        const maxLineWidth = Math.max(...lines.map(l => mCtx.measureText(l || ' ').width));
+        const textToMeasure = tempText || "내용을 입력하세요...";
+        const lines = textToMeasure.split('\n');
+        const maxLineWidth = Math.max(...lines.map(l => mCtx.measureText(l).width));
 
-        setEditorWidth(Math.max(120, maxLineWidth + 60));
+        setEditorWidth(maxLineWidth + 24);
 
-        textarea.style.height = 'auto';
-        const newHeight = Math.max(40, textarea.scrollHeight);
+        textarea.style.height = '0px';
+        const newHeight = textarea.scrollHeight;
         textarea.style.height = `${newHeight}px`;
         setEditorHeight(newHeight);
     }, [editingId, currentPageElements, toolSettings.fontSize, toolSettings.fontFamily, scale, tempText]);
@@ -2059,23 +2044,19 @@ const PdfViewer: React.FC = () => {
     }, [scale, canvasRevision]);
 
     useEffect(() => {
-        if (floatingInputRef.current && inputPos) {
-            // Precise alignment: 
-            // Wrapper div has p-2 (8px), Textarea has padding: 1px 0.5rem (8px left, 1px top)
-            // Total Left Offset = 8 + 8 = 16px
-            // Total Top Offset = 8 + 1 = 9px
-            floatingInputRef.current.style.setProperty('--input-left', `${inputPos.x - 20}px`);
-            floatingInputRef.current.style.setProperty('--input-top', `${inputPos.y - 12}px`);
-        }
-    }, [inputPos]);
-
-    useEffect(() => {
-        if (textareaRef.current) {
+        if (textareaRef.current && floatingInputRef.current) {
             const el = editingId ? currentPageElements.find(a => a.id === editingId) : null;
             const ann = el as any;
             const size = (Number(ann?.fontSize || toolSettings.fontSize) || 20) * scale;
             const family = ann?.fontFamily || toolSettings.fontFamily;
             const color = ann?.color || toolSettings.color;
+
+            // X offset: 2px (wrapper border) + 4px (textarea padding) = 6px
+            // Y offset: 2px (wrapper border) + 0.15em (baseline difference) = 2 + size * 0.15
+            if (inputPos) {
+                floatingInputRef.current.style.setProperty('--input-left', `${inputPos.x - 6}px`);
+                floatingInputRef.current.style.setProperty('--input-top', `${inputPos.y - 2 - (size * 0.15)}px`);
+            }
 
             textareaRef.current.style.setProperty('--font-size', `${size}px`);
             if (family) textareaRef.current.style.setProperty('--font-family', family);
@@ -2083,7 +2064,7 @@ const PdfViewer: React.FC = () => {
             textareaRef.current.style.setProperty('--editor-width', `${editorWidth}px`);
             textareaRef.current.style.setProperty('--editor-height', `${editorHeight}px`);
         }
-    }, [editingId, currentPageElements, toolSettings, scale, editorWidth, editorHeight]);
+    }, [inputPos, editingId, currentPageElements, toolSettings, scale, editorWidth, editorHeight]);
 
 
     const hasDocument = !!pdfDoc || !!imageDoc;
@@ -2316,12 +2297,13 @@ const PdfViewer: React.FC = () => {
 
 
                                 <div
-                                    className="relative group p-2 border-2 border-dashed border-blue-400/50 bg-blue-50/10 rounded-lg cursor-move pointer-events-auto"
+                                    className="relative group p-0 border-2 border-dashed border-blue-400/50 bg-blue-50/10 rounded-lg cursor-move pointer-events-auto"
                                     onMouseDown={handleBoxMouseDown}
                                 >
                                     <textarea
                                         ref={textareaRef}
                                         value={tempText}
+                                        rows={1}
                                         onChange={(e) => {
                                             setTempText(e.target.value);
                                             setTimeout(recalculateEditorSize, 0);

@@ -1,5 +1,5 @@
 // ToolState.ts
-import { ToolSettings } from '../../tools/DrawingToolStrategy';
+import { ToolSettings } from '../../types/toolSettings';
 
 export interface PointerEventParams {
     pos: { x: number; y: number };

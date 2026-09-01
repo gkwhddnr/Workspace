@@ -9,7 +9,7 @@ export interface AiMessage {
 }
 
 // ─── Gemini ───────────────────────────────────────────────────────────────────
-export async function callGemini(
+async function callGemini(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
@@ -31,7 +31,7 @@ export async function callGemini(
 }
 
 // ─── ChatGPT (OpenAI) ─────────────────────────────────────────────────────────
-export async function callChatGPT(
+async function callChatGPT(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
@@ -57,7 +57,7 @@ export async function callChatGPT(
 }
 
 // ─── Claude (Anthropic) ───────────────────────────────────────────────────────
-export async function callClaude(
+async function callClaude(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,

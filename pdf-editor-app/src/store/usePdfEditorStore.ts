@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import { RenderElement } from '../models/RenderElement';
-import { ToolSettings } from '../tools/DrawingToolStrategy';
+import { ToolSettings } from '../types/toolSettings';
 
 export interface PdfEditorState {
     // 1. 도큐먼트 상태
@@ -48,11 +48,10 @@ export interface PdfEditorState {
     incrementRevision: () => void;
     markSaved: () => void;
     clearElements: () => void;
-    getPageHistory: (page: number) => RenderElement[];
 }
 
 
-export const usePdfEditorStore = create<PdfEditorState>((set, get) => ({
+export const usePdfEditorStore = create<PdfEditorState>((set) => ({
     docType: null,
     currentPage: 1,
     numPages: 0,
@@ -114,5 +113,4 @@ export const usePdfEditorStore = create<PdfEditorState>((set, get) => ({
     incrementRevision: () => set((state) => ({ historyRevision: state.historyRevision + 1 })),
     markSaved: () => set((state) => ({ lastSavedRevision: state.historyRevision })),
     clearElements: () => set({ elements: {} }),
-    getPageHistory: (page) => get().elements[page] || [],
 }));

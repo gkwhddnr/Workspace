@@ -28,21 +28,10 @@ export class LayerIterator {
         return element;
     }
 
-    reset(): void {
-        this.index = this.reverse ? this.elements.length - 1 : 0;
-    }
-
     /**
      * Static helper for rendering (Bottom to Top)
      */
     static forRendering(elements: RenderElement[]): LayerIterator {
         return new LayerIterator(elements, false);
-    }
-
-    /**
-     * Static helper for hit testing (Top to Bottom)
-     */
-    static forHitTesting(elements: RenderElement[]): LayerIterator {
-        return new LayerIterator(elements, true);
     }
 }

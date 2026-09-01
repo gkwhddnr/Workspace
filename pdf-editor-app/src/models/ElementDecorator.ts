@@ -40,11 +40,4 @@ export abstract class ElementDecorator extends RenderElement {
     move(dx: number, dy: number): void {
         this.element.move(dx, dy);
     }
-
-    /**
-     * Getter to access the original element
-     */
-    getDecoratedElement(): RenderElement {
-        return this.element;
-    }
 }

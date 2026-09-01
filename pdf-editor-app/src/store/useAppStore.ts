@@ -1,6 +1,7 @@
 import { create } from 'zustand';
+import { ToolSettings } from '../types/toolSettings';
 
-export type ActiveTab = 'pdf' | 'web' | 'code' | 'shortcuts';
+export type ActiveTab = 'pdf' | 'web' | 'code' | 'shortcuts' | 'plugins';
 export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2' | 'image';
 export type ThemeMode = 'white' | 'translucent' | 'dark' | 'custom';
 
@@ -9,15 +10,6 @@ export const PRESET_COLORS = [
     '#7C3AED', '#0891B2', '#DB2777', '#111827',
     '#FFFFFF', '#000000', '#FBBF24', '#10B981',
 ];
-
-interface ToolSettings {
-    color: string;
-    fontSize: number;
-    fontFamily: string;
-    strokeWidth: number;
-    textBgOpacity: number;
-    arrowHeadSize: number;
-}
 
 interface AppState {
     // Layout
@@ -41,6 +33,11 @@ interface AppState {
     setActiveTool: (tool: DrawingTool) => void;
     toolSettings: ToolSettings;
     setToolSettings: (settings: Partial<ToolSettings>) => void;
+    customColors: string[];
+    addCustomColor: (color: string) => void;
+    removeCustomColor: (color: string) => void;
+    isColorPickerActive: boolean;
+    setColorPickerActive: (active: boolean) => void;
     // Eraser mode: true = instant delete on click, false = drag to erase
     eraserInstantDelete: boolean;
     setEraserInstantDelete: (value: boolean) => void;
@@ -66,6 +63,8 @@ interface AppState {
     aiMessages: { role: 'user' | 'assistant'; content: string; agent?: string }[];
     addAiMessage: (role: 'user' | 'assistant', content: string) => void;
     clearAiMessages: () => void;
+    aiPanelSize: number;
+    setAiPanelSize: (size: number) => void;
 
     // AI API Keys (localStorage persistent)
     apiKeys: { gemini: string; chatgpt: string; claude: string };
@@ -94,6 +93,14 @@ const getStoredThemeMode = (): ThemeMode => {
 
 const getStoredCustomColor = (): string => {
     return localStorage.getItem('customThemeColor') || '#fceabb';
+};
+
+const getStoredCustomColors = (): string[] => {
+    try {
+        const stored = localStorage.getItem('customColors');
+        if (stored) return JSON.parse(stored);
+    } catch (e) {}
+    return [];
 };
 
 const calculateLuminance = (hex: string) => {
@@ -200,6 +207,30 @@ export const useAppStore = create<AppState>((set) => ({
     },
     setToolSettings: (settings) =>
         set((s) => ({ toolSettings: { ...s.toolSettings, ...settings } })),
+    customColors: getStoredCustomColors(),
+    addCustomColor: (color) => set((s) => {
+        let sanitized = color;
+        if (!sanitized.startsWith('#')) sanitized = '#' + sanitized;
+        sanitized = '#' + sanitized.replace(/^#+/, '').toUpperCase();
+        
+        // Prevent duplicates
+        if (s.customColors.includes(sanitized)) return s;
+        
+        const newColors = [sanitized, ...s.customColors.filter(c => c !== sanitized)].slice(0, 8); // Keep up to 8 colors, move to front if exists
+        localStorage.setItem('customColors', JSON.stringify(newColors));
+        return { customColors: newColors, isColorPickerActive: false };
+    }),
+    removeCustomColor: (color) => set((s) => {
+        let sanitized = color;
+        if (!sanitized.startsWith('#')) sanitized = '#' + sanitized;
+        sanitized = '#' + sanitized.replace(/^#+/, '').toUpperCase();
+        
+        const newColors = s.customColors.filter(c => c !== sanitized);
+        localStorage.setItem('customColors', JSON.stringify(newColors));
+        return { customColors: newColors };
+    }),
+    isColorPickerActive: false,
+    setColorPickerActive: (active) => set({ isColorPickerActive: active }),
 
     // Eraser mode defaults: ON = instant delete on click
     eraserInstantDelete: false,
@@ -255,6 +286,8 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
     addAiMessage: (role, content) =>
         set((s) => ({ aiMessages: [...s.aiMessages, { role, content, agent: s.aiAgent }] })),
     clearAiMessages: () => set({ aiMessages: [] }),
+    aiPanelSize: 28,
+    setAiPanelSize: (size) => set({ aiPanelSize: size }),
 
     // AI API Keys — localStorage에서 복원
     apiKeys: {

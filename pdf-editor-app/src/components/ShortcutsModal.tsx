@@ -1,13 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { X, Keyboard } from 'lucide-react';
+import { APP_VERSION, BUILD_DATE } from '../config/appInfo';
 
 interface ShortcutsModalProps {
     isOpen: boolean;
     onClose: () => void;
 }
-
-const APP_VERSION = '1.0.0';
-const BUILD_DATE = '2026-04';
 
 const CONTENT = `
 ╔══════════════════════════════════════════════════════════════╗

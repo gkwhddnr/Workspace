@@ -1,8 +1,6 @@
 import React from 'react';
 import { Keyboard } from 'lucide-react';
-
-const APP_VERSION = '1.0.0';
-const BUILD_DATE = '2026-04';
+import { APP_VERSION, BUILD_DATE } from '../../config/appInfo';
 
 const CONTENT = `
 ╔══════════════════════════════════════════════════════════════╗

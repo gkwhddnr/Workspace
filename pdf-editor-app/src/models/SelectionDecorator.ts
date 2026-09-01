@@ -9,7 +9,6 @@ import { ElementVisitor } from './ElementVisitor';
  */
 export class SelectionDecorator extends ElementDecorator {
     public readonly selectionColor: string = '#3b82f6'; // blue-500
-    public readonly handleRadius: number = 6;
 
     accept(visitor: ElementVisitor): void {
         // First visit the decorated element's base logic

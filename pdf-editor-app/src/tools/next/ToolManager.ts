@@ -1,5 +1,4 @@
 import { ToolState, PointerEventParams } from './ToolState';
-import { usePdfEditorStore } from '../../store/usePdfEditorStore';
 import { PenTool } from './PenTool';
 import { SelectTool } from './SelectTool';
 import { ShapeTool, TextBlock } from './ShapeTool';
