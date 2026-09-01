@@ -1357,7 +1357,7 @@ const PdfViewer: React.FC = () => {
                     // await page.render({ canvasContext: tempCtx, viewport }).promise;
 
                     const visitor = new CanvasRenderVisitor(tempCtx, 1.4);
-                    const iterator = new LayerIterator(pageElements);
+                    const iterator = LayerIterator.forRendering(pageElements);
 
                     while (iterator.hasNext()) {
                         const el = iterator.next();
