@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
-import { useAppStore, ActiveTab, PRESET_COLORS, DrawingTool } from '../store/useAppStore';
+import { useAppStore, PRESET_COLORS, DrawingTool } from '../store/useAppStore';
 import Sidebar from '../components/Sidebar';
 import PdfViewer from '../components/viewers/PdfViewer';
 import WebViewer from '../components/viewers/WebViewer';
@@ -12,23 +12,16 @@ import ShortcutsModal from '../components/ShortcutsModal';
 import ShortcutsViewer from '../components/viewers/ShortcutsViewer';
 import { usePluginStore } from '../store/usePluginStore';
 import {
-    FileText, Globe, Code2, Keyboard,
-    Download, ChevronDown, Image, Presentation, Puzzle, Bot
+    FileText,
+    Download, ChevronDown, Image, Presentation, Bot
 } from 'lucide-react';
 import { exportService, ExportFormat } from '../services/ExportService';
 import AiPanel from '../components/AiPanel';
 import { registerAiCopilotPlugin } from '../plugins/builtin/aiCopilot';
+import { TABS } from '../config/tabs';
 
 // 빌트인 AI 코파일럿을 플러그인 시스템에 등록 (예시 플러그인)
 registerAiCopilotPlugin(AiPanel);
-
-const TABS: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'pdf', label: 'PDF 편집', icon: <FileText size={14} /> },
-    { id: 'web', label: '웹 서퍼', icon: <Globe size={14} /> },
-    { id: 'code', label: '코드 에디터', icon: <Code2 size={14} /> },
-    { id: 'shortcuts', label: '단축키', icon: <Keyboard size={14} /> },
-    { id: 'plugins', label: '플러그인', icon: <Puzzle size={14} /> },
-];
 
 const MainLayout: React.FC = () => {
     const themeMode = useAppStore(s => s.themeMode);

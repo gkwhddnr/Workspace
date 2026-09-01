@@ -2,65 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, ChevronDown, X } from 'lucide-react';
 import { callAi, refineError, AiProvider } from '../services/AiService';
-
-// ─── AI 제공자 설정 ─────────────────────────────────────────────────────────────
-const PROVIDERS: {
-    id: AiProvider;
-    label: string;
-    color: string;
-    badge: string;
-    placeholder: string;
-    modelDefault: string;
-    modelOptions: { value: string; label: string }[];
-    keyPrefix: string;
-    docUrl: string;
-}[] = [
-    {
-        id: 'gemini',
-        label: 'Gemini',
-        color: 'from-blue-500 to-cyan-400',
-        badge: 'bg-blue-100 text-blue-700',
-        placeholder: 'AIza...',
-        modelDefault: 'gemini-3-flash',
-        modelOptions: [
-            { value: 'gemini-3-flash', label: 'Gemini 3 Flash' },
-            { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-            { value: 'gemini-1.5-pro-latest', label: 'Gemini 1.5 Pro' },
-        ],
-        keyPrefix: 'AIza',
-        docUrl: 'https://aistudio.google.com/app/apikey',
-    },
-    {
-        id: 'chatgpt',
-        label: 'ChatGPT',
-        color: 'from-emerald-500 to-green-400',
-        badge: 'bg-emerald-100 text-emerald-700',
-        placeholder: 'sk-...',
-        modelDefault: 'gpt-5.5',
-        modelOptions: [
-            { value: 'gpt-5.5', label: 'GPT-5.5' },
-            { value: 'gpt-4o', label: 'GPT-4o' },
-            { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-        ],
-        keyPrefix: 'sk-',
-        docUrl: 'https://platform.openai.com/api-keys',
-    },
-    {
-        id: 'claude',
-        label: 'Claude',
-        color: 'from-orange-500 to-amber-400',
-        badge: 'bg-orange-100 text-orange-700',
-        placeholder: 'sk-ant-...',
-        modelDefault: 'claude-opus-4-7-20250514',
-        modelOptions: [
-            { value: 'claude-opus-4-7-20250514', label: 'Claude Opus 4.7' },
-            { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
-            { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
-        ],
-        keyPrefix: 'sk-ant-',
-        docUrl: 'https://console.anthropic.com/settings/keys',
-    },
-];
+import { AI_PROVIDERS } from '../services/aiProviders';
 
 // ─── 컴포넌트 ───────────────────────────────────────────────────────────────────
 interface AiPanelProps {
@@ -99,7 +41,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
     }, [aiMessages]);
 
     // 현재 선택된 제공자 정보
-    const currentProvider = PROVIDERS.find(p => p.id === aiAgent)!;
+    const currentProvider = AI_PROVIDERS.find(p => p.id === aiAgent)!;
 
     // API 키 저장 핸들러
     const handleSaveKeys = () => {
@@ -115,7 +57,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
     const isKeyValid = (provider: AiProvider): boolean | null => {
         const key = apiKeys[provider];
         if (!key) return null; // 미입력
-        const p = PROVIDERS.find(x => x.id === provider)!;
+        const p = AI_PROVIDERS.find(x => x.id === provider)!;
         return key.startsWith(p.keyPrefix);
     };
 
@@ -189,7 +131,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
                         onChange={(e) => setAiAgent(e.target.value as AiProvider)}
                         className="text-[11px] font-bold bg-transparent px-2 py-1.5 outline-none appearance-none cursor-pointer theme-text-muted hover:text-indigo-600 transition-colors border theme-border rounded-lg pr-6"
                     >
-                        {PROVIDERS.map(p => (
+                        {AI_PROVIDERS.map(p => (
                             <option key={p.id} value={p.id}>{p.label}</option>
                         ))}
                     </select>
@@ -232,7 +174,7 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
                     <div className="p-4 space-y-4">
                         <p className="text-[11px] theme-text-muted font-semibold uppercase tracking-wider">API 키 설정</p>
 
-                        {PROVIDERS.map(provider => {
+                        {AI_PROVIDERS.map(provider => {
                             const valid = isKeyValid(provider.id);
                             return (
                                 <div key={provider.id} className="space-y-1.5">
