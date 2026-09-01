@@ -555,8 +555,8 @@ const PdfViewer: React.FC = () => {
             if (!canvas) return;
 
             const viewport = page.getViewport({ scale: s * (window.devicePixelRatio || 1) * 2.0 });
-            const logicalWidth = viewport.width / 2.0;
-            const logicalHeight = viewport.height / 2.0;
+            const logicalWidth = viewport.width / ((window.devicePixelRatio || 1) * 2.0);
+            const logicalHeight = viewport.height / ((window.devicePixelRatio || 1) * 2.0);
 
             const sized = sizeCanvases(
                 canvas,
