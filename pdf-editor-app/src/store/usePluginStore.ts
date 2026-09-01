@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import {
     DocumentChangePayload,
-    PluginContext,
     PluginDefinition,
     PluginRegistryEntry,
     PluginSource,

@@ -104,7 +104,6 @@ export function evaluatePluginCode(
         const fn = new Function(
             '__host__',
             '__registerPlugin__',
-            '__PLUGIN_CODE__',
             `
             const usePdfEditorStore = __host__.usePdfEditorStore;
             const useAppStore = __host__.useAppStore;
@@ -113,7 +112,7 @@ export function evaluatePluginCode(
             ${code}
             `
         );
-        fn(host, localRegister, code);
+        fn(host, localRegister);
     } catch (e) {
         return {
             definition: null,
