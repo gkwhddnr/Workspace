@@ -2,40 +2,50 @@ import React, { useState, useEffect } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { useAppStore, ActiveTab, PRESET_COLORS, DrawingTool } from '../store/useAppStore';
 import Sidebar from '../components/Sidebar';
-import AiPanel from '../components/AiPanel';
 import PdfViewer from '../components/viewers/PdfViewer';
 import WebViewer from '../components/viewers/WebViewer';
 import CodeViewer from '../components/viewers/CodeViewer';
+import PluginManagerPanel from '../components/PluginManagerPanel';
 import ThemeModal from '../components/ThemeModal';
 import FlattenModal from '../components/FlattenModal';
 import ShortcutsModal from '../components/ShortcutsModal';
 import ShortcutsViewer from '../components/viewers/ShortcutsViewer';
+import { usePluginStore } from '../store/usePluginStore';
 import {
-    FileText, Globe, Code2, Bot, Keyboard,
-    Download, ChevronDown, Image, FileCode, Presentation, FileDown
+    FileText, Globe, Code2, Keyboard,
+    Download, ChevronDown, Image, Presentation, Puzzle, Bot
 } from 'lucide-react';
 import { exportService, ExportFormat } from '../services/ExportService';
+import AiPanel from '../components/AiPanel';
+import { registerAiCopilotPlugin } from '../plugins/builtin/aiCopilot';
+
+// 빌트인 AI 코파일럿을 플러그인 시스템에 등록 (예시 플러그인)
+registerAiCopilotPlugin(AiPanel);
 
 const TABS: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
     { id: 'pdf', label: 'PDF 편집', icon: <FileText size={14} /> },
     { id: 'web', label: '웹 서퍼', icon: <Globe size={14} /> },
     { id: 'code', label: '코드 에디터', icon: <Code2 size={14} /> },
     { id: 'shortcuts', label: '단축키', icon: <Keyboard size={14} /> },
+    { id: 'plugins', label: '플러그인', icon: <Puzzle size={14} /> },
 ];
 
 const MainLayout: React.FC = () => {
-    const {
-        themeMode, setThemeMode,
-        activeTabs, toggleTab,
-        setActiveTool, toolSettings, setToolSettings
-    } = useAppStore();
+    const themeMode = useAppStore(s => s.themeMode);
+    const setThemeMode = useAppStore(s => s.setThemeMode);
+    const activeTabs = useAppStore(s => s.activeTabs);
+    const toggleTab = useAppStore(s => s.toggleTab);
+    const setActiveTool = useAppStore(s => s.setActiveTool);
+    const toolSettings = useAppStore(s => s.toolSettings);
+    const setToolSettings = useAppStore(s => s.setToolSettings);
 
     const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
     const [isFlattenModalOpen, setIsFlattenModalOpen] = useState(false);
     const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     
-    const { pdfOriginalData, currentFileName } = useAppStore();
+    const pdfOriginalData = useAppStore(s => s.pdfOriginalData);
+    const currentFileName = useAppStore(s => s.currentFileName);
 
     const handleExport = async (format: ExportFormat) => {
         if (!pdfOriginalData) {
@@ -90,6 +100,8 @@ const MainLayout: React.FC = () => {
 
             if (e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c') {
                 e.preventDefault();
+                const state = useAppStore.getState();
+                state.setColorPickerActive(true);
                 document.getElementById('custom-color-picker')?.click();
                 return;
             }
@@ -97,22 +109,44 @@ const MainLayout: React.FC = () => {
                 const arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
                 if (arrowKeys.includes(e.key)) {
                     e.preventDefault();
-                    const cur = toolSettings.color.toUpperCase();
-                    const idx = PRESET_COLORS.findIndex(c => c.toUpperCase() === cur);
+                    e.stopPropagation();
+                    // Blur any focused separator to prevent it from also handling arrow keys
+                    if (document.activeElement instanceof HTMLElement) {
+                        document.activeElement.blur();
+                    }
+                    const state = useAppStore.getState();
+                    const allColors = [...PRESET_COLORS, ...state.customColors];
+                    const cur = state.toolSettings.color.toUpperCase();
+                    const idx = allColors.findIndex(c => c.toUpperCase() === cur);
                     const i = idx === -1 ? 0 : idx;
                     let next = i;
-                    if (e.key === 'ArrowRight') next = (i + 1) % PRESET_COLORS.length;
-                    else if (e.key === 'ArrowLeft') next = (i - 1 + PRESET_COLORS.length) % PRESET_COLORS.length;
-                    else if (e.key === 'ArrowDown') next = (i + 4) % PRESET_COLORS.length;
-                    else if (e.key === 'ArrowUp') next = (i - 4 + PRESET_COLORS.length) % PRESET_COLORS.length;
-                    setToolSettings({ color: PRESET_COLORS[next] });
+                    if (e.key === 'ArrowRight') next = (i + 1) % allColors.length;
+                    else if (e.key === 'ArrowLeft') next = (i - 1 + allColors.length) % allColors.length;
+                    else if (e.key === 'ArrowDown') next = (i + 4) % allColors.length;
+                    else if (e.key === 'ArrowUp') next = (i - 4 + allColors.length) % allColors.length;
+                    state.setToolSettings({ color: allColors[next] });
                     setTimeout(() => document.getElementById('color-palette-section')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
                     return;
                 }
             }
             if (!e.ctrlKey && !e.metaKey && !e.altKey) {
                 const key = e.key.toLowerCase();
-                if (key === 's') handleToolChange('select');
+                const state = useAppStore.getState();
+                
+                if (key === 'escape' && state.isColorPickerActive) {
+                    state.setColorPickerActive(false);
+                    return;
+                }
+                
+                if (key === 's') {
+                    if (state.isColorPickerActive) {
+                        e.preventDefault();
+                        state.addCustomColor(state.toolSettings.color);
+                        state.setColorPickerActive(false);
+                    } else {
+                        handleToolChange('select');
+                    }
+                }
                 else if (key === 'p') handleToolChange('pen');
                 else if (key === 'h') handleToolChange('highlight');
                 else if (key === 't') handleToolChange('text');
@@ -129,14 +163,17 @@ const MainLayout: React.FC = () => {
                 else if (key === '=') { e.preventDefault(); setToolSettings({ fontSize: Math.min(100, toolSettings.fontSize + 2) }); }
             }
         };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
+        window.addEventListener('keydown', handleKeyDown, true);
+        return () => window.removeEventListener('keydown', handleKeyDown, true);
     }, [handleToolChange, setToolSettings, toolSettings, isFlattenModalOpen]);
 
     const hasPdf = activeTabs.includes('pdf');
     const hasOther = activeTabs.some(t => t !== 'pdf');
-    // AI 코파일럿: 웹 또는 코드 탭이 열릴 때만 표시
-    const showAiPanel = activeTabs.includes('web') || activeTabs.includes('code');
+    // AI 코파일럿은 이제 플러그인으로 제공되며, 플러그인을 실행(또는 활성 뷰)했을 때 패널이 표시된다.
+    const activeView = usePluginStore(s => s.activeView);
+    const stopView = usePluginStore(s => s.stopView);
+    const runPlugin = usePluginStore(s => s.runPlugin);
+    const showAiPanel = activeView?.pluginId === 'ai-copilot';
 
     return (
         <div
@@ -240,14 +277,23 @@ const MainLayout: React.FC = () => {
                         )}
                     </div>
 
-                    {/* AI Pilot badge */}
-                    <div className="flex items-center bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 rounded-xl px-3 py-1.5 gap-2 shadow-sm">
+                    {/* AI Pilot badge — AI 코파일럿 플러그인 실행 토글 */}
+                    <button
+                        onClick={() => {
+                            if (showAiPanel) stopView();
+                            else runPlugin('ai-copilot');
+                        }}
+                        title="AI 코파일럿 플러그인 실행 (클릭)"
+                        className={`flex items-center bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border rounded-xl px-3 py-1.5 gap-2 shadow-sm transition-all hover:-translate-y-0.5 cursor-pointer ${showAiPanel ? 'border-indigo-500/50 ring-1 ring-indigo-500/30' : 'border-indigo-500/20'}`}
+                    >
                         <div className="relative">
                             <Bot size={16} className="text-purple-600" />
-                            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-green-500 border-2 border-white animate-pulse" />
+                            <span className={`absolute -top-1 -right-1 w-2 h-2 rounded-full border-2 border-white ${showAiPanel ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`} />
                         </div>
-                        <span className="text-xs text-purple-700 font-bold hidden xl:block uppercase tracking-wider">AI Pilot Live</span>
-                    </div>
+                        <span className="text-xs text-purple-700 font-bold hidden xl:block uppercase tracking-wider">
+                            {showAiPanel ? 'AI Pilot On' : 'AI Pilot'}
+                        </span>
+                    </button>
                 </div>
             </header>
 
@@ -266,9 +312,10 @@ const MainLayout: React.FC = () => {
                     {hasPdf && (
                         <>
                             <Panel
+                                id="pdf-main-panel"
                                 defaultSize={
                                     !hasOther ? 100
-                                        : showAiPanel ? 44
+                                        : showAiPanel ? (100 - useAppStore.getState().aiPanelSize) * (44 / 72)
                                             : 55
                                 }
                                 minSize={25}
@@ -324,10 +371,11 @@ const MainLayout: React.FC = () => {
                     {/* ② 웹/코드/단축키 */}
                     {hasOther && (
                         <Panel
+                            id="other-main-panel"
                             defaultSize={
                                 hasPdf
-                                    ? (showAiPanel ? 28 : 45)
-                                    : (showAiPanel ? 72 : 100)
+                                    ? (showAiPanel ? (100 - useAppStore.getState().aiPanelSize) * (28 / 72) : 45)
+                                    : (showAiPanel ? 100 - useAppStore.getState().aiPanelSize : 100)
                             }
                             minSize={15}
                             className="flex flex-col min-w-0"
@@ -338,7 +386,7 @@ const MainLayout: React.FC = () => {
                                         <WebViewer />
                                     </Panel>
                                 )}
-                                {activeTabs.includes('web') && (activeTabs.includes('code') || activeTabs.includes('shortcuts')) && (
+                                {activeTabs.includes('web') && (activeTabs.includes('code') || activeTabs.includes('shortcuts') || activeTabs.includes('plugins')) && (
                                     <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
                                 )}
                                 {activeTabs.includes('code') && (
@@ -346,12 +394,20 @@ const MainLayout: React.FC = () => {
                                         <CodeViewer />
                                     </Panel>
                                 )}
-                                {activeTabs.includes('code') && activeTabs.includes('shortcuts') && (
+                                {activeTabs.includes('code') && (activeTabs.includes('shortcuts') || activeTabs.includes('plugins')) && (
                                     <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
                                 )}
                                 {activeTabs.includes('shortcuts') && (
                                     <Panel id="pane-shortcuts" minSize={20} className="flex flex-col min-w-0 h-full">
                                         <ShortcutsViewer />
+                                    </Panel>
+                                )}
+                                {activeTabs.includes('shortcuts') && activeTabs.includes('plugins') && (
+                                    <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                                )}
+                                {activeTabs.includes('plugins') && (
+                                    <Panel id="pane-plugins" minSize={20} className="flex flex-col min-w-0 h-full">
+                                        <PluginManagerPanel />
                                     </Panel>
                                 )}
                             </Group>
@@ -373,11 +429,13 @@ const MainLayout: React.FC = () => {
                                 </div>
                             </Separator>
                             <Panel
-                                defaultSize={28}
+                                id="ai-panel"
+                                defaultSize={useAppStore.getState().aiPanelSize}
+                                onResize={(size) => useAppStore.getState().setAiPanelSize(size.asPercentage)}
                                 minSize={15}
                                 className="theme-bg-panel border-l theme-border flex flex-col shrink-0"
                             >
-                                <AiPanel />
+                                <AiPanel onClose={stopView} />
                             </Panel>
                         </>
                     )}

@@ -39,7 +39,7 @@ export class CanvasRenderVisitor implements ElementVisitor {
         private ctx: CanvasRenderingContext2D,
         private scale: number,
         private onImageLoad?: () => void
-    ) {}
+    ) { }
 
     visitPath(element: PathElement): void {
         const { points, style } = element;
@@ -50,7 +50,7 @@ export class CanvasRenderVisitor implements ElementVisitor {
         this.ctx.save();
         this.ctx.beginPath();
         this.ctx.moveTo(points[0].x * this.scale, points[0].y * this.scale);
-        
+
         for (let i = 1; i < points.length; i++) {
             this.ctx.lineTo(points[i].x * this.scale, points[i].y * this.scale);
         }
@@ -202,9 +202,9 @@ export class CanvasRenderVisitor implements ElementVisitor {
         this.ctx.strokeStyle = decorator.selectionColor;
         this.ctx.lineWidth = 1;
         this.ctx.strokeRect(
-            bbox.x * this.scale, 
-            bbox.y * this.scale, 
-            bbox.width * this.scale, 
+            bbox.x * this.scale,
+            bbox.y * this.scale,
+            bbox.width * this.scale,
             bbox.height * this.scale
         );
         this.ctx.restore();
@@ -215,9 +215,9 @@ export class CanvasRenderVisitor implements ElementVisitor {
         this.ctx.save();
         this.ctx.fillStyle = decorator.hoverColor;
         this.ctx.fillRect(
-            bbox.x * this.scale, 
-            bbox.y * this.scale, 
-            bbox.width * this.scale, 
+            bbox.x * this.scale,
+            bbox.y * this.scale,
+            bbox.width * this.scale,
             bbox.height * this.scale
         );
         this.ctx.restore();
