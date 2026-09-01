@@ -4,9 +4,6 @@ import { PathElement } from '../models/PathElement';
 import { TextElement } from '../models/TextElement';
 import { ShapeElement } from '../models/ShapeElement';
 import { ImageElement } from '../models/ImageElement';
-import { GroupElement } from '../models/GroupElement';
-import { SelectionDecorator } from '../models/SelectionDecorator';
-import { HoverDecorator } from '../models/HoverDecorator';
 
 // L-shape elbow helper
 const getElbowPoint = (p1: { x: number, y: number }, p2: { x: number, y: number }, type: string) => {
@@ -185,41 +182,6 @@ export class CanvasRenderVisitor implements ElementVisitor {
         if (img.complete && img.naturalWidth > 0) {
             this.ctx.drawImage(img, x * this.scale, y * this.scale, width * this.scale, height * this.scale);
         }
-        this.ctx.restore();
-    }
-
-    visitGroup(element: GroupElement): void {
-        // Group visit visits all children
-        for (const child of element.getChildren()) {
-            child.accept(this);
-        }
-    }
-
-    visitSelection(decorator: SelectionDecorator): void {
-        const bbox = decorator.getBoundingBox();
-        this.ctx.save();
-        this.ctx.setLineDash([5, 5]);
-        this.ctx.strokeStyle = decorator.selectionColor;
-        this.ctx.lineWidth = 1;
-        this.ctx.strokeRect(
-            bbox.x * this.scale,
-            bbox.y * this.scale,
-            bbox.width * this.scale,
-            bbox.height * this.scale
-        );
-        this.ctx.restore();
-    }
-
-    visitHover(decorator: HoverDecorator): void {
-        const bbox = decorator.getBoundingBox();
-        this.ctx.save();
-        this.ctx.fillStyle = decorator.hoverColor;
-        this.ctx.fillRect(
-            bbox.x * this.scale,
-            bbox.y * this.scale,
-            bbox.width * this.scale,
-            bbox.height * this.scale
-        );
         this.ctx.restore();
     }
 }
