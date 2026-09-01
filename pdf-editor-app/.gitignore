@@ -53,3 +53,8 @@ Thumbs.db
 
 # Zustand persist
 .zustand/
+
+# AI Protection
+.OpenCode/
+.kiro/
+.vscode/
