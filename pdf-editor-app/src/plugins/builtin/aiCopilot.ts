@@ -1,5 +1,4 @@
 import { registerPlugin } from '../pluginRuntime';
-import { useAppStore } from '../../store/useAppStore';
 
 /**
  * 빌트인 예시 플러그인: AI 코파일럿
@@ -29,11 +28,4 @@ export function registerAiCopilotPlugin(aiPanelComponent: unknown) {
             },
         },
     });
-}
-
-/**
- * AI 코파일럿의 대화 상태를 초기화한다 (앱 store가 유지).
- */
-export function resetAiPluginState() {
-    useAppStore.getState().clearAiMessages();
 }

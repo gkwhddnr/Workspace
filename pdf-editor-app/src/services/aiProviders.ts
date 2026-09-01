@@ -1,4 +1,4 @@
-import { AiProvider } from './AiService';
+import type { AiProvider } from './AiService';
 
 // ─── AI 제공자 설정 ─────────────────────────────────────────────────────────────
 export const AI_PROVIDERS: {

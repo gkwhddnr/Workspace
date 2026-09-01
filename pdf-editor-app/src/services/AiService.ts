@@ -1,6 +1,11 @@
 import axios from 'axios';
+import { AI_PROVIDERS } from './aiProviders';
 
 export type AiProvider = 'gemini' | 'chatgpt' | 'claude';
+
+// 제공자별 기본 모델은 aiProviders.ts의 modelDefault 단일 소스에서 파생
+const defaultModelFor = (id: AiProvider): string =>
+    (AI_PROVIDERS.find(p => p.id === id)?.modelDefault) ?? '';
 
 export interface AiMessage {
     role: 'user' | 'assistant';
@@ -13,7 +18,7 @@ async function callGemini(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model = 'gemini-3-flash'
+    model = defaultModelFor('gemini')
 ): Promise<string> {
     const response = await axios.post(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -35,7 +40,7 @@ async function callChatGPT(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model = 'gpt-5.5'
+    model = defaultModelFor('chatgpt')
 ): Promise<string> {
     const response = await axios.post(
         'https://api.openai.com/v1/chat/completions',
@@ -61,7 +66,7 @@ async function callClaude(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model = 'claude-opus-4-7-20250514'
+    model = defaultModelFor('claude')
 ): Promise<string> {
     const response = await axios.post(
         'https://api.anthropic.com/v1/messages',

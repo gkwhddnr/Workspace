@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
+import { useAiStore } from '../store/useAiStore';
 import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, ChevronDown, X } from 'lucide-react';
 import { callAi, refineError, AiProvider } from '../services/AiService';
 import { AI_PROVIDERS } from '../services/aiProviders';
@@ -12,9 +13,11 @@ interface AiPanelProps {
 const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
     const {
         aiMessages, addAiMessage, clearAiMessages,
-        activeTabs, currentFileName, webUrl, codeLanguage,
         aiAgent, setAiAgent,
         apiKeys, setApiKey,
+    } = useAiStore();
+    const {
+        activeTabs, currentFileName, webUrl, codeLanguage,
     } = useAppStore();
 
     const [input, setInput] = useState('');
@@ -23,11 +26,11 @@ const AiPanel: React.FC<AiPanelProps> = ({ onClose }) => {
     const [showKeys, setShowKeys] = useState<Record<AiProvider, boolean>>({
         gemini: false, chatgpt: false, claude: false
     });
-    const [selectedModel, setSelectedModel] = useState<Record<AiProvider, string>>({
-        gemini:  'gemini-3-flash',
-        chatgpt: 'gpt-5.5',
-        claude:  'claude-opus-4-7-20250514',
-    });
+    const [selectedModel, setSelectedModel] = useState<Record<AiProvider, string>>(
+        Object.fromEntries(
+            AI_PROVIDERS.map(p => [p.id, p.modelDefault])
+        ) as Record<AiProvider, string>
+    );
     const [tempKeys, setTempKeys] = useState<Record<AiProvider, string>>({
         gemini: apiKeys.gemini,
         chatgpt: apiKeys.chatgpt,

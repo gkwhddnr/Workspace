@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ToolSettings } from '../types/toolSettings';
+import { hexToRgb } from '../utils/color';
 
 export type ActiveTab = 'pdf' | 'web' | 'code' | 'shortcuts' | 'plugins';
 export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2' | 'image';
@@ -51,19 +52,6 @@ interface AppState {
     sharedCode: { html: string; css: string; javascript: string };
     setSharedCode: (code: { html: string; css: string; javascript: string }) => void;
 
-    // AI Copilot
-    aiAgent: 'gemini' | 'chatgpt' | 'claude';
-    setAiAgent: (agent: 'gemini' | 'chatgpt' | 'claude') => void;
-    aiMessages: { role: 'user' | 'assistant'; content: string; agent?: string }[];
-    addAiMessage: (role: 'user' | 'assistant', content: string) => void;
-    clearAiMessages: () => void;
-    aiPanelSize: number;
-    setAiPanelSize: (size: number) => void;
-
-    // AI API Keys (localStorage persistent)
-    apiKeys: { gemini: string; chatgpt: string; claude: string };
-    setApiKey: (provider: 'gemini' | 'chatgpt' | 'claude', key: string) => void;
-
     // PDF Text Metadata
     textBlocks: { text: string; rect: [number, number, number, number] }[];
     setTextBlocks: (blocks: { text: string; rect: [number, number, number, number] }[]) => void;
@@ -98,10 +86,7 @@ const getStoredCustomColors = (): string[] => {
 };
 
 const calculateLuminance = (hex: string) => {
-    const h = hex.startsWith('#') ? hex : '#' + hex;
-    const r = parseInt(h.slice(1, 3), 16) || 0;
-    const g = parseInt(h.slice(3, 5), 16) || 0;
-    const b = parseInt(h.slice(5, 7), 16) || 0;
+    const { r, g, b } = hexToRgb(hex);
     // Standard relative luminance formula
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 };
@@ -264,29 +249,6 @@ body {
 console.log('실시간 프리뷰가 작동 중입니다!');`
     },
     setSharedCode: (code) => set({ sharedCode: code }),
-
-    // AI Copilot defaults
-    aiAgent: 'gemini',
-    setAiAgent: (agent) => set({ aiAgent: agent }),
-    aiMessages: [
-        { role: 'assistant', content: '안녕하세요! 저는 AI 코파일럿입니다. PDF 편집, 코드 작성, 웹 검색 등 어떤 것이든 도와드릴 수 있습니다. 무엇을 도와드릴까요?' }
-    ],
-    addAiMessage: (role, content) =>
-        set((s) => ({ aiMessages: [...s.aiMessages, { role, content, agent: s.aiAgent }] })),
-    clearAiMessages: () => set({ aiMessages: [] }),
-    aiPanelSize: 28,
-    setAiPanelSize: (size) => set({ aiPanelSize: size }),
-
-    // AI API Keys — localStorage에서 복원
-    apiKeys: {
-        gemini:  localStorage.getItem('apiKey_gemini')  || '',
-        chatgpt: localStorage.getItem('apiKey_chatgpt') || '',
-        claude:  localStorage.getItem('apiKey_claude')  || '',
-    },
-    setApiKey: (provider, key) => {
-        localStorage.setItem(`apiKey_${provider}`, key);
-        set((s) => ({ apiKeys: { ...s.apiKeys, [provider]: key } }));
-    },
 
     // PDF Text Metadata defaults
     textBlocks: [],

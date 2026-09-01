@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
-import { useAppStore, PRESET_COLORS, DrawingTool } from '../store/useAppStore';
+import { useAppStore, DrawingTool } from '../store/useAppStore';
 import Sidebar from '../components/Sidebar';
 import PdfViewer from '../components/viewers/PdfViewer';
 import WebViewer from '../components/viewers/WebViewer';
@@ -11,6 +11,7 @@ import FlattenModal from '../components/FlattenModal';
 import ShortcutsModal from '../components/ShortcutsModal';
 import ShortcutsViewer from '../components/viewers/ShortcutsViewer';
 import { usePluginStore } from '../store/usePluginStore';
+import { useAiStore } from '../store/useAiStore';
 import {
     FileText,
     Download, ChevronDown, Image, Presentation, Bot
@@ -19,6 +20,7 @@ import { exportService, ExportFormat } from '../services/ExportService';
 import AiPanel from '../components/AiPanel';
 import { registerAiCopilotPlugin } from '../plugins/builtin/aiCopilot';
 import { TABS } from '../config/tabs';
+import { useAppShortcuts } from '../hooks/useAppShortcuts';
 
 // 빌트인 AI 코파일럿을 플러그인 시스템에 등록 (예시 플러그인)
 registerAiCopilotPlugin(AiPanel);
@@ -70,95 +72,23 @@ const MainLayout: React.FC = () => {
         }, 50);
     };
 
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            const target = e.target as HTMLElement | null;
-            const tagName = target?.tagName.toLowerCase();
-            if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) return;
-
-            if (e.altKey && e.key.toLowerCase() === 'd') { e.preventDefault(); setIsThemeModalOpen(true); return; }
-            if (e.key === 'F1' || e.key === '?') {
-                e.preventDefault();
-                useAppStore.setState(state => {
-                    if (!state.activeTabs.includes('shortcuts')) {
-                        if (state.activeTabs.length >= 2) return { activeTabs: [...state.activeTabs.slice(1), 'shortcuts'] };
-                        return { activeTabs: [...state.activeTabs, 'shortcuts'] };
-                    }
-                    return state;
-                });
-                return;
-            }
-            if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); setIsFlattenModalOpen(true); return; }
-            if (isFlattenModalOpen) return;
-
-            if (e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c') {
-                e.preventDefault();
-                const state = useAppStore.getState();
-                state.setColorPickerActive(true);
-                document.getElementById('custom-color-picker')?.click();
-                return;
-            }
-            if (e.altKey && e.shiftKey) {
-                const arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
-                if (arrowKeys.includes(e.key)) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    // Blur any focused separator to prevent it from also handling arrow keys
-                    if (document.activeElement instanceof HTMLElement) {
-                        document.activeElement.blur();
-                    }
-                    const state = useAppStore.getState();
-                    const allColors = [...PRESET_COLORS, ...state.customColors];
-                    const cur = state.toolSettings.color.toUpperCase();
-                    const idx = allColors.findIndex(c => c.toUpperCase() === cur);
-                    const i = idx === -1 ? 0 : idx;
-                    let next = i;
-                    if (e.key === 'ArrowRight') next = (i + 1) % allColors.length;
-                    else if (e.key === 'ArrowLeft') next = (i - 1 + allColors.length) % allColors.length;
-                    else if (e.key === 'ArrowDown') next = (i + 4) % allColors.length;
-                    else if (e.key === 'ArrowUp') next = (i - 4 + allColors.length) % allColors.length;
-                    state.setToolSettings({ color: allColors[next] });
-                    setTimeout(() => document.getElementById('color-palette-section')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
-                    return;
+    useAppShortcuts({
+        isFlattenModalOpen,
+        onOpenTheme: () => setIsThemeModalOpen(true),
+        onOpenFlatten: () => setIsFlattenModalOpen(true),
+        onOpenShortcuts: () => {
+            useAppStore.setState(state => {
+                if (!state.activeTabs.includes('shortcuts')) {
+                    if (state.activeTabs.length >= 2) return { activeTabs: [...state.activeTabs.slice(1), 'shortcuts'] };
+                    return { activeTabs: [...state.activeTabs, 'shortcuts'] };
                 }
-            }
-            if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-                const key = e.key.toLowerCase();
-                const state = useAppStore.getState();
-                
-                if (key === 'escape' && state.isColorPickerActive) {
-                    state.setColorPickerActive(false);
-                    return;
-                }
-                
-                if (key === 's') {
-                    if (state.isColorPickerActive) {
-                        e.preventDefault();
-                        state.addCustomColor(state.toolSettings.color);
-                        state.setColorPickerActive(false);
-                    } else {
-                        handleToolChange('select');
-                    }
-                }
-                else if (key === 'p') handleToolChange('pen');
-                else if (key === 'h') handleToolChange('highlight');
-                else if (key === 't') handleToolChange('text');
-                else if (key === 'q') handleToolChange('rect');
-                else if (key === 'c') handleToolChange('circle');
-                else if (key === 'e') handleToolChange('eraser');
-                else if (key === '3') handleToolChange('arrow');
-                else if (key === '1') handleToolChange('arrow-l-1');
-                else if (key === '2') handleToolChange('arrow-l-2');
-                else if (key === 'i') handleToolChange('image');
-                else if (key === '[') { e.preventDefault(); setToolSettings({ strokeWidth: Math.max(1, toolSettings.strokeWidth - 1) }); }
-                else if (key === ']') { e.preventDefault(); setToolSettings({ strokeWidth: Math.min(20, toolSettings.strokeWidth + 1) }); }
-                else if (key === '-') { e.preventDefault(); setToolSettings({ fontSize: Math.max(8, toolSettings.fontSize - 2) }); }
-                else if (key === '=') { e.preventDefault(); setToolSettings({ fontSize: Math.min(100, toolSettings.fontSize + 2) }); }
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown, true);
-        return () => window.removeEventListener('keydown', handleKeyDown, true);
-    }, [handleToolChange, setToolSettings, toolSettings, isFlattenModalOpen]);
+                return state;
+            });
+        },
+        toolSettings,
+        setToolSettings,
+        handleToolChange,
+    });
 
     const hasPdf = activeTabs.includes('pdf');
     const hasOther = activeTabs.some(t => t !== 'pdf');
@@ -308,7 +238,7 @@ const MainLayout: React.FC = () => {
                                 id="pdf-main-panel"
                                 defaultSize={
                                     !hasOther ? 100
-                                        : showAiPanel ? (100 - useAppStore.getState().aiPanelSize) * (44 / 72)
+                                        : showAiPanel ? (100 - useAiStore.getState().aiPanelSize) * (44 / 72)
                                             : 55
                                 }
                                 minSize={25}
@@ -367,8 +297,8 @@ const MainLayout: React.FC = () => {
                             id="other-main-panel"
                             defaultSize={
                                 hasPdf
-                                    ? (showAiPanel ? (100 - useAppStore.getState().aiPanelSize) * (28 / 72) : 45)
-                                    : (showAiPanel ? 100 - useAppStore.getState().aiPanelSize : 100)
+? (showAiPanel ? (100 - useAiStore.getState().aiPanelSize) * (28 / 72) : 45)
+: (showAiPanel ? 100 - useAiStore.getState().aiPanelSize : 100)
                             }
                             minSize={15}
                             className="flex flex-col min-w-0"
@@ -423,8 +353,8 @@ const MainLayout: React.FC = () => {
                             </Separator>
                             <Panel
                                 id="ai-panel"
-                                defaultSize={useAppStore.getState().aiPanelSize}
-                                onResize={(size) => useAppStore.getState().setAiPanelSize(size.asPercentage)}
+                                defaultSize={useAiStore.getState().aiPanelSize}
+                                onResize={(size) => useAiStore.getState().setAiPanelSize(size.asPercentage)}
                                 minSize={15}
                                 className="theme-bg-panel border-l theme-border flex flex-col shrink-0"
                             >
