@@ -19,6 +19,11 @@ import { UpdateElementCommand } from '../../commands/UpdateElementCommand';
 import { DeleteElementCommand } from '../../commands/DeleteElementCommand';
 import { CommandHistory } from '../../commands/CommandHistory';
 import { getElementRect } from '../../utils/elementRect';
+import { userTextLineRuns, userTextCharCells } from '../../utils/textRuns';
+import { sizeCanvases } from '../../utils/canvas';
+import ExitConfirmDialog from './dialogs/ExitConfirmDialog';
+import PendingFileOpenDialog from './dialogs/PendingFileOpenDialog';
+import SaveAsDialog from './dialogs/SaveAsDialog';
 import './PdfViewer.css';
 
 // pdfjs worker setup
@@ -67,33 +72,9 @@ const PdfViewer: React.FC = () => {
     const combinedTextRuns = useMemo(() => {
         const runs = [...textBlocks]; // PDF 원본 런 복사
 
-        // [CUSTOMIZE] 사용자 추가 텍스트의 라인 높이 배율 (기본 1.2)
-        const LINE_HEIGHT_SCALE = 1.2;
-
         currentPageElements.forEach(el => {
             if (el.type === 'text') {
-                const textEl = el as any;
-                const rect = getElementRect(textEl);
-                const annFontSize = (Number(textEl.fontSize) || 20) * scale;
-                const lineHeight = annFontSize * LINE_HEIGHT_SCALE;
-                const text = textEl.text || '';
-                const lines = text.split('\n');
-
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d')!;
-                ctx.font = `${annFontSize}px ${textEl.fontFamily || 'Outfit, sans-serif'}`;
-
-                lines.forEach((line: string, lineIdx: number) => {
-                    if (line.trim().length === 0) return;
-
-                    const ty = (rect[1] * scale) + (lineIdx * lineHeight);
-                    const lineWidth = ctx.measureText(line).width;
-
-                    runs.push({
-                        text: line,
-                        rect: [rect[0] * scale, ty, lineWidth, annFontSize]
-                    });
-                });
+                runs.push(...userTextLineRuns(el, scale));
             }
         });
         return runs;
@@ -245,34 +226,7 @@ const PdfViewer: React.FC = () => {
         // 2. User Text Elements (New Model)
         currentPageElements.forEach(el => {
             if (el.type === 'text') {
-                const textEl = el as any;
-                const rect = getElementRect(textEl);
-                const annFontSize = (Number(textEl.fontSize) || 20) * scale;
-                const lineHeight = annFontSize * 1.2;
-                const text = textEl.text || '';
-                const lines = text.split('\n');
-                const tyBase = rect[1] * scale;
-
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d')!;
-                ctx.font = `${annFontSize}px ${textEl.fontFamily || 'Outfit, sans-serif'}`;
-
-                lines.forEach((line: string, lineIdx: number) => {
-                    const ty = tyBase + (lineIdx * lineHeight);
-                    let currentX = rect[0] * scale;
-                    const parts = line.split('');
-
-                    parts.forEach((part: string) => {
-                        const w = ctx.measureText(part).width;
-                        if (part.trim().length > 0) {
-                            blocks.push({
-                                text: part,
-                                rect: [currentX, ty, w, annFontSize]
-                            });
-                        }
-                        currentX += w;
-                    });
-                });
+                blocks.push(...userTextCharCells(el, scale));
             }
         });
 
@@ -556,39 +510,23 @@ const PdfViewer: React.FC = () => {
         async (img: HTMLImageElement, s: number) => {
             const canvas = canvasRef.current;
             if (!canvas) return;
-            const ctx = canvas.getContext('2d', { alpha: false })!;
-
-            const dpr = window.devicePixelRatio || 1;
-            const qualityMultiplier = 2.0; // Extra oversampling for crisp visuals
 
             const logicalWidth = Math.max(1, Math.round(img.naturalWidth * s));
             const logicalHeight = Math.max(1, Math.round(img.naturalHeight * s));
 
-            canvas.width = logicalWidth * dpr * qualityMultiplier;
-            canvas.height = logicalHeight * dpr * qualityMultiplier;
-            canvas.style.width = `${logicalWidth}px`;
-            canvas.style.height = `${logicalHeight}px`;
-
-            if (overlayCanvasRef.current) {
-                const overlay = overlayCanvasRef.current;
-                overlay.width = logicalWidth * dpr * qualityMultiplier;
-                overlay.height = logicalHeight * dpr * qualityMultiplier;
-                overlay.style.width = `${logicalWidth}px`;
-                overlay.style.height = `${logicalHeight}px`;
-                overlay.getContext('2d')!.setTransform(dpr * qualityMultiplier, 0, 0, dpr * qualityMultiplier, 0, 0);
-            }
-
-            if (guideCanvasRef.current) {
-                const guide = guideCanvasRef.current;
-                guide.width = logicalWidth * dpr * qualityMultiplier;
-                guide.height = logicalHeight * dpr * qualityMultiplier;
-                guide.style.width = `${logicalWidth}px`;
-                guide.style.height = `${logicalHeight}px`;
-            }
+            const sized = sizeCanvases(
+                canvas,
+                overlayCanvasRef.current,
+                guideCanvasRef.current,
+                logicalWidth,
+                logicalHeight,
+                { alpha: false }
+            );
+            if (!sized) return;
+            const ctx = sized.ctx;
 
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'high';
-            ctx.setTransform(dpr * qualityMultiplier, 0, 0, dpr * qualityMultiplier, 0, 0);
             ctx.clearRect(0, 0, logicalWidth, logicalHeight);
             ctx.drawImage(img, 0, 0, logicalWidth, logicalHeight);
 
@@ -616,25 +554,20 @@ const PdfViewer: React.FC = () => {
             const canvas = canvasRef.current;
             if (!canvas) return;
 
-            const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true })!;
-            const dpr = window.devicePixelRatio || 1;
-            const qualityMultiplier = 2.0;
+            const viewport = page.getViewport({ scale: s * (window.devicePixelRatio || 1) * 2.0 });
+            const logicalWidth = viewport.width / 2.0;
+            const logicalHeight = viewport.height / 2.0;
 
-            const viewport = page.getViewport({ scale: s * dpr * qualityMultiplier });
-
-            canvas.height = viewport.height;
-            canvas.width = viewport.width;
-            canvas.style.height = `${viewport.height / (dpr * qualityMultiplier)}px`;
-            canvas.style.width = `${viewport.width / (dpr * qualityMultiplier)}px`;
-
-            if (overlayCanvasRef.current) {
-                const overlay = overlayCanvasRef.current;
-                overlay.height = viewport.height;
-                overlay.width = viewport.width;
-                overlay.style.height = `${viewport.height / (dpr * qualityMultiplier)}px`;
-                overlay.style.width = `${viewport.width / (dpr * qualityMultiplier)}px`;
-                overlay.getContext('2d')!.setTransform(dpr * qualityMultiplier, 0, 0, dpr * qualityMultiplier, 0, 0);
-            }
+            const sized = sizeCanvases(
+                canvas,
+                overlayCanvasRef.current,
+                guideCanvasRef.current,
+                logicalWidth,
+                logicalHeight,
+                { alpha: false }
+            );
+            if (!sized) return;
+            const ctx = sized.ctx;
 
             // Cancel any in-progress render before starting a new one
             if (renderTaskRef.current) {
@@ -2385,181 +2318,77 @@ const PdfViewer: React.FC = () => {
             </div>
 
             {/* 종료 확인 다이얼로그 */}
-            {isExitDialogOpen && (
-                <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-slate-200 dark:border-slate-700 animate-in zoom-in-95 duration-200">
-                        <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
-                                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                                </svg>
-                            </div>
-                            <div>
-                                <h3 className="text-base font-bold text-slate-900 dark:text-white">저장하지 않은 변경 사항</h3>
-                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">종료하기 전에 저장하시겠습니까?</p>
-                            </div>
-                        </div>
-                        <div className="flex flex-col gap-2 mt-4">
-                            <button
-                                onClick={async () => {
-                                    toggleExitDialog(false);
-                                    const success = await handleSave();
-                                    if (success) {
-                                        const anyWindow = window as any;
-                                        await anyWindow?.electronAPI?.forceQuitApp?.();
-                                    }
-                                }}
-                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 shadow-md shadow-blue-500/20 transition-all hover:-translate-y-0.5"
-                            >
-                                예 (저장 후 종료)
-                            </button>
-                            <button
-                                onClick={() => {
-                                    toggleExitDialog(false);
-                                    setIsClosingAfterSaveAs(true);
-                                    openSaveAsDialog();
-                                }}
-                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 transition-all"
-                            >
-                                다른 이름으로 저장 후 종료
-                            </button>
-                            <button
-                                onClick={async () => {
-                                    toggleExitDialog(false);
-                                    const anyWindow = window as any;
-                                    await anyWindow?.electronAPI?.forceQuitApp?.();
-                                }}
-                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
-                            >
-                                아니요 (저장하지 않고 종료)
-                            </button>
-                            <button
-                                onClick={() => {
-                                    toggleExitDialog(false);
-                                    setIsClosingAfterSaveAs(false);
-                                }}
-                                className="w-full px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all"
-                            >
-                                취소 (계속 편집하기)
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <ExitConfirmDialog
+                isOpen={isExitDialogOpen}
+                onSaveAndQuit={async () => {
+                    toggleExitDialog(false);
+                    const success = await handleSave();
+                    if (success) {
+                        const anyWindow = window as any;
+                        await anyWindow?.electronAPI?.forceQuitApp?.();
+                    }
+                }}
+                onSaveAsAndQuit={() => {
+                    toggleExitDialog(false);
+                    setIsClosingAfterSaveAs(true);
+                    openSaveAsDialog();
+                }}
+                onDiscardAndQuit={async () => {
+                    toggleExitDialog(false);
+                    const anyWindow = window as any;
+                    await anyWindow?.electronAPI?.forceQuitApp?.();
+                }}
+                onCancel={() => {
+                    toggleExitDialog(false);
+                    setIsClosingAfterSaveAs(false);
+                }}
+            />
 
             {/* 미저장 경고 다이얼로그 — 파일 열기 전 표시 */}
-            {pendingFileOpen && (
-                <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-slate-200 animate-in zoom-in-95 duration-200">
-                        <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
-                                <span className="text-amber-600 text-xl">⚠️</span>
-                            </div>
-                            <h3 className="text-base font-bold text-slate-900">저장하지 않은 변경사항</h3>
-                        </div>
-                        <p className="text-sm text-slate-500 mb-5">
-                            현재 파일에 저장되지 않은 필기 내용이 있습니다.<br />
-                            저장하지 않고 다른 파일을 열면 작업 내용이 사라집니다.
-                        </p>
-                        <div className="flex flex-col gap-2">
-                            <button
-                                onClick={async () => {
-                                    const saved = await handleSave();
-                                    if (saved) {
-                                        const fn = pendingFileOpen;
-                                        setPendingFileOpen(null);
-                                        await fn!.fn();
-                                    }
-                                }}
-                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-                            >
-                                저장하고 열기
-                            </button>
-                            <button
-                                onClick={async () => {
-                                    const fn = pendingFileOpen;
-                                    setPendingFileOpen(null);
-                                    await fn!.fn();
-                                }}
-                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-red-400 text-white hover:bg-red-500 transition-colors shadow-sm"
-                            >
-                                저장하지 않고 열기
-                            </button>
-                            <button
-                                onClick={() => {
-                                    setIsSavingAsForOpen(true);
-                                    openSaveAsDialog();
-                                }}
-                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors border border-slate-200"
-                            >
-                                다른 이름으로 저장하고 열기
-                            </button>
-                            <button
-                                onClick={() => {
-                                    setPendingFileOpen(null);
-                                    setIsSavingAsForOpen(false);
-                                }}
-                                className="w-full px-4 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-100 transition-colors"
-                            >
-                                취소
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <PendingFileOpenDialog
+                isOpen={!!pendingFileOpen}
+                onSaveAndOpen={async () => {
+                    const saved = await handleSave();
+                    if (saved) {
+                        const fn = pendingFileOpen;
+                        setPendingFileOpen(null);
+                        await fn!.fn();
+                    }
+                }}
+                onDiscardAndOpen={async () => {
+                    const fn = pendingFileOpen;
+                    setPendingFileOpen(null);
+                    await fn!.fn();
+                }}
+                onSaveAsAndOpen={() => {
+                    setIsSavingAsForOpen(true);
+                    openSaveAsDialog();
+                }}
+                onCancel={() => {
+                    setPendingFileOpen(null);
+                    setIsSavingAsForOpen(false);
+                }}
+            />
 
             {/* 다른 이름으로 저장 다이얼로그 */}
-            {isSaveAsDialogOpen && (
-                <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-300">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 border border-slate-200 animate-in zoom-in-95 duration-200">
-                        <h3 className="text-lg font-bold text-slate-900 mb-4">다른 이름으로 저장</h3>
-                        <p className="text-sm text-slate-500 mb-4">새 파일 이름을 입력하세요. 원본 파일과 같은 폴더에 저장됩니다.</p>
-                        <input
-                            type="text"
-                            value={saveAsName}
-                            onChange={(e) => {
-                                e.stopPropagation();
-                                setSaveAsName(e.target.value);
-                            }}
-                            onKeyDown={(e) => {
-                                e.stopPropagation();
-                                if (e.key === 'Enter') confirmSaveAs(false);
-
-                            }}
-                            onKeyUp={(e) => e.stopPropagation()}
-                            onKeyPress={(e) => e.stopPropagation()}
-                            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-6 text-slate-900"
-                            placeholder="파일명 입력"
-                            autoFocus
-                        />
-                        <div className="flex justify-end gap-3">
-                            <button
-                                onClick={() => {
-                                    toggleSaveAsDialog(false);
-                                    setIsSavingAsForOpen(false);
-                                }}
-                                className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-100 transition-colors"
-                            >
-                                취소
-                            </button>
-                            <button
-                                onClick={() => {
-                                    const onSaved = isSavingAsForOpen && pendingFileOpen ? async () => {
-                                        const fn = pendingFileOpen;
-                                        setPendingFileOpen(null);
-                                        setIsSavingAsForOpen(false);
-                                        await fn.fn();
-                                    } : undefined;
-                                    confirmSaveAs(isClosingAfterSaveAs, onSaved);
-                                }}
-                                className="px-5 py-2.5 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-500/20 transition-all hover:-translate-y-0.5"
-                            >
-                                저장하기
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <SaveAsDialog
+                isOpen={isSaveAsDialogOpen}
+                saveAsName={saveAsName}
+                onSaveAsNameChange={setSaveAsName}
+                onConfirm={() => {
+                    const onSaved = isSavingAsForOpen && pendingFileOpen ? async () => {
+                        const fn = pendingFileOpen;
+                        setPendingFileOpen(null);
+                        setIsSavingAsForOpen(false);
+                        await fn.fn();
+                    } : undefined;
+                    confirmSaveAs(isClosingAfterSaveAs, onSaved);
+                }}
+                onCancel={() => {
+                    toggleSaveAsDialog(false);
+                    setIsSavingAsForOpen(false);
+                }}
+            />
         </div>
     );
 };
