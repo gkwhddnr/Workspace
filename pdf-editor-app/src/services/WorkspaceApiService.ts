@@ -86,7 +86,8 @@ export class WorkspaceApiService {
             responseType: 'blob',
             // LibreOffice / PowerPoint COM conversion of large decks can exceed the
             // default 30s axios timeout, so use a generous per-request timeout.
-            timeout: 120000
+            // LibreOffice(90s) -> PowerPoint(120s) fallback chain can take up to ~210s.
+            timeout: 240000
         });
         const disposition = res.headers?.['content-disposition'] || '';
         const match = /filename="?([^";]+)"?/.exec(disposition);

@@ -2,11 +2,13 @@ package com.pdfeditor.service
 
 import org.springframework.stereotype.Service
 import org.springframework.web.multipart.MultipartFile
+import jakarta.annotation.PostConstruct
 import java.io.ByteArrayOutputStream
 import java.nio.charset.Charset
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.extension
@@ -15,6 +17,67 @@ import kotlin.io.path.nameWithoutExtension
 
 @Service
 class OfficeToPdfService {
+
+    private val warmupExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "office-pdf-warmup").apply { isDaemon = true }
+    }
+
+    /**
+     * LibreOffice headless는 첫 실행 시 사용자 프로파일 생성/언어팩 로드로 매우 느리다.
+     * 앱이 뜨는 즉시 작은 문서를 headless로 1회 변환해 프로파일을 미리 만들어,
+     * 최초의 실제 변환 요청이 120초 타임아웃에 걸리지 않도록 한다.
+     */
+    @PostConstruct
+    fun warmUpLibreOffice() {
+        val soffice = findSofficeExecutable() ?: return
+        warmupExecutor.submit {
+            try {
+                val tmpDir = Files.createTempDirectory("pdf-editor-loo-warmup-")
+                try {
+                    // 최소한의 빈 .txt 문서를 만들고 PDF로 변환
+                    val input = tmpDir.resolve("warmup.txt")
+                    Files.writeString(input, "LibreOffice warm-up")
+                    val outDir = tmpDir.resolve("out").also { Files.createDirectories(it) }
+
+                    val command = listOf(
+                        soffice.toString(),
+                        "--headless",
+                        "--nologo",
+                        "--nodefault",
+                        "--nolockcheck",
+                        "--nofirststartwizard",
+                        "--convert-to", "pdf",
+                        "--outdir", outDir.toString(),
+                        input.toString()
+                    )
+                    val process = ProcessBuilder(command)
+                        .redirectErrorStream(true)
+                        .directory(outDir.toFile())
+                        .start()
+                    val output = ByteArrayOutputStream()
+                    val reader = Thread {
+                        process.inputStream.use { it.copyTo(output) }
+                    }.apply { isDaemon = true; start() }
+
+                    if (process.waitFor(180, TimeUnit.SECONDS)) {
+                        reader.join(2000)
+                        if (process.exitValue() == 0) {
+                            println("[OfficeToPdfService] LibreOffice warm-up 완료 (프로파일 준비됨).")
+                        } else {
+                            println("[OfficeToPdfService] LibreOffice warm-up 실패:\n${output.toString(Charset.defaultCharset())}")
+                        }
+                    } else {
+                        process.destroyForcibly()
+                        println("[OfficeToPdfService] LibreOffice warm-up 타임아웃.")
+                    }
+                } finally {
+                    deleteRecursively(tmpDir)
+                }
+            } catch (e: Exception) {
+                println("[OfficeToPdfService] LibreOffice warm-up 예외: ${e.message}")
+            }
+        }
+    }
     fun convertToPdf(file: MultipartFile): ConvertedPdf {
         val originalName = (file.originalFilename ?: "document").trim().ifEmpty { "document" }
         val ext = originalName.substringAfterLast('.', "").lowercase()
