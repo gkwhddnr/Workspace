@@ -1012,13 +1012,15 @@ const PdfViewer: React.FC = () => {
 
     const loadAnyDocument = async (file: File, isRestore: boolean = false) => {
         const lower = file.name.toLowerCase();
-        if (lower.endsWith('.pdf') || file.type === 'application/pdf') return loadPdf(file, isRestore);
-        if (lower.endsWith('.png') || file.type === 'image/png') return loadImage(file, isRestore);
+        // Extension must take priority: restored/auto-detected files may carry a
+        // misleading application/pdf MIME even when they are actually Office files.
         if (lower.endsWith('.ppt') || lower.endsWith('.pptx') ||
             file.type === 'application/vnd.ms-powerpoint' ||
             file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
             return loadOfficeDocument(file, isRestore);
         }
+        if (lower.endsWith('.pdf') || file.type === 'application/pdf') return loadPdf(file, isRestore);
+        if (lower.endsWith('.png') || file.type === 'image/png') return loadImage(file, isRestore);
 
         alert('지원하지 않는 파일 형식입니다. (PDF, PNG, PPT, PPTX)');
     };
