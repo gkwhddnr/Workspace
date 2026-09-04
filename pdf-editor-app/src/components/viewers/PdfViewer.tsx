@@ -739,7 +739,7 @@ const PdfViewer: React.FC = () => {
     );
 
 
-    const loadPdf = async (file: File, isRestore: boolean = false) => {
+    const loadPdf = async (file: File, isRestore: boolean = false, skipBackendRestore: boolean = false) => {
         try {
             console.log('Loading PDF file:', file.name, file.size);
 
@@ -747,7 +747,10 @@ const PdfViewer: React.FC = () => {
             let targetPage = 1;
             let pData: string | null = null;
 
-            if (file.name) {
+            // For freshly converted Office documents we must load exactly the PDF we just
+            // generated — do not overwrite it with any previously saved (possibly broken)
+            // backend original that happens to share the same filename.
+            if (!skipBackendRestore && file.name) {
                 const ws = await workspaceApiService.fetchWorkspace(file.name);
                 if (ws) {
                     if (ws.lastViewedPage >= 1) {
@@ -989,7 +992,9 @@ const PdfViewer: React.FC = () => {
             const pdfFile = new File([pdfBlob], result.fileName, { type: 'application/pdf' });
             // Treat the converted PDF as a new working document so saves target the .pdf.
             setCurrentFile(result.fileName, result.fileName);
-            await loadPdf(pdfFile, isRestore);
+            // Load the freshly generated PDF directly — skip backend original restore to
+            // avoid loading a stale/broken saved original under the same filename.
+            await loadPdf(pdfFile, isRestore, true);
         } catch (error: any) {
             console.error('Error converting office document:', error);
             let msg = error instanceof Error ? error.message : String(error);
