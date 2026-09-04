@@ -982,7 +982,7 @@ const PdfViewer: React.FC = () => {
         try {
             const result = await workspaceApiService.convertOfficeToPdf(file);
             if (!result || !result.bytes || result.bytes.length === 0) {
-                alert('PPT/PPTX를 PDF로 변환하는 데 실패했습니다. 백엔드 서비스가 실행 중인지 확인해 주세요.');
+                alert('PPT/PPTX를 PDF로 변환하는 데 실패했습니다.');
                 return;
             }
             const pdfBlob = new Blob([result.bytes], { type: 'application/pdf' });
@@ -990,9 +990,18 @@ const PdfViewer: React.FC = () => {
             // Treat the converted PDF as a new working document so saves target the .pdf.
             setCurrentFile(result.fileName, result.fileName);
             await loadPdf(pdfFile, isRestore);
-        } catch (error) {
+        } catch (error: any) {
             console.error('Error converting office document:', error);
-            alert(`PPT/PPTX를 PDF로 변환하는 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
+            let msg = error instanceof Error ? error.message : String(error);
+            try {
+                const data = error?.response?.data;
+                if (data instanceof Blob) {
+                    const text = await data.text();
+                    const parsed = JSON.parse(text);
+                    if (parsed?.error) msg = parsed.error;
+                }
+            } catch { /* keep default message */ }
+            alert(`PPT/PPTX를 PDF로 변환하는 중 오류가 발생했습니다:\n${msg}`);
         }
     };
 
@@ -2143,7 +2152,7 @@ const PdfViewer: React.FC = () => {
                 onDrop={handleDrop}
             >
                 <FileUp size={48} className="text-gray-300" />
-                <p className="text-gray-500 font-medium">PDF/PNG 파일을 드래그하거나 버튼을 클릭하세요</p>
+                <p className="text-gray-500 font-medium">PDF/PNG/PPT/PPTX 파일을 드래그하거나 버튼을 클릭하세요</p>
                 <button
                     onClick={handleFileOpen}
                     className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"

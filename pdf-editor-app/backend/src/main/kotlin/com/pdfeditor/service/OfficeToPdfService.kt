@@ -22,12 +22,6 @@ class OfficeToPdfService {
             throw IllegalArgumentException("현재는 PPT/PPTX만 PDF로 변환할 수 있습니다. (입력: $originalName)")
         }
 
-        val soffice = findSofficeExecutable()
-            ?: throw IllegalStateException(
-                "LibreOffice(soffice)를 찾을 수 없습니다. LibreOffice를 설치하고 PATH에 soffice를 추가하거나, " +
-                    "환경 변수 LIBREOFFICE_HOME 또는 LIBREOFFICE_PATH를 설정해 주세요."
-            )
-
         val workDir = Files.createTempDirectory("pdf-editor-convert-")
         try {
             val safeBaseName = sanitizeFileBaseName(originalName.substringBeforeLast('.'))
@@ -36,48 +30,13 @@ class OfficeToPdfService {
 
             val outDir = workDir.resolve("out").also { Files.createDirectories(it) }
 
-            val command = listOf(
-                soffice.toString(),
-                "--headless",
-                "--nologo",
-                "--nodefault",
-                "--nolockcheck",
-                "--nofirststartwizard",
-                "--convert-to",
-                "pdf",
-                "--outdir",
-                outDir.toString(),
-                inputPath.toString()
-            )
-
-            val process = ProcessBuilder(command)
-                .redirectErrorStream(true)
-                .directory(workDir.toFile())
-                .start()
-
-            val output = ByteArrayOutputStream()
-            val readerThread = Thread {
-                process.inputStream.use { input -> input.copyTo(output) }
-            }.apply { isDaemon = true; start() }
-
-            val finished = process.waitFor(90, TimeUnit.SECONDS)
-            if (!finished) {
-                process.destroyForcibly()
-                throw IllegalStateException("PPT 변환이 시간 초과로 중단되었습니다. (90초)")
-            }
-
-            readerThread.join(2000)
-
-            if (process.exitValue() != 0) {
-                val msg = output.toString(Charset.defaultCharset())
-                throw IllegalStateException("PPT 변환에 실패했습니다. LibreOffice 출력:\n$msg")
-            }
-
-            val generatedPdf = Files.list(outDir).use { stream ->
-                stream.filter { it.isRegularFile() && it.extension.lowercase() == "pdf" }
-                    .findFirst()
-                    .orElse(null)
-            } ?: throw IllegalStateException("변환된 PDF 파일을 찾을 수 없습니다.")
+            // LibreOffice -> PowerPoint COM fallback
+            val generatedPdf = convertWithLibreOffice(inputPath, outDir)
+                ?: convertWithPowerPoint(inputPath, safeBaseName, outDir)
+                ?: throw IllegalStateException(
+                    "PPT/PPTX를 PDF로 변환할 수 있는 도구가 없습니다. " +
+                        "LibreOffice를 설치하거나 Microsoft PowerPoint를 설치해 주세요."
+                )
 
             val bytes = Files.readAllBytes(generatedPdf)
             val convertedName = "${safeBaseName}.pdf"
@@ -91,6 +50,122 @@ class OfficeToPdfService {
         val fileName: String,
         val bytes: ByteArray
     )
+
+    /** Convert via LibreOffice headless CLI. Returns null if unavailable or on failure. */
+    private fun convertWithLibreOffice(inputPath: Path, outDir: Path): Path? {
+        val soffice = findSofficeExecutable() ?: return null
+
+        val command = listOf(
+            soffice.toString(),
+            "--headless",
+            "--nologo",
+            "--nodefault",
+            "--nolockcheck",
+            "--nofirststartwizard",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            outDir.toString(),
+            inputPath.toString()
+        )
+
+        return try {
+            val process = ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .directory(outDir.toFile())
+                .start()
+
+            val output = ByteArrayOutputStream()
+            val readerThread = Thread {
+                process.inputStream.use { input -> input.copyTo(output) }
+            }.apply { isDaemon = true; start() }
+
+            val finished = process.waitFor(90, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                null
+            } else {
+                readerThread.join(2000)
+                if (process.exitValue() != 0) {
+                    println("[OfficeToPdfService] LibreOffice convert failed:\n${output.toString(Charset.defaultCharset())}")
+                    null
+                } else {
+                    locateGeneratedPdf(outDir)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    /** Convert via Microsoft PowerPoint COM (PowerShell). Returns null if unavailable or on failure. */
+    private fun convertWithPowerPoint(inputPath: Path, safeBaseName: String, outDir: Path): Path? {
+        val outPath = outDir.resolve("$safeBaseName.pdf").apply { Files.deleteIfExists(this) }
+
+        val script = buildString {
+            appendLine("\$ErrorActionPreference = 'Stop'")
+            appendLine("\$ppt = New-Object -ComObject PowerPoint.Application")
+            appendLine("try {")
+            appendLine("  \$pres = \$ppt.Presentations.Open('${psQuote(inputPath.toString())}', \$true, \$false, \$false)")
+            appendLine("  \$pres.SaveAs('${psQuote(outPath.toString())}', 32)") // 32 = ppSaveAsPDF
+            appendLine("  \$pres.Close()")
+            appendLine("} finally {")
+            appendLine("  \$ppt.Quit()")
+            appendLine("}")
+        }
+
+        val scriptFile = Files.createTempFile("ppt2pdf-", ".ps1")
+        return try {
+            Files.writeString(scriptFile, script)
+            val command = listOf(
+                "powershell.exe", "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", scriptFile.toString()
+            )
+            val process = ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .directory(outDir.toFile())
+                .start()
+
+            val output = ByteArrayOutputStream()
+            val readerThread = Thread {
+                process.inputStream.use { input -> input.copyTo(output) }
+            }.apply { isDaemon = true; start() }
+
+            val finished = process.waitFor(120, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                null
+            } else {
+                readerThread.join(2000)
+                if (process.exitValue() != 0) {
+                    println("[OfficeToPdfService] PowerPoint convert failed:\n${output.toString(Charset.defaultCharset())}")
+                    null
+                } else if (Files.exists(outPath) && Files.size(outPath) > 0) {
+                    outPath
+                } else {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        } finally {
+            runCatching { Files.deleteIfExists(scriptFile) }
+        }
+    }
+
+    private fun locateGeneratedPdf(outDir: Path): Path? =
+        Files.list(outDir).use { stream ->
+            stream.filter { it.isRegularFile() && it.extension.lowercase() == "pdf" }
+                .findFirst()
+                .orElse(null)
+        }
+
+    /** Escape a file path for embedding inside a single-quoted PowerShell string. */
+    private fun psQuote(path: String): String =
+        path.replace("'", "''")
 
     private fun sanitizeFileBaseName(name: String): String {
         val trimmed = name.trim().ifEmpty { "document" }
@@ -121,11 +196,27 @@ class OfficeToPdfService {
         }
 
         // Fallback: rely on PATH
-        return Paths.get(sofficeExeName())
+        val onPath = Paths.get(sofficeExeName())
+        return if (onPath.toFile().canExecute() || commandExists(sofficeExeName())) onPath else null
+    }
+
+    private fun commandExists(name: String): Boolean {
+        return try {
+            val process = ProcessBuilder(if (isWindows()) listOf("where", name) else listOf("which", name))
+                .redirectErrorStream(true)
+                .start()
+            process.waitFor(5, TimeUnit.SECONDS)
+            process.exitValue() == 0
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun sofficeExeName(): String =
-        if (System.getProperty("os.name").lowercase().contains("win")) "soffice.exe" else "soffice"
+        if (isWindows()) "soffice.exe" else "soffice"
+
+    private fun isWindows(): Boolean =
+        System.getProperty("os.name").lowercase().contains("win")
 
     private fun deleteRecursively(root: Path) {
         if (!Files.exists(root)) return
@@ -136,4 +227,3 @@ class OfficeToPdfService {
             }
     }
 }
-

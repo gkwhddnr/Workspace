@@ -78,25 +78,20 @@ export class WorkspaceApiService {
     }
 
     /** Convert an Office document (PPT/PPTX) to PDF via the backend (LibreOffice). */
-    async convertOfficeToPdf(file: File): Promise<{ fileName: string; bytes: Uint8Array } | null> {
-        try {
-            const formData = new FormData();
-            formData.append('file', file, file.name);
-            const res = await apiClient.post<Blob>('/convert-to-pdf', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
-                responseType: 'blob'
-            });
-            const disposition = res.headers?.['content-disposition'] || '';
-            const match = /filename="?([^";]+)"?/.exec(disposition);
-            const bytes = new Uint8Array(await res.data.arrayBuffer());
-            return {
-                fileName: match?.[1]?.replace(/^.*[\\/]/, '') || (file.name.replace(/\.[^.]+$/, '') + '.pdf'),
-                bytes
-            };
-        } catch (e: any) {
-            console.error('[WorkspaceApiService] convertOfficeToPdf failed:', e);
-            return null;
-        }
+    async convertOfficeToPdf(file: File): Promise<{ fileName: string; bytes: Uint8Array }> {
+        const formData = new FormData();
+        formData.append('file', file, file.name);
+        const res = await apiClient.post<Blob>('/convert-to-pdf', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            responseType: 'blob'
+        });
+        const disposition = res.headers?.['content-disposition'] || '';
+        const match = /filename="?([^";]+)"?/.exec(disposition);
+        const bytes = new Uint8Array(await res.data.arrayBuffer());
+        return {
+            fileName: match?.[1]?.replace(/^.*[\\/]/, '') || (file.name.replace(/\.[^.]+$/, '') + '.pdf'),
+            bytes
+        };
     }
 
     /** Save JSON project data (vectors, texts, images). */
