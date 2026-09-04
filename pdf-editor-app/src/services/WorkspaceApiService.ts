@@ -83,7 +83,10 @@ export class WorkspaceApiService {
         formData.append('file', file, file.name);
         const res = await apiClient.post<Blob>('/convert-to-pdf', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
-            responseType: 'blob'
+            responseType: 'blob',
+            // LibreOffice / PowerPoint COM conversion of large decks can exceed the
+            // default 30s axios timeout, so use a generous per-request timeout.
+            timeout: 120000
         });
         const disposition = res.headers?.['content-disposition'] || '';
         const match = /filename="?([^";]+)"?/.exec(disposition);
