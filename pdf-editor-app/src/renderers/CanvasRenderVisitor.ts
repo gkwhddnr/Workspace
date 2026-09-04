@@ -14,6 +14,52 @@ const getElbowPoint = (p1: { x: number, y: number }, p2: { x: number, y: number 
     return { x: p2.x, y: p1.y }; // arrow-l-1 default
 };
 
+// A chunk of consecutive characters sharing an identical resolved format.
+interface TextRun {
+    text: string;
+    fontWeight: 'normal' | 'bold';
+    decoration: string;
+}
+
+// Resolve the per-character format (element default, overridden by overlapping spans)
+// and merge adjacent characters with equal format into runs.
+function buildTextRuns(
+    text: string,
+    spans: TextElement['spans'] | undefined,
+    defaultWeight: 'normal' | 'bold',
+    defaultDeco: string
+): TextRun[] {
+    if (!text) return [];
+    const runs: TextRun[] = [];
+    let current: TextRun | null = null;
+
+    const pushChar = (ch: string, weight: 'normal' | 'bold', deco: string) => {
+        if (current && current.fontWeight === weight && current.decoration === deco) {
+            current.text += ch;
+        } else {
+            current = { text: ch, fontWeight: weight, decoration: deco };
+            runs.push(current);
+        }
+    };
+
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        let weight = defaultWeight;
+        let deco = defaultDeco;
+        if (spans) {
+            for (const sp of spans) {
+                if (i >= sp.start && i < sp.end) {
+                    if (sp.fontWeight) weight = sp.fontWeight;
+                    if (sp.textDecoration) deco = sp.textDecoration;
+                }
+            }
+        }
+        pushChar(ch, weight, deco);
+    }
+
+    return runs;
+}
+
 // Global image cache to avoid re-loading on every render
 const imageCache = new Map<string, HTMLImageElement>();
 
@@ -66,40 +112,94 @@ export class CanvasRenderVisitor implements ElementVisitor {
     }
 
     visitText(element: TextElement): void {
-        const { text, x, y, fontSize, fontFamily, width, style } = element;
+        const { text, x, y, fontSize, fontFamily, width, style, fontWeight, textDecoration, spans } = element;
         const s = this.scale;
-        this.ctx.save();
 
         const scaledFontSize = fontSize * s;
-        this.ctx.font = `${scaledFontSize}px ${fontFamily}`;
-        this.ctx.fillStyle = style.color;
-        // Text itself is always fully opaque — opacity only applies to background box
-        this.ctx.globalAlpha = 1.0;
-
         const lineHeight = scaledFontSize * 1.2;
         const maxWidth = (width || 300) * s;
-        const lines = text.split('\n');
-        let currentY = y * s + (scaledFontSize * 0.85); // baseline offset for first line
 
-        for (const line of lines) {
-            // Word-wrap within maxWidth
-            let currentLine = '';
-            const chars = Array.from(line);
+        this.ctx.fillStyle = style.color;
+        this.ctx.strokeStyle = style.color;
+        this.ctx.globalAlpha = 1.0; // text always fully opaque
+
+        // Resolve per-character format into runs of consecutive same-format chars.
+        const runs = buildTextRuns(text, spans, fontWeight, textDecoration);
+
+        const baseY = y * s + (scaledFontSize * 0.85); // baseline offset for first line
+
+        this.ctx.save();
+        let currentY = baseY;
+        let lineStartX = x * s;
+        let pending = ''; // buffer of same-format chars not yet flushed (wrapped line tail)
+        let pendingW: 'normal' | 'bold' = 'normal';
+        let pendingD: string = '';
+
+        const flush = () => {
+            if (!pending) return;
+            this.ctx.font = `${pendingW === 'bold' ? 'bold ' : ''}${scaledFontSize}px ${fontFamily}`;
+            this.ctx.fillText(pending, lineStartX, currentY);
+            this.drawTextDecorations(pending, lineStartX, currentY, scaledFontSize, pendingD);
+            lineStartX += this.ctx.measureText(pending).width;
+            pending = '';
+        };
+
+        for (let ri = 0; ri < runs.length; ri++) {
+            const run = runs[ri];
+            const chars = Array.from(run.text);
             for (let j = 0; j < chars.length; j++) {
-                const testLine = currentLine + chars[j];
-                if (this.ctx.measureText(testLine).width > maxWidth && j > 0) {
-                    this.ctx.fillText(currentLine, x * s, currentY);
-                    currentLine = chars[j];
+                const ch = chars[j];
+                if (ch === '\n') {
+                    // Hard newline: flush current buffer then move to next line.
+                    flush();
                     currentY += lineHeight;
-                } else {
-                    currentLine = testLine;
+                    lineStartX = x * s;
+                    continue;
                 }
+                // If the run format differs from the pending buffer, flush first so
+                // decorations/measurements are computed with the correct font.
+                if (pending && (pendingW !== run.fontWeight || pendingD !== run.decoration)) {
+                    flush();
+                }
+                const testWidth = this.ctx.measureText((pending + ch)).width;
+                if (testWidth > maxWidth && pending) {
+                    flush();
+                    currentY += lineHeight;
+                    lineStartX = x * s;
+                }
+                pendingW = run.fontWeight;
+                pendingD = run.decoration;
+                pending += ch;
             }
-            this.ctx.fillText(currentLine, x * s, currentY);
-            currentY += lineHeight;
+            // Flush at the end of a run so that a format boundary draws the correct segments.
+            flush();
         }
+        flush();
 
         this.ctx.restore();
+    }
+
+    private drawTextDecorations(
+        text: string,
+        x: number,
+        baselineY: number,
+        scaledFontSize: number,
+        textDecoration: string
+    ): void {
+        if (!textDecoration) return;
+        const lineWidth = this.ctx.measureText(text).width;
+        this.ctx.lineWidth = Math.max(1, scaledFontSize * 0.08);
+        this.ctx.beginPath();
+
+        if (textDecoration.includes('underline')) {
+            this.ctx.moveTo(x, baselineY + scaledFontSize * 0.12);
+            this.ctx.lineTo(x + lineWidth, baselineY + scaledFontSize * 0.12);
+        }
+        if (textDecoration.includes('line-through')) {
+            this.ctx.moveTo(x, baselineY - scaledFontSize * 0.35);
+            this.ctx.lineTo(x + lineWidth, baselineY - scaledFontSize * 0.35);
+        }
+        this.ctx.stroke();
     }
 
     visitShape(element: ShapeElement): void {

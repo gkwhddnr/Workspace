@@ -62,13 +62,21 @@
   resize: none;
   min-width: 120px;
   min-height: 24px;
-  white-space: pre;
-  word-wrap: normal;
-  overflow-x: hidden;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-y: auto;
+  resize: none;
   font-size: var(--font-size);
   font-family: var(--font-family);
   width: var(--editor-width);
   height: var(--editor-height);
+}
+
+.pdf-text-editor-textarea[contenteditable="true"]:empty:before,
+.pdf-text-editor-textarea .pdf-text-editor-line:only-child:empty:before {
+  content: "내용을 입력하세요...";
+  color: #94a3b8;
+  pointer-events: none;
 }
 
 /* Floating Text Editor Toolbar & Slider */

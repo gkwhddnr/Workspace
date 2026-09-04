@@ -16,6 +16,7 @@ import { pdfRenderService } from '../../services/PdfRenderService';
 import { useSavePdf } from '../../hooks/useSavePdf';
 import { useEditorShortcuts } from '../../hooks/useEditorShortcuts';
 import { ImageElement } from '../../models/ImageElement';
+import { FormatSpan } from '../../models/TextElement';
 import { AddElementCommand } from '../../commands/AddElementCommand';
 import { UpdateElementCommand } from '../../commands/UpdateElementCommand';
 import { DeleteElementCommand } from '../../commands/DeleteElementCommand';
@@ -49,6 +50,98 @@ const getElementRect = (el: any): [number, number, number, number] => {
     }
     return [el.x || 0, el.y || 0, el.width || 0, el.height || 0];
 };
+
+// ── Rich-text helpers (contentEditable editing) ─────────────────────────────
+// Build an HTML string from plain text + FormatSpans so the editable box shows
+// partial bold / underline / strikethrough on the right characters.
+function buildRichHtml(text: string, spans: FormatSpan[]): string {
+    if (!text) return '<div class="pdf-text-editor-line"></div>';
+    type Fmt = { b: boolean; u: boolean; s: boolean };
+    const eff: Fmt[] = Array.from({ length: text.length }, () => ({ b: false, u: false, s: false }));
+    for (const sp of spans) {
+        const s0 = Math.max(0, sp.start), s1 = Math.min(text.length, sp.end);
+        for (let i = s0; i < s1; i++) {
+            if (sp.fontWeight === 'bold') eff[i].b = true;
+            const deco = sp.textDecoration || '';
+            if (deco.includes('underline')) eff[i].u = true;
+            if (deco.includes('line-through')) eff[i].s = true;
+        }
+    }
+    // Render each line as its own block so line structure is stable under
+    // contentEditable + document.execCommand formatting (which can mangle <br>).
+    const lines = text.split('\n');
+    const html = lines.map(line => {
+        let seg = '';
+        let i = 0;
+        while (i < line.length) {
+            const f = eff[i];
+            const jStart = i;
+            while (i < line.length && eff[i].b === f.b && eff[i].u === f.u && eff[i].s === f.s) i++;
+            let s = line.slice(jStart, i)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            if (f.b) s = `<b>${s}</b>`;
+            if (f.u) s = `<u>${s}</u>`;
+            if (f.s) s = `<s>${s}</s>`;
+            seg += s;
+        }
+        return `<div>${seg}</div>`;
+    }).join('');
+    return html;
+}
+
+// Parse the rendered contentEditable DOM back into { text, spans }.
+function parseRichDom(root: HTMLElement): { text: string; spans: FormatSpan[] } {
+    const spans: FormatSpan[] = [];
+    let text = '';
+    const walk = (node: Node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const t = node.textContent || '';
+            if (!t) return;
+            const start = text.length;
+            const hasBrInside = t.includes('\n');
+            text += t;
+            const end = text.length;
+            const b = ancestors(node).some(n => (n as HTMLElement).tagName === 'B' || (n as HTMLElement).tagName === 'STRONG');
+            const u = ancestors(node).some(n => (n as HTMLElement).tagName === 'U');
+            const s = ancestors(node).some(n => (n as HTMLElement).tagName === 'S' || (n as HTMLElement).tagName === 'STRIKE');
+            if ((b || u || s) && !hasBrInside) {
+                spans.push({
+                    start, end,
+                    ...(b ? { fontWeight: 'bold' as const } : {}),
+                    ...(u || s ? { textDecoration: `${u ? 'underline' : ''}${u && s ? ' ' : ''}${s ? 'line-through' : ''}` as any } : {}),
+                });
+            }
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            const tag = (node as HTMLElement).tagName?.toUpperCase();
+            // <br> => newline (kept as a real char so indexing stays in sync with buildRichHtml).
+            if (tag === 'BR') {
+                if (text.length > 0 && !text.endsWith('\n')) text += '\n';
+                return;
+            }
+            const startLen = text.length;
+            for (const child of Array.from((node as HTMLElement).childNodes)) walk(child);
+            // Block-level separators (contentEditable may produce <div>/<p> per line).
+            if ((tag === 'DIV' || tag === 'P') && text.length > startLen && !text.endsWith('\n')) text += '\n';
+        }
+    };
+    const ancestors = (node: Node): Node[] => {
+        const arr: Node[] = [];
+        let p = node.parentNode;
+        while (p) { arr.push(p); p = p.parentNode; }
+        return arr;
+    };
+    walk(root);
+    return { text, spans };
+}
+
+// Insert a hard line break at the current caret inside the block-based editable.
+// Because the editable is always initialized with a <div> block wrapper, native
+// contentEditable Enter (via insertParagraph) splits into block <div>s, which keep
+// the line structure stable under inline formatting (unlike <br> breaks that Chrome
+// merges when bold/underline/strike is applied to a fresh multi-line box).
+function insertLineBreak(_editable: HTMLElement): void {
+    document.execCommand('insertParagraph', false);
+}
 
 const PdfViewer: React.FC = () => {
 
@@ -329,6 +422,7 @@ const PdfViewer: React.FC = () => {
 
     // Show eraser mode popup when eraser tool is selected — handled in Sidebar
     const [tempText, setTempText] = useState('');
+    const [tempSpans, setTempSpans] = useState<FormatSpan[]>([]);
 
     // originalData state removed (now in useAppStore)
 
@@ -839,6 +933,9 @@ const PdfViewer: React.FC = () => {
                                         textEl.text = d.text || '';
                                         textEl.fontSize = d.fontSize || 20;
                                         textEl.fontFamily = d.fontFamily || 'Outfit, sans-serif';
+                                        textEl.fontWeight = d.fontWeight || 'normal';
+                                        textEl.textDecoration = d.textDecoration || '';
+                                        textEl.spans = d.spans || undefined;
                                         textEl.width = d.width;
                                         textEl.height = d.height;
                                     }
@@ -908,6 +1005,9 @@ const PdfViewer: React.FC = () => {
                                     textEl.text = a.text;
                                     textEl.fontSize = a.fontSize;
                                     textEl.fontFamily = a.fontFamily;
+                                    textEl.fontWeight = a.fontWeight || 'normal';
+                                    textEl.textDecoration = a.textDecoration || '';
+                                    textEl.spans = a.spans || undefined;
                                     migrated[pNum].push(element);
                                 }
                             });
@@ -1683,12 +1783,15 @@ const PdfViewer: React.FC = () => {
             const rect = getElementRect(h);
             setEditingId(hit.id);
             setTempText(h.text || '');
+            setTempSpans((h.spans || []).map((sp: any) => ({ ...sp })));
             setInputPos({ x: rect[0] * scale, y: rect[1] * scale });
 
             // Only sync fontSize/fontFamily — do NOT override color or textBgOpacity (user's current settings)
             setToolSettings({
                 fontSize: Number(h.fontSize) || 20,
                 fontFamily: h.fontFamily || 'Outfit, sans-serif',
+                fontWeight: h.fontWeight || 'normal',
+                textDecoration: h.textDecoration || '',
             });
 
             const baseFontSize = Number(h.fontSize) || 20;
@@ -1701,6 +1804,7 @@ const PdfViewer: React.FC = () => {
         } else {
             setEditingId(null);
             setTempText('');
+            setTempSpans([]);
             setInputPos({ x: pos.x, y: pos.y });
             setEditorWidth(120);
             setEditorHeight(18);
@@ -1708,16 +1812,25 @@ const PdfViewer: React.FC = () => {
     };
 
 
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const editableRef = useRef<HTMLDivElement>(null);
 
     const handleInputComplete = () => {
         if (!inputPos) return;
 
-        const textarea = textareaRef.current;
-        const width = textarea ? textarea.offsetWidth : 300;
-        const height = textarea ? textarea.offsetHeight : 100;
+        const editable = editableRef.current;
+        const width = editable ? editable.offsetWidth : 300;
+        const height = editable ? editable.offsetHeight : 100;
 
-        if (tempText.trim() === '') {
+        // Serialize the rich editor back to plain text + spans.
+        let finalText = tempText;
+        let finalSpans = tempSpans;
+        if (editable) {
+            const parsed = parseRichDom(editable);
+            finalText = parsed.text;
+            finalSpans = parsed.spans;
+        }
+
+        if (finalText.trim() === '') {
             if (editingId) {
                 // Delete via Command (Phase 4)
                 const toDelete = currentPageElements.find(a => a.id === editingId);
@@ -1729,6 +1842,11 @@ const PdfViewer: React.FC = () => {
 
             }
         } else {
+            const clampedSpans = finalSpans
+            .filter(sp => sp.start < sp.end)
+            .map(sp => ({ ...sp, start: Math.max(0, Math.min(finalText.length, sp.start)), end: Math.max(0, Math.min(finalText.length, sp.end)) }))
+            .filter(sp => sp.start < sp.end);
+
             if (editingId) {
                 const oldAnn = currentPageElements.find(a => a.id === editingId) as any;
                 if (oldAnn) {
@@ -1737,14 +1855,18 @@ const PdfViewer: React.FC = () => {
                     const baseFontFamily = toolSettings.fontFamily || oldAnn.fontFamily || 'Outfit, sans-serif';
 
                     const newProps: any = {
-                        text: tempText,
+                        text: finalText,
                         x: inputPos.x / scale,
                         y: inputPos.y / scale,
                         width: width / scale,
                         height: height / scale,
                         fontSize: baseFs,
                         color: baseColor, // Apply current color selection
-                        fontFamily: baseFontFamily
+                        fontFamily: baseFontFamily,
+                        // Partial formatting lives in `spans`; keep element defaults unchanged.
+                        fontWeight: oldAnn.fontWeight || 'normal',
+                        textDecoration: oldAnn.textDecoration || '',
+                        spans: clampedSpans.length ? clampedSpans : undefined
                     };
                     // Also update the style object for class-based elements
                     if (oldAnn.style && typeof oldAnn.style.copy === 'function') {
@@ -1768,9 +1890,12 @@ const PdfViewer: React.FC = () => {
                 );
                 if (newEl) {
                     const h = newEl as any;
-                    h.text = tempText;
+                    h.text = finalText;
                     h.fontSize = fsNum;
                     h.fontFamily = toolSettings.fontFamily || 'Outfit, sans-serif';
+                    h.fontWeight = 'normal';
+                    h.textDecoration = '';
+                    h.spans = clampedSpans.length ? clampedSpans : undefined;
 
                     const command = new AddElementCommand(currentPage, newEl, setElements);
                     getCommandHistory(currentPage).push(command);
@@ -1783,6 +1908,7 @@ const PdfViewer: React.FC = () => {
         setInputPos(null);
         setEditingId(null);
         setTempText('');
+        setTempSpans([]);
 
     };
 
@@ -1803,8 +1929,8 @@ const PdfViewer: React.FC = () => {
     };
 
     const recalculateEditorSize = useCallback(() => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
+        const editable = editableRef.current;
+        if (!editable) return;
 
         const measureCanvas = document.createElement('canvas');
         const mCtx = measureCanvas.getContext('2d')!;
@@ -1819,9 +1945,9 @@ const PdfViewer: React.FC = () => {
 
         setEditorWidth(Math.max(120, maxLineWidth + 60));
 
-        textarea.style.height = 'auto';
-        const newHeight = Math.max(40, textarea.scrollHeight);
-        textarea.style.height = `${newHeight}px`;
+        editable.style.height = 'auto';
+        const newHeight = Math.max(40, editable.scrollHeight);
+        editable.style.height = `${newHeight}px`;
         setEditorHeight(newHeight);
     }, [editingId, currentPageElements, toolSettings.fontSize, toolSettings.fontFamily, scale, tempText]);
 
@@ -1855,8 +1981,8 @@ const PdfViewer: React.FC = () => {
                 let foundSnapX = false;
 
                 // 1. Text Block Snapping (Active areas) with Collision Avoidance
-                const boxWidth = textareaRef.current?.offsetWidth || 120;
-                const boxHeight = textareaRef.current?.offsetHeight || 40;
+                const boxWidth = editableRef.current?.offsetWidth || 120;
+                const boxHeight = editableRef.current?.offsetHeight || 40;
 
                 textBlocks.forEach(b => {
                     const blockTop = b.rect[1];
@@ -1952,8 +2078,8 @@ const PdfViewer: React.FC = () => {
                 }
 
 
-            } else if (resizingType && textareaRef.current) {
-                const tRect = textareaRef.current.getBoundingClientRect();
+            } else if (resizingType && editableRef.current) {
+                const tRect = editableRef.current.getBoundingClientRect();
                 if (resizingType === 'width' || resizingType === 'both') {
                     const newWidth = Math.max(50, e.clientX - tRect.left);
                     setEditorWidth(newWidth);
@@ -1982,6 +2108,55 @@ const PdfViewer: React.FC = () => {
             window.removeEventListener('mouseup', handleMouseUp);
         };
     }, [isDraggingBox, resizingType, dragOffset, inputPos, textBlocks]);
+
+    // Toggle a format on the current live selection inside the contentEditable.
+    // Selection-specific: if a range is selected, only that range is affected.
+    const toggleTextFormatting = (kind: 'fontWeight' | 'underline' | 'line-through') => {
+        const editable = editableRef.current;
+        if (!editable) return;
+        editable.focus();
+
+        const command = kind === 'fontWeight' ? 'bold' : kind === 'underline' ? 'underline' : 'strikeThrough';
+        document.execCommand(command);
+
+        // Keep tempText/tempSpans in sync so commit/undo sizes stay accurate.
+        const parsed = parseRichDom(editable);
+        setTempText(parsed.text);
+        setTempSpans(parsed.spans);
+        recalculateEditorSize();
+    };
+
+    // Whether the given format is active on the currently selected range.
+    const isFormatActiveOnSelection = (kind: 'fontWeight' | 'underline' | 'line-through'): boolean => {
+        const editable = editableRef.current;
+        if (!editable) return false;
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return false;
+
+        const range = sel.getRangeAt(0);
+        // If selection spans the whole editable (no active selection), treat as whole text.
+        let node = range.startContainer;
+        const isWithinEditable = () => {
+            let n: Node | null = node;
+            while (n) { if (n === editable) return true; n = n.parentNode; }
+            return false;
+        };
+        if (!isWithinEditable()) return false;
+
+        const hasFormatContaining = (p: Node, tagNames: string[]): boolean => {
+            let n: Node | null = p;
+            while (n && n !== editable) {
+                const t = (n as HTMLElement).tagName?.toUpperCase();
+                if (t && tagNames.includes(t)) return true;
+                n = n.parentNode;
+            }
+            return false;
+        };
+
+        if (kind === 'fontWeight') return hasFormatContaining(range.startContainer, ['B', 'STRONG']);
+        if (kind === 'underline') return hasFormatContaining(range.startContainer, ['U']);
+        return hasFormatContaining(range.startContainer, ['S', 'STRIKE']);
+    };
 
     const handleInputKeyDown = (e: React.KeyboardEvent) => {
         const isDecrease = e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.code === 'ArrowDown' || e.code === 'ArrowLeft');
@@ -2013,33 +2188,64 @@ const PdfViewer: React.FC = () => {
             }
             showFontSizeIndicator(newSize);
             setTimeout(recalculateEditorSize, 0);
+        } else if (e.ctrlKey && !e.shiftKey && (e.key.toLowerCase() === 'b' || e.code === 'KeyB')) {
+            // Ctrl+B: 볼드 토글
+            e.preventDefault();
+            toggleTextFormatting('fontWeight');
+        } else if (e.ctrlKey && !e.shiftKey && (e.key.toLowerCase() === 'u' || e.code === 'KeyU')) {
+            // Ctrl+U: 밑줄 토글
+            e.preventDefault();
+            toggleTextFormatting('underline');
+        } else if (e.ctrlKey && e.shiftKey && (e.key.toLowerCase() === 'x' || e.code === 'KeyX')) {
+            // Ctrl+Shift+X: 취소선 토글
+            e.preventDefault();
+            toggleTextFormatting('line-through');
         } else if (e.key === 'Enter' && e.ctrlKey) {
             e.preventDefault();
             handleInputComplete();
+        } else if (e.key === 'Enter' && !e.altKey) {
+            // Soft line break within the editor. The editable is always initialized
+            // with <div> blocks, so this splits into block lines (safe under
+            // execCommand formatting) rather than the browser's <br> that Chrome merges.
+            e.preventDefault();
+            insertLineBreak(editableRef.current!);
+            setTimeout(recalculateEditorSize, 0);
         } else if (e.key === 'Escape') {
             setInputPos(null);
             setEditingId(null);
             setTempText('');
+            setTempSpans([]);
         }
     };
 
 
 
+    // Populate + focus the rich editor when it opens.
     useEffect(() => {
-        if (isInputActive && textareaRef.current) {
-            // preventScroll: true prevents browser from auto-scrolling to the textarea
-            textareaRef.current.focus({ preventScroll: true });
+        const ed = editableRef.current;
+        if (isInputActive && ed) {
+            // Render the stored text + partial formatting into the editable.
+            ed.innerHTML = buildRichHtml(tempText, tempSpans);
+            ed.focus();
+            // Place caret at the end.
+            try {
+                const range = document.createRange();
+                range.selectNodeContents(ed);
+                range.collapse(false);
+                const sel = window.getSelection();
+                sel?.removeAllRanges();
+                sel?.addRange(range);
+            } catch { /* ignore */ }
         }
-    }, [isInputActive]);
+    }, [isInputActive, editingId]);
 
-    // Auto-expand textarea height whenever text content or the editing target changes.
-    // This runs AFTER React commits the DOM, so scrollHeight is always accurate.
+    // Auto-expand editor height whenever text content or the editing target changes.
     useEffect(() => {
-        const textarea = textareaRef.current;
-        if (!textarea || !isInputActive) return;
-        textarea.style.height = 'auto';
-        const newH = Math.max(40, textarea.scrollHeight);
-        textarea.style.height = `${newH}px`;
+        const editable = editableRef.current;
+        if (!editable || !isInputActive) return;
+        editable.style.height = 'auto';
+        const newH = Math.max(40, editable.scrollHeight);
+        editable.style.height = `${newH}px`;
         setEditorHeight(newH);
     }, [tempText, editingId, isInputActive]);
 
@@ -2132,18 +2338,18 @@ const PdfViewer: React.FC = () => {
     }, [inputPos]);
 
     useEffect(() => {
-        if (textareaRef.current) {
+        if (editableRef.current) {
             const el = editingId ? currentPageElements.find(a => a.id === editingId) : null;
             const ann = el as any;
             const size = (Number(ann?.fontSize || toolSettings.fontSize) || 20) * scale;
             const family = ann?.fontFamily || toolSettings.fontFamily;
             const color = ann?.color || toolSettings.color;
 
-            textareaRef.current.style.setProperty('--font-size', `${size}px`);
-            if (family) textareaRef.current.style.setProperty('--font-family', family);
-            if (color) textareaRef.current.style.setProperty('--text-color', color);
-            textareaRef.current.style.setProperty('--editor-width', `${editorWidth}px`);
-            textareaRef.current.style.setProperty('--editor-height', `${editorHeight}px`);
+            editableRef.current.style.setProperty('--font-size', `${size}px`);
+            if (family) editableRef.current.style.setProperty('--font-family', family);
+            if (color) editableRef.current.style.setProperty('--text-color', color);
+            editableRef.current.style.setProperty('--editor-width', `${editorWidth}px`);
+            editableRef.current.style.setProperty('--editor-height', `${editorHeight}px`);
         }
     }, [editingId, currentPageElements, toolSettings, scale, editorWidth, editorHeight]);
 
@@ -2381,18 +2587,58 @@ const PdfViewer: React.FC = () => {
                                     className="relative group p-2 border-2 border-dashed border-blue-400/50 bg-blue-50/10 rounded-lg cursor-move pointer-events-auto"
                                     onMouseDown={handleBoxMouseDown}
                                 >
-                                    <textarea
-                                        ref={textareaRef}
-                                        value={tempText}
-                                        onChange={(e) => {
-                                            setTempText(e.target.value);
-                                            setTimeout(recalculateEditorSize, 0);
-                                        }}
-                                        onKeyDown={handleInputKeyDown}
-                                        className="pdf-text-editor-textarea"
-                                        title="텍스트 입력"
-                                        placeholder="내용을 입력하세요..."
-                                    />
+                                    <div
+                                            ref={editableRef}
+                                            contentEditable
+                                            suppressContentEditableWarning
+                                            role="textbox"
+                                            aria-multiline="true"
+                                            spellCheck={false}
+                                            className="pdf-text-editor-textarea"
+                                            title="텍스트 입력"
+                                            onInput={(e) => {
+                                                const t = (e.currentTarget.innerText || '').replace(/\n$/, '');
+                                                setTempText(t);
+                                                setTimeout(recalculateEditorSize, 0);
+                                            }}
+                                            onKeyUp={() => setTimeout(recalculateEditorSize, 0)}
+                                            onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                const ed = editableRef.current;
+                                                if (ed && document.activeElement !== ed) ed.focus();
+                                            }}
+                                            onKeyDown={handleInputKeyDown}
+                                        />
+                                    {/* Text Formatting Toolbar */}
+                                    <div
+                                        className="flex items-center gap-1 absolute left-0 -top-9 translate-y-[-100%] bg-white dark:bg-slate-800 rounded-lg px-1 py-0.5 border border-blue-400/40 shadow-lg z-[110]"
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                    >
+                                        <button
+                                            type="button"
+                                            onMouseDown={(e) => { e.preventDefault(); toggleTextFormatting('fontWeight'); }}
+                                            title="굵게 (Ctrl+B)"
+                                            className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold transition-colors ${
+                                                 isFormatActiveOnSelection('fontWeight') ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-blue-100'
+                                            }`}
+                                        >B</button>
+                                        <button
+                                            type="button"
+                                            onMouseDown={(e) => { e.preventDefault(); toggleTextFormatting('underline'); }}
+                                            title="밑줄 (Ctrl+U)"
+                                            className={`w-6 h-6 flex items-center justify-center rounded text-xs underline transition-colors ${
+                                                 isFormatActiveOnSelection('underline') ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-blue-100'
+                                            }`}
+                                        >U</button>
+                                        <button
+                                            type="button"
+                                            onMouseDown={(e) => { e.preventDefault(); toggleTextFormatting('line-through'); }}
+                                            title="취소선 (Ctrl+Shift+X)"
+                                            className={`w-6 h-6 flex items-center justify-center rounded text-xs line-through transition-colors ${
+                                                 isFormatActiveOnSelection('line-through') ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-blue-100'
+                                            }`}
+                                        >S</button>
+                                    </div>
                                     {/* Explicit Completion Button - Positioned smartly */}
                                     <button
                                         onMouseDown={(e) => { e.stopPropagation(); handleInputComplete(); }}
@@ -2402,8 +2648,8 @@ const PdfViewer: React.FC = () => {
                                                 // getBoundingClientRect().width returns the real CSS pixel width,
                                                 // which matches inputPos coordinates (canvas logical pixels).
                                                 const canvasW = canvasRef.current?.getBoundingClientRect().width || 9999;
-                                                const boxW = textareaRef.current?.offsetWidth || 120;
-                                                const boxH = textareaRef.current?.offsetHeight || 40;
+                                                const boxW = editableRef.current?.offsetWidth || 120;
+                                                const boxH = editableRef.current?.offsetHeight || 40;
 
                                                 // inputPos.x/y are logical canvas coords (same space as getBoundingClientRect)
                                                 // The outer wrapper starts at (inputPos.x - 20, inputPos.y - 20)

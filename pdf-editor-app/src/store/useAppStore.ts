@@ -17,6 +17,8 @@ interface ToolSettings {
     strokeWidth: number;
     textBgOpacity: number;
     arrowHeadSize: number;
+    fontWeight?: 'normal' | 'bold';
+    textDecoration?: '' | 'underline' | 'line-through' | 'underline line-through';
 }
 
 interface AppState {

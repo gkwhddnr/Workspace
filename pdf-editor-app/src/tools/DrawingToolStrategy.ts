@@ -25,6 +25,8 @@ export interface ToolSettings {
     fontSize: number;
     fontFamily: string;
     arrowHeadSize: number;
+    fontWeight: 'normal' | 'bold';
+    textDecoration: '' | 'underline' | 'line-through' | 'underline line-through';
 }
 
 /**

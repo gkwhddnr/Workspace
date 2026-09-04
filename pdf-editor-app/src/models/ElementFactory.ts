@@ -76,7 +76,10 @@ export class ElementFactory {
             data.fontSize,
             data.fontFamily,
             data.width,
-            data.height
+            data.height,
+            data.fontWeight || 'normal',
+            data.textDecoration || '',
+            data.spans
         );
     }
 

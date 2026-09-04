@@ -67,6 +67,8 @@ export const usePdfEditorStore = create<PdfEditorState>((set, get) => ({
         fontSize: 20,
         fontFamily: 'Outfit, sans-serif',
         arrowHeadSize: 12,
+        fontWeight: 'normal',
+        textDecoration: '',
         textBgOpacity: 0.5,
     },
     selectedElementIds: [],

@@ -6,4 +6,6 @@ export interface ToolSettings {
   fontFamily: string;
   textBgOpacity: number;
   arrowHeadSize: number;
+  fontWeight?: 'normal' | 'bold';
+  textDecoration?: '' | 'underline' | 'line-through' | 'underline line-through';
 }
