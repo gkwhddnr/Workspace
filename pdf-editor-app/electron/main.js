@@ -125,10 +125,11 @@ ipcMain.handle('dialog:openFile', async (event, options = {}) => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
     filters: options.filters || [
-      { name: 'All Supported Files', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'hwp'] },
+      { name: 'All Supported Files', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'hwp', 'ppt', 'pptx'] },
       { name: 'PDF Files', extensions: ['pdf'] },
       { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] },
       { name: 'HWP Documents', extensions: ['hwp'] },
+      { name: 'PPT Documents', extensions: ['ppt', 'pptx'] },
       { name: 'All Files', extensions: ['*'] }
     ]
   });

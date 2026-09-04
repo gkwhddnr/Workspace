@@ -978,12 +978,35 @@ const PdfViewer: React.FC = () => {
         }
     };
 
+    const loadOfficeDocument = async (file: File, isRestore: boolean = false) => {
+        try {
+            const result = await workspaceApiService.convertOfficeToPdf(file);
+            if (!result || !result.bytes || result.bytes.length === 0) {
+                alert('PPT/PPTX를 PDF로 변환하는 데 실패했습니다. 백엔드 서비스가 실행 중인지 확인해 주세요.');
+                return;
+            }
+            const pdfBlob = new Blob([result.bytes], { type: 'application/pdf' });
+            const pdfFile = new File([pdfBlob], result.fileName, { type: 'application/pdf' });
+            // Treat the converted PDF as a new working document so saves target the .pdf.
+            setCurrentFile(result.fileName, result.fileName);
+            await loadPdf(pdfFile, isRestore);
+        } catch (error) {
+            console.error('Error converting office document:', error);
+            alert(`PPT/PPTX를 PDF로 변환하는 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
+
     const loadAnyDocument = async (file: File, isRestore: boolean = false) => {
         const lower = file.name.toLowerCase();
         if (lower.endsWith('.pdf') || file.type === 'application/pdf') return loadPdf(file, isRestore);
         if (lower.endsWith('.png') || file.type === 'image/png') return loadImage(file, isRestore);
+        if (lower.endsWith('.ppt') || lower.endsWith('.pptx') ||
+            file.type === 'application/vnd.ms-powerpoint' ||
+            file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+            return loadOfficeDocument(file, isRestore);
+        }
 
-        alert('지원하지 않는 파일 형식입니다. (PDF, PNG)');
+        alert('지원하지 않는 파일 형식입니다. (PDF, PNG, PPT, PPTX)');
     };
 
     // Unsaved changes warning state
@@ -1006,7 +1029,10 @@ const PdfViewer: React.FC = () => {
                     isFileDialogOpenRef.current = true;
                     const result = await electronAPI.openFileDialog({
                         filters: [
-                            { name: 'PDF / 이미지', extensions: ['pdf', 'png'] },
+                            { name: '모든 문서', extensions: ['pdf', 'png', 'ppt', 'pptx'] },
+                            { name: 'PDF', extensions: ['pdf'] },
+                            { name: '이미지', extensions: ['png'] },
+                            { name: 'PPT', extensions: ['ppt', 'pptx'] },
                         ],
                     });
                     isFileDialogOpenRef.current = false;
