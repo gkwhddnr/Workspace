@@ -227,14 +227,16 @@ backend/src/main/kotlin/com/pdfeditor/
 ```mermaid
 graph TD
     subgraph UI["🖥️ UI Layer"]
-        PV["PdfViewer.tsx\n메인 편집기 컴포넌트"]
+        PV["PdfViewer.tsx\n메인 편집기 (렌더 + 입력 + 텍스트 부분 서식)"]
         SB["Sidebar.tsx\n도구 & 색상 패널"]
-        ML["MainLayout.tsx\n전역 단축키 처리"]
+        ML["MainLayout.tsx\n레이아웃 + 전역 단축키"]
+        PLUI["AiPanel · FlattenModal · PluginManagerPanel"]
     end
 
     subgraph Store["🗃️ State Store"]
-        AS["useAppStore\n활성 도구, 색상, 폰트 등 UI 상태"]
+        AS["useAppStore\n활성 도구, 색상, toolSettings"]
         PS["usePdfEditorStore\nelements, 페이지, 히스토리 리비전"]
+        AIST["useAiStore · usePluginStore"]
     end
 
     subgraph ToolLayer["🔧 Tool Layer (State Pattern)"]
@@ -249,7 +251,7 @@ graph TD
         RE["RenderElement\n추상 기반 클래스"]
         PATH["PathElement\n펜·형광펜 경로"]
         SHAPE["ShapeElement\n도형·화살표"]
-        TEXT["TextElement\n텍스트 박스 (부분 서식 spans)"]
+        TEXT["TextElement\n텍스트 (부분 서식 spans)"]
         IMG["ImageElement\n이미지"]
     end
 
@@ -263,13 +265,27 @@ graph TD
         ADD["AddElementCommand"]
         DEL["DeleteElementCommand"]
         UPD["UpdateElementCommand"]
+        TXTC["Add/Update/DeleteTextCommand"]
     end
 
-    subgraph BackendLayer["☁️ Backend Layer"]
+    subgraph PluginLayer["🧩 Plugin Layer"]
+        PLS["PluginLoaderService\n플러그인 로드/실행"]
+        COP["builtin/aiCopilot"]
+    end
+
+    subgraph ServiceLayer["📡 Service Layer"]
         WAS["WorkspaceApiService\nAxios HTTP Facade"]
-        PC["PdfController\nSpring Boot REST API (+ /convert-to-pdf)"]
-        OCT["OfficeToPdfService\nLibreOffice → PowerPoint COM 변환"]
-        FSS["FileStorageService\n파일 저장 (Template Method)"]
+        PDFS["PdfPageProxy · PdfRenderService"]
+        FLT["FlattenApiService · ExportService"]
+        AIS["AiService · aiProviders"]
+    end
+
+    subgraph BackendLayer["☁️ Backend Layer (Spring Boot)"]
+        PC["PdfController\n저장·백업·/convert-to-pdf"]
+        FOCT["FlattenController"]
+        OCT["OfficeToPdfService\nLibreOffice → PowerPoint COM"]
+        FSS["FileStorageService\nTemplate Method"]
+        FLATS["FlattenService\n필기 평탄화"]
         WR["PdfWorkspaceRepository\nH2 DB"]
     end
 
@@ -277,6 +293,7 @@ graph TD
     PV -->|"elements, historyRevision"| PS
     SB -->|"setActiveTool, setToolSettings"| AS
     ML -->|"단축키 → setActiveTool"| AS
+    PLUI -->|"AI·플러그인 상태"| AIST
 
     PV -->|"pointerDown/Move/Up"| TM
     TM -->|"switchTool()"| SEL & SHP & PEN & ERA
@@ -288,8 +305,8 @@ graph TD
 
     SHP & PEN -->|"AddElementCommand"| CH
     SEL -->|"UpdateElementCommand"| CH
-    CH -->|"execute/undo/redo"| ADD & DEL & UPD
-    ADD & DEL & UPD -->|"setElements()"| PS
+    CH -->|"execute/undo/redo"| ADD & DEL & UPD & TXTC
+    ADD & DEL & UPD & TXTC -->|"setElements()"| PS
 
     PS -->|"currentPageElements"| PV
     PV -->|"accept(visitor)"| CRV
@@ -297,10 +314,21 @@ graph TD
     RE -->|"구현체"| PATH & SHAPE & TEXT & IMG
     PATH & SHAPE & TEXT & IMG -->|"accept(visitor)"| CRV
 
+    PV -->|"플러그인 로드/호출"| PLS
+    PLS --> COP
+    COP -->|"AI 요청"| AIS
+    AIS -->|"REST"| WAS
+
+    PV -->|"PDF 페이지 렌더"| PDFS
+    PV -->|"flatten·응답 처리"| FLT
+    FLT -->|"REST"| WAS
+
     PV -->|"HTTP 요청"| WAS
-    WAS -->|"REST"| PC
+    WAS -->|"REST"| PC & FOCT
     PC -->|"save/load"| FSS & WR
     PC -->|"PPT/PPTX → PDF"| OCT
+    FOCT --> FLATS
+    FLATS -->|"평탄화 저장"| WR
 ```
 
 ### 아키텍처 설명
@@ -313,6 +341,7 @@ graph TD
 #### 2. State Store
 - **useAppStore**: 활성 도구(`activeTool`), 색상·폰트 등 `toolSettings`, 파일 경로 등 UI 상태를 관리합니다.
 - **usePdfEditorStore**: 페이지별 `elements`(그려진 요소들), `historyRevision`, 저장 상태 등 문서 상태를 관리합니다.
+- **useAiStore / usePluginStore**: AI 대화/API 키 상태와 플러그인 설치·런타임 상태를 관리합니다.
 
 #### 3. Tool Layer — State Pattern
 - **ToolManager**: 현재 활성 도구 인스턴스를 보유하고 `onPointerDown/Move/Up` 이벤트를 위임합니다. 도구 전환 시 `switchTool()`로 상태를 교체합니다.
@@ -335,13 +364,22 @@ graph TD
 #### 6. Command Layer — Command Pattern
 - **CommandHistory**: 페이지별 Undo/Redo 스택. `push(command)`는 즉시 실행 후 스택에 추가합니다.
 - **AddElementCommand / DeleteElementCommand / UpdateElementCommand**: 각각 요소 추가/삭제/수정 작업을 캡슐화합니다. `undo()`로 역작업이 가능합니다.
+- **AddTextCommand / UpdateTextCommand / DeleteTextCommand**: 텍스트 요소 전용 커맨드. 텍스트 부분 서식 변경도 하나의 명령으로 Undo/Redo됩니다.
+- **CompositeCommand**: 여러 커맨드를 하나로 묶어 묶음 실행/되돌리기를 지원합니다.
 
 #### 7. Backend Layer
 - **WorkspaceApiService**: 백엔드 HTTP 호출을 캡슐화하는 Axios 기반 Facade. 타임아웃, 인터셉터, 보안 헤더가 통합되어 있습니다.
 - **PdfController**: Spring Boot REST 컨트롤러. 저장, 워크스페이스 관리, 원본 PDF 백업, **PPT/PPTX → PDF 변환(`/convert-to-pdf`)** 엔드포인트를 제공합니다.
+- **FlattenController / FlattenService**: 저장 시 필기를 병합(평탄화) 처리하는 엔드포인트와 로직을 제공합니다.
 - **OfficeToPdfService**: LibreOffice headless(기본) → Microsoft PowerPoint COM(폴백) 순으로 Office 문서를 PDF로 변환합니다. 임시 파일명은 ASCII로 고정하고 변환 스크립트는 UTF-8 BOM으로 기록하여 한글 파일명 깨짐을 방지합니다.
 - **FileStorageService**: Template Method 패턴으로 파일 저장 전략(덮어쓰기/새 이름)을 분리합니다.
-- **PdfWorkspaceRepository**: H2 DB에 마지막 페이지, 주석 데이터, 백업 여부를 저장합니다.
+- **PdfWorkspaceRepository / WorkHistoryRepository**: H2 DB에 마지막 페이지, 주석 데이터, 백업 여부, 작업 이력을 저장합니다.
+
+#### 8. Service & Plugin Layer
+- **PdfPageProxy / PdfRenderService**: pdf.js 기반 페이지 렌더링과 비동기 캔버스 출력을 담당합니다.
+- **FlattenApiService / ExportService**: 평탄화 요청과 PDF 다운로드·내보내기를 처리합니다.
+- **AiService / aiProviders**: Gemini·GPT·Claude 등 공급자별 추상화와 AI 요청·응답 처리를 담당합니다.
+- **PluginLoaderService**: 내장/외부 플러그인(`builtin/aiCopilot` 등)을 로드하고 실행 컨텍스트를 제공합니다.
 
 ---
 
