@@ -163,27 +163,63 @@ cd backend
 
 ```
 src/
-├── components/viewers/PdfViewer.tsx   # 메인 편집기
-├── tools/next/                        # 도구 구현 (State Pattern)
-│   ├── ToolManager.ts                 # 도구 전환 관리
-│   ├── SelectTool.ts                  # 선택/이동/크기조절
-│   ├── ShapeTool.ts                   # 도형/화살표/형광펜
-│   ├── PenTool.ts                     # 펜/형광펜 자유 필기
-│   └── EraserTool.ts                  # 지우개
+├── layouts/
+│   └── MainLayout.tsx                   # 레이아웃 + 전역 단축키
+├── components/
+│   ├── Sidebar.tsx                      # 도구 & 색상 패널
+│   ├── AiPanel.tsx / FlattenModal.tsx / PluginManagerPanel.tsx
+│   ├── ShortcutsModal.tsx / ThemeModal.tsx
+│   ├── viewers/PdfViewer.tsx            # 메인 편집기 (렌더 + 입력 + 텍스트 부분 서식)
+│   ├── viewers/ (CodeViewer · WebViewer · ShortcutsViewer)
+│   ├── viewers/dialogs/                 # 저장·파일열기·종료 확인 다이얼로그
+│   └── plugin/ (PluginInstallSection · PluginOutputPanel 등)
+├── tools/
+│   ├── next/                            # 도구 구현 (State Pattern)
+│   │   ├── ToolManager.ts               # 도구 전환 Context
+│   │   ├── ToolState.ts · AbstractTool.ts
+│   │   ├── SelectTool.ts (+ SelectSubStates)  # 선택/이동/핸들/Ctrl 스냅
+│   │   ├── ShapeTool.ts                 # 도형·화살표·형광펜·텍스트
+│   │   ├── PenTool.ts                   # 펜/형광펜 자유 필기
+│   │   └── EraserTool.ts                # 지우개
+│   ├── ToolFactory.ts                   # 도구 전략 팩토리
+│   └── *ToolStrategy.ts                 # Pen/Shape/Arrow/Highlight/Eraser/Image/Drawing
 ├── renderers/
-│   └── CanvasRenderVisitor.ts         # Visitor 패턴 렌더링
-├── models/                            # RenderElement 계층
-│   ├── PathElement.ts                 # 펜/형광펜
-│   ├── ShapeElement.ts                # 도형/화살표
-│   ├── TextElement.ts                 # 텍스트
-│   └── ImageElement.ts                # 이미지
-├── commands/                          # Command 패턴 (Undo/Redo)
-│   ├── AddElementCommand.ts
-│   ├── DeleteElementCommand.ts
-│   └── UpdateElementCommand.ts
-└── store/
-    ├── useAppStore.ts                 # UI 상태 (도구, 색상 등)
-    └── usePdfEditorStore.ts           # 문서 상태 (elements, 페이지)
+│   ├── CanvasRenderVisitor.ts           # Visitor 렌더 (텍스트 런 부분 서식)
+│   └── LayerIterator.ts                 # 렌더링 순서 순회
+├── models/                              # RenderElement 계층 (Composite)
+│   ├── RenderElement.ts · ElementVisitor.ts · ElementFactory.ts
+│   ├── TextElement.ts                   # 텍스트 (fontWeight/textDecoration/spans)
+│   ├── ShapeElement.ts · PathElement.ts · ImageElement.ts
+│   ├── GroupElement.ts · GraphicStyle.ts
+│   └── ElementDecorator.ts (+ Selection·HoverDecorator)   # Decorator 패턴
+├── commands/                            # Command 패턴 (Undo/Redo)
+│   ├── Command.ts · CommandHistory.ts · ActionCommand.ts · CompositeCommand.ts
+│   ├── Add·Delete·Update ElementCommand
+│   └── Add·Delete·Update TextCommand · *AnnotationCommand
+├── services/
+│   ├── WorkspaceApiService.ts           # Axios HTTP Facade
+│   ├── PdfPageProxy.ts · PdfRenderService.ts
+│   ├── FlattenApiService.ts · ExportService.ts
+│   ├── AiService.ts · aiProviders.ts
+│   └── PluginLoaderService.ts
+├── plugins/                             # 플러그인 런타임
+│   ├── pluginRuntime.ts · types.ts
+│   └── builtin/aiCopilot.ts
+├── store/                               # Zustand 상태
+│   ├── useAppStore.ts                   # UI 상태 (activeTool, 파일, toolSettings)
+│   ├── usePdfEditorStore.ts             # 문서 상태 (elements, 페이지, revision)
+│   └── useAiStore.ts · usePluginStore.ts
+├── hooks/                               # useAppShortcuts · useEditorShortcuts · useSavePdf
+├── utils/                               # canvas · color · geometry · textRuns
+└── config/ · types/
+
+backend/src/main/kotlin/com/pdfeditor/
+├── Application.kt                       # Spring Boot 진입점
+├── controller/                          # PdfController (+ /convert-to-pdf) · FlattenController
+├── service/                             # OfficeToPdfService · FileStorageService · FlattenService
+├── repository/                          # PdfWorkspaceRepository · WorkHistoryRepository
+├── model/                               # PdfWorkspace · WorkHistory
+└── config/WebConfig.kt                  # CORS 설정
 ```
 
 ### 아키텍처 다이어그램
@@ -213,12 +249,12 @@ graph TD
         RE["RenderElement\n추상 기반 클래스"]
         PATH["PathElement\n펜·형광펜 경로"]
         SHAPE["ShapeElement\n도형·화살표"]
-        TEXT["TextElement\n텍스트 박스"]
+        TEXT["TextElement\n텍스트 박스 (부분 서식 spans)"]
         IMG["ImageElement\n이미지"]
     end
 
     subgraph RenderLayer["🎨 Render Layer (Visitor Pattern)"]
-        CRV["CanvasRenderVisitor\n각 Element 타입별 Canvas 렌더링"]
+        CRV["CanvasRenderVisitor\n타입별 렌더링 + 텍스트 런 부분 서식"]
         LI["LayerIterator\n렌더링 순서 순회"]
     end
 
@@ -230,8 +266,9 @@ graph TD
     end
 
     subgraph BackendLayer["☁️ Backend Layer"]
-        WAS["WorkspaceApiService\nHTTP Facade"]
-        PC["PdfController\nSpring Boot REST API"]
+        WAS["WorkspaceApiService\nAxios HTTP Facade"]
+        PC["PdfController\nSpring Boot REST API (+ /convert-to-pdf)"]
+        OCT["OfficeToPdfService\nLibreOffice → PowerPoint COM 변환"]
         FSS["FileStorageService\n파일 저장 (Template Method)"]
         WR["PdfWorkspaceRepository\nH2 DB"]
     end
@@ -263,12 +300,13 @@ graph TD
     PV -->|"HTTP 요청"| WAS
     WAS -->|"REST"| PC
     PC -->|"save/load"| FSS & WR
+    PC -->|"PPT/PPTX → PDF"| OCT
 ```
 
 ### 아키텍처 설명
 
 #### 1. UI Layer
-- **PdfViewer.tsx**: 캔버스 렌더링, 마우스 이벤트 처리, 텍스트 입력 UI를 담당하는 핵심 컴포넌트. 모든 레이어의 진입점 역할을 합니다.
+- **PdfViewer.tsx**: 캔버스 렌더링, 마우스 이벤트 처리, 텍스트 입력 UI(부분 서식 rich-text 편집기 포함)를 담당하는 핵심 컴포넌트. 모든 레이어의 진입점 역할을 합니다.
 - **Sidebar.tsx**: 도구 선택, 색상 팔레트, 두께/폰트 설정 패널.
 - **MainLayout.tsx**: 전역 키보드 단축키(도구 전환, 색상 탐색 등)를 처리합니다.
 
@@ -287,11 +325,11 @@ graph TD
 - **RenderElement**: 모든 그래픽 요소의 추상 기반 클래스. `accept(visitor)`, `getBoundingBox()`, `move()`, `clone()` 인터페이스를 정의합니다.
 - **PathElement**: 펜/형광펜의 점 배열 경로.
 - **ShapeElement**: 화살표, 사각형, 원, 형광펜 도형. `shapeType`으로 세부 타입을 구분합니다.
-- **TextElement**: 텍스트 박스. 폰트, 크기, 색상, 줄 바꿈 정보를 포함합니다.
+- **TextElement**: 텍스트 박스. 폰트, 크기, 색상, 줄 바꿈 정보와 함께 **부분 서식** 데이터(`fontWeight`/`textDecoration`, 선택 범위 `spans`)를 포함합니다.
 - **ImageElement**: 삽입된 이미지. Base64 src와 위치/크기 정보를 포함합니다.
 
 #### 5. Render Layer — Visitor Pattern
-- **CanvasRenderVisitor**: `visitPath()`, `visitShape()`, `visitText()`, `visitImage()` 메서드로 각 Element 타입을 Canvas에 렌더링합니다. Element 클래스를 수정하지 않고 렌더링 로직을 분리합니다.
+- **CanvasRenderVisitor**: `visitPath()`, `visitShape()`, `visitText()`, `visitImage()` 메서드로 각 Element 타입을 Canvas에 렌더링합니다. 텍스트는 런(run) 단위로 굵게/밑줄/취소선(부분 서식)을 반영하며, Element 클래스를 수정하지 않고 렌더링 로직을 분리합니다.
 - **LayerIterator**: `currentPageElements` 배열을 순서대로 순회하며 각 요소에 Visitor를 적용합니다.
 
 #### 6. Command Layer — Command Pattern
@@ -300,7 +338,8 @@ graph TD
 
 #### 7. Backend Layer
 - **WorkspaceApiService**: 백엔드 HTTP 호출을 캡슐화하는 Axios 기반 Facade. 타임아웃, 인터셉터, 보안 헤더가 통합되어 있습니다.
-- **PdfController**: Spring Boot REST 컨트롤러. 저장, 워크스페이스 관리, 원본 PDF 백업 엔드포인트를 제공합니다.
+- **PdfController**: Spring Boot REST 컨트롤러. 저장, 워크스페이스 관리, 원본 PDF 백업, **PPT/PPTX → PDF 변환(`/convert-to-pdf`)** 엔드포인트를 제공합니다.
+- **OfficeToPdfService**: LibreOffice headless(기본) → Microsoft PowerPoint COM(폴백) 순으로 Office 문서를 PDF로 변환합니다. 임시 파일명은 ASCII로 고정하고 변환 스크립트는 UTF-8 BOM으로 기록하여 한글 파일명 깨짐을 방지합니다.
 - **FileStorageService**: Template Method 패턴으로 파일 저장 전략(덮어쓰기/새 이름)을 분리합니다.
 - **PdfWorkspaceRepository**: H2 DB에 마지막 페이지, 주석 데이터, 백업 여부를 저장합니다.
 
