@@ -167,15 +167,19 @@ class OfficeToPdfService {
         val outPath = outDir.resolve("$safeBaseName.pdf").apply { Files.deleteIfExists(this) }
 
         val script = buildString {
-            appendLine("\$ErrorActionPreference = 'Stop'")
+            appendLine("\$ErrorActionPreference = 'Continue'")
             appendLine("\$ppt = New-Object -ComObject PowerPoint.Application")
             appendLine("try {")
             appendLine("  \$pres = \$ppt.Presentations.Open('${psQuote(inputPath.toString())}', \$true, \$false, \$false)")
             appendLine("  \$pres.SaveAs('${psQuote(outPath.toString())}', 32)") // 32 = ppSaveAsPDF
             appendLine("  \$pres.Close()")
+            appendLine("  Write-Output 'PPT2PDF_OK'")
+            appendLine("} catch {")
+            appendLine("  Write-Output \"PPT2PDF_ERR: \$_\"")
             appendLine("} finally {")
-            appendLine("  \$ppt.Quit()")
+            appendLine("  try { \$ppt.Quit() } catch { }")
             appendLine("}")
+            appendLine("exit 0")
         }
 
         val scriptFile = Files.createTempFile("ppt2pdf-", ".ps1")
