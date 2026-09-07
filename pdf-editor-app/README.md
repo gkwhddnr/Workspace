@@ -1,6 +1,6 @@
 # PDF Editor App
 
-PDF 및 이미지 파일에 필기, 주석, 도형을 추가할 수 있는 Electron 기반 데스크탑 편집 애플리케이션입니다.
+PDF, 이미지, 그리고 **PPT/PPTX(열면 자동으로 PDF 변환)** 파일에 필기, 주석, 도형을 추가할 수 있는 Electron 기반 데스크탑 편집 애플리케이션입니다.
 
 ---
 
@@ -32,7 +32,8 @@ cd backend
 - **PDF 렌더링**: PDF.js
 - **PDF 편집/저장**: pdf-lib
 - **Backend**: Kotlin + Spring Boot + H2 Database
-- **아키텍처**: Visitor Pattern, Command Pattern, Strategy Pattern, Factory Method, Iterator, Proxy, Mediator, State, Flyweight, Decorator Pattern![alt text](image.png)
+- **Office 변환**: LibreOffice headless (기본) → Microsoft PowerPoint COM (폴백)
+- **아키텍처**: Visitor Pattern, Command Pattern, Strategy Pattern, Factory Method, Iterator, Proxy, Mediator, State, Flyweight, Decorator Pattern
 
 ---
 
@@ -78,6 +79,8 @@ cd backend
 - 기존 텍스트 박스 클릭 → 편집 모드
 - **실시간 미리보기**: 타이핑 시 canvas에 즉시 반영
 - V체크 또는 Ctrl+Enter로 완료
+- **부분 서식(rich-text)**: 글자를 선택한 뒤 **굵게 / 밑줄 / 취소선** 적용 가능 (편집 박스 상단 툴바 `B` `U` `S` 버튼 또는 `Ctrl+B` / `Ctrl+U` / `Ctrl+Shift+X`)
+- Enter로 줄바꿈 (서식 유지), `Escape`로 편집 취소
 - 폰트, 크기, 색상 설정 가능
 - 박스 투명도 슬라이더로 배경 조절
 
@@ -305,27 +308,14 @@ graph TD
 
 ## 📋 업데이트 이력
 
-### 2026-09-01
-- **AI 상태 스토어 분리(useAiStore)**: `useAppStore`에서 코파일럿/API 키 상태를 전용 스토어로 분리하여 비-AI 구독자의 불필요한 리렌더 방지, 제공자 기본 모델 단일화
-- **전역 단축키 훅 분리(useAppShortcuts)**: MainLayout 인라인 핸들러를 훅으로 추출, 도구 전환/색상 UI 상태는 useAppStore가 단일 소유
-- **플러그인 패널 컴포넌트 분리**: PluginManagerPanel을 설치·목록·출력 하위 컴포넌트로 분리 (plugin/ 배럴)
-- **PdfViewer 렌더링 유틸 분리**: canvas/textRuns/dialogs 모듈로 분리해 편집기 컴포넌트 경량화
-- **usePdfEditorStore 중복 상태 제거**: 도구/드래그 상태(activeTool/toolSettings/isDragging)를 제거하고 도구 상태는 useAppStore로 단일화
+### 2026-09-07
+- **PPT/PPTX 변환 인코딩 수정**: 한글 파일명 원본이 PowerShell ANSI(CP949) 해석으로 깨져 변환이 500으로 실패하던 문제 해결 — 임시 파일명은 ASCII 고정, 변환 스크립트는 UTF-8 BOM으로 기록
+- **PowerPoint COM 전환 안정화**: COM 변환 성공 후 `Quit()` RPC 예외가 변환 실패로 오판되던 문제 수정
 
-### 2026-06-24
-- **커스텀 색상 저장(Alt+C)**: 사용자가 고른 색상을 즐겨찾기로 8개까지 저장하여 유지
-- **지우개 다중 삭제 복원(Ctrl+Z)**: 지우개 도구 클릭/드래그 모드 통합 및 여러 항목을 한 번에 지운 후 복원 지원
-- **코파일럿 패널 크기 영구 저장**: AI 패널 너비 비율 자동 저장 기능 적용
-- **텍스트 상자 크기 최적화**: 텍스트 도구 사용 시 초기 입력 박스 높이 여백 제거
-- **3번 화살표 저장 버그 픽스**: 저장된 화살표 요소 파싱 누락 수정
-
-### 2026-07-04
-- **지우개 드래그 삭제 통합**: ON/OFF 모드 제거, 드래그 중 삭제된 모든 요소를 Ctrl+Z 한 번으로 복원
-- **내보내기 프론트엔드 전환**: 백엔드 의존 제거, JPG/PNG(ZIP)/PPTX 변환을 브라우저 단에서 직접 처리
-- **Export 드롭다운 UI 추가**: 헤더에 내보내기 버튼 및 형식 선택 드롭다운 추가
-
-### 2026-06-24 (bugfix)
-- **useAppStore 인터페이스 중복 선언 수정**: git 복구 과정에서 `toggleLeftPanel`, `toggleRightPanel`이 중복 선언되어 발생한 TypeScript 컴파일 오류 수정
+### 2026-09-04
+- **PPT/PPTX 업로드 및 자동 PDF 변환**: Office 파일을 열면 백엔드에서 LibreOffice headless(기본) → PowerPoint COM(폴백) 순서로 PDF 변환 후 바로 편집
+- **텍스트 도구 부분 서식(rich-text) 구현**: 선택한 글자에만 굵게/밑줄/취소선 적용, Enter 블록 줄바꿈 유지, 런(run) 단위 캔버스 렌더링
+- **변환 파이프라인 안정화**: 첫 변환 지연 제거(LibreOffice warm-up), 변환 요청 타임아웃 상향(240초), `.pptx` 확장자 우선 판별, 변환 직후 백엔드 원본 복원 스킵
 
 ### 2026-05-06
 - **사용자 추가 텍스트 도구 스냅 확장**: 텍스트 도구로 추가한 텍스트 요소가 형광펜 및 도형 도구에서 PDF 원본 텍스트처럼 인식되어 자동으로 영역이 잡히도록 개선
@@ -394,7 +384,7 @@ graph TD
 
 ---
 
-## � 저장 방식
+## 💾 저장 방식
 
 - **Ctrl+S**: 현재 파일에 주석 포함하여 PDF로 저장
 - **Ctrl+Shift+S**: 다른 이름으로 저장

@@ -113,3 +113,21 @@
   - `Panel` 컴포넌트의 `className`에 Tailwind의 `min-w-[Npx]` 또는 인라인 스타일 `minWidth`를 명시적으로 부여하여 최소한의 가독성 폭을 확보할 것 (예: 도구 패널은 최소 160px)
   - `defaultSize` 설정 시 전체 합계가 100%가 되도록 탭 조합별 분기 로직을 정밀하게 작성할 것 (초과 시 레이아웃 엔진에 의해 패널이 강제로 압축됨)
 - **컨텍스트 기반 렌더링**: AI 패널과 같이 특정 상황(웹/코드 편집)에서만 필요한 패널은 `activeTabs` 상태에 따라 조건부 렌더링하여 작업 공간을 동적으로 확보함
+
+---
+
+## 외부 프로세스 호출 시 인코딩/경로 처리 (Windows + PowerShell/COM)
+
+- **문제**: PowerShell 5.1은 **BOM 없는** UTF-8 스크립트를 ANSI(CP949)로 해석하여 비-ASCII(한글) 경로가 깨지고 `Presentations.Open` 등이 실패함.
+- **규칙**:
+  1. 외부 프로세스가 사용할 임시 **파일명/스크립트 내 경로는 ASCII만 사용**할 것 (예: `input.$ext`, `input.pdf`). 원본 파일명 보존은 응답 헤더 등 별도 필드에만 유지.
+  2. `.ps1` 등 스크립트는 반드시 **UTF-8 BOM(0xEF 0xBB 0xBF) + UTF-8**로 기록할 것 (`Files.write(scriptFile, BOM_UTF8.plus(script.toByteArray(Charsets.UTF_8)))`).
+  3. COM 변환 성공 여부 판정 시 **cleanup 단계(`Quit()` 등)의 RPC 예외는 실패로 취급하지 말 것** — 판정과 정리를 분리.
+- **관련 파일**: `backend/.../service/OfficeToPdfService.kt`
+
+---
+
+## Git 작업 트리 복원/롤백 검증
+
+- 특정 기능 롤백을 위해 `git checkout <커밋> -- <파일>`을 사용하면, 다른 커밋이 함께 섞여 의도하지 않은 픽스까지 날아갈 수 있음.
+- **검증 필수**: 롤백 후 `git diff <대상 커밋> -- <해당 파일들>`의 결과가 의도한 변경뿐인지, 그리고 `git diff HEAD -- <파일>`의 예상 넓이를 확인할 것.

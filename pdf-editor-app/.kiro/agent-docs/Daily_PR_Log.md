@@ -332,3 +332,68 @@
 - **현상**: 코드 수정 후 PDF 렌더링 및 도구 조작이 완전히 멈춤.
 - **원인**: `multi_replace_file_content` 호출 시 교체 대상 범위를 잘못 지정하여 `pdfDoc`, `toolManager` 등 필수 상태와 Effect가 삭제됨.
 - **해결**: 즉시 파일 구조를 복구하고, `combinedTextRuns`를 유실된 코드들 사이에 올바르게 삽입하여 정상화함.
+
+---
+
+## 2026-09-04
+
+### 완료된 작업
+
+#### 1. PPT/PPTX 업로드 및 PDF 변환 후 편집
+
+- Electron 네이티브 파일 다이얼로그에서 `.pdf`, `.png`, `.ppt`, `.pptx` 지원.
+- Office 파일은 백엔드 `/convert-to-pdf`에서 PDF로 변환한 뒤 편집 플로우에 진입.
+- 변환 실패 시 원인 메시지 표시 (`loadOfficeDocument` 에러 파싱).
+- **파일**: `src/components/viewers/PdfViewer.tsx`, `src/services/WorkspaceApiService.ts`, `backend/.../OfficeToPdfService.kt`
+
+#### 2. 변환 파이프라인 안정화
+
+- **LibreOffice warm-up**: 앱 기동 시 headless 변환 1회 수행으로 첫 변환 지연 제거.
+- **PowerPoint COM 폴백**: LibreOffice 실패 시 PowerPoint COM(PowerShell)으로 재시도.
+- **타임아웃 상향**: 변환 요청 axios 타임아웃 240초 (LibreOffice 90s → PowerPoint 120s 체인 커버).
+- **확장자 우선 판별**: `.pptx` 파일이 `application/pdf` MIME으로 오인되지 않도록 확장자로 먼저 판별.
+- **원본 복원 스킵**: 방금 변환한 Office 문서는 백엔드에 저장된 옛 원본으로 덮어쓰지 않고 신선한 PDF를 로드.
+- **파일**: `backend/.../OfficeToPdfService.kt`, `src/components/viewers/PdfViewer.tsx`, `src/services/WorkspaceApiService.ts`
+
+#### 3. 텍스트 도구 부분 서식(선택 범위) rich-text 편집
+
+- textarea를 contentEditable 기반 편집기로 전환. 선택한 글자에만 굵게/밑줄/취소선 적용.
+- `TextElement`에 `fontWeight`/`textDecoration`/`spans(FormatSpan)` 추가, `buildRichHtml`/`parseRichDom`으로 서식 직렬화.
+- `CanvasRenderVisitor` 런(run) 단위 렌더와 `drawTextDecorations`로 밑줄/취소선 그리기.
+- Enter 시 `<div>` 블록 줄바꿈으로 서식 적용 후에도 줄이 병합되지 않도록 `insertLineBreak` 사용.
+- 단축키: `Ctrl+B`(굵게), `Ctrl+U`(밑줄), `Ctrl+Shift+X`(취소선).
+- **파일**: `PdfViewer.tsx/설정`, `TextElement.ts`, `CanvasRenderVisitor.ts`, `ElementFactory.ts`, `useAppStore.ts`, `usePdfEditorStore.ts`, `DrawingToolStrategy.ts`, `toolSettings.ts`
+
+---
+
+## 2026-09-07
+
+### 완료된 작업
+
+#### 1. 한글 파일명 PPT/PPTX 변환 실패(500) 수정
+
+- **현상**: 한글 파일명(예: `강화학습_1주.pptx`) 업로드 시 `Presentations.Open` 실패로 "변환 도구 없음" 500이 반환되고, 변환된 PDF도 로드되지 않음.
+- **원인**: 임시 변환 폴더에 원본 한글 파일명을 그대로 저장했고, COM 스크립트(.ps1)를 UTF-8 **BOM 없이** 기록 → PowerShell 5.1이 ANSI(CP949)로 해석해 한글 경로가 깨짐.
+- **해결**:
+  - 임시 변환 파일명을 ASCII 고정(`input.$ext`)으로 변경, 출력도 `input.pdf` 고정 (파일명 보존은 응답 `fileName`에만 유지).
+  - .ps1 스크립트를 UTF-8 `BOM`과 함께 기록 (`BOM_UTF8.plus(script.toByteArray(Charsets.UTF_8))`).
+  - `convertWithPowerPoint` 2-인자로 변경(`safeBaseName` 제거).
+- **검증**: 새 코드로 8081 포트에서 한글 이름 업로드 → HTTP 200 확인.
+- **파일**: `backend/src/main/kotlin/com/pdfeditor/service/OfficeToPdfService.kt`
+
+#### 2. PowerPoint COM 변환에서 Quit() RPC 예외 오판 수정
+
+- COM 변환이 성공한 뒤 `Quit()` 호출 시 발생하는 RPC 예외(E_FAIL)가 변환 실패로 오판되어 원본 PDF가 유실되던 문제를 안전 처리.
+
+#### 3. 상태 정리 및 문서 업데이트
+
+- rich-text 커밋(`c7162d4`) 이후 부분 롤백으로 유실됐던 변환 픽스(타임아웃/확장자 우선/원본 복원 스킵)를 복원 확인 후 반영.
+- `README.md` 업데이트 이력, `Daily_PR_Log.md`, `Mistake_Log.md`, `Implementation_Rules.md` 갱신.
+
+### 실패 및 해결
+
+#### 한글 파일명 인코딩 이슈 (Windows + PowerShell)
+
+- **원인**: `Files.writeString` 기본이 UTF-8 **BOM 없음** → PowerShell 5.1은 ANSI로 해석.
+- **해결**: BOM 강제 + 임시 파일명 ASCII 고정으로 근본 회피.
+- **교훈**: Windows 계열 외부 프로세스에 스크립트/경로를 넘길 때는 BOM/인코딩 검증이 필수.
