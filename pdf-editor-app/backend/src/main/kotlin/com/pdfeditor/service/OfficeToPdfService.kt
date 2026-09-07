@@ -22,6 +22,8 @@ class OfficeToPdfService {
         Thread(r, "office-pdf-warmup").apply { isDaemon = true }
     }
 
+    private val BOM_UTF8: ByteArray = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+
     /**
      * LibreOffice headless는 첫 실행 시 사용자 프로파일 생성/언어팩 로드로 매우 느리다.
      * 앱이 뜨는 즉시 작은 문서를 headless로 1회 변환해 프로파일을 미리 만들어,
@@ -78,6 +80,7 @@ class OfficeToPdfService {
             }
         }
     }
+
     fun convertToPdf(file: MultipartFile): ConvertedPdf {
         val originalName = (file.originalFilename ?: "document").trim().ifEmpty { "document" }
         val ext = originalName.substringAfterLast('.', "").lowercase()
@@ -88,14 +91,16 @@ class OfficeToPdfService {
         val workDir = Files.createTempDirectory("pdf-editor-convert-")
         try {
             val safeBaseName = sanitizeFileBaseName(originalName.substringBeforeLast('.'))
-            val inputPath = workDir.resolve("$safeBaseName.$ext")
+            // 임시 파일명은 항상 ASCII로 고정한다. 한글 등 비-ASCII 파일명은
+            // PowerShell이 UTF-8 스크립트를 ANSI로 해석하면서 깨지기 때문이다.
+            val inputPath = workDir.resolve("input.$ext")
             file.inputStream.use { Files.copy(it, inputPath) }
 
             val outDir = workDir.resolve("out").also { Files.createDirectories(it) }
 
             // LibreOffice -> PowerPoint COM fallback
             val generatedPdf = convertWithLibreOffice(inputPath, outDir)
-                ?: convertWithPowerPoint(inputPath, safeBaseName, outDir)
+                ?: convertWithPowerPoint(inputPath, outDir)
                 ?: throw IllegalStateException(
                     "PPT/PPTX를 PDF로 변환할 수 있는 도구가 없습니다. " +
                         "LibreOffice를 설치하거나 Microsoft PowerPoint를 설치해 주세요."
@@ -163,8 +168,8 @@ class OfficeToPdfService {
     }
 
     /** Convert via Microsoft PowerPoint COM (PowerShell). Returns null if unavailable or on failure. */
-    private fun convertWithPowerPoint(inputPath: Path, safeBaseName: String, outDir: Path): Path? {
-        val outPath = outDir.resolve("$safeBaseName.pdf").apply { Files.deleteIfExists(this) }
+    private fun convertWithPowerPoint(inputPath: Path, outDir: Path): Path? {
+        val outPath = outDir.resolve("input.pdf").apply { Files.deleteIfExists(this) }
 
         val script = buildString {
             appendLine("\$ErrorActionPreference = 'Continue'")
@@ -184,7 +189,9 @@ class OfficeToPdfService {
 
         val scriptFile = Files.createTempFile("ppt2pdf-", ".ps1")
         return try {
-            Files.writeString(scriptFile, script)
+            // BOM 없이 UTF-8로 쓰면 PowerShell 5.1이 ANSI로 해석해
+            // 비-ASCII 문자가 깨질 수 있으므로 BOM을 붙여 쓴다.
+            Files.write(scriptFile, BOM_UTF8.plus(script.toByteArray(Charsets.UTF_8)))
             val command = listOf(
                 "powershell.exe", "-NoProfile",
                 "-ExecutionPolicy", "Bypass",
