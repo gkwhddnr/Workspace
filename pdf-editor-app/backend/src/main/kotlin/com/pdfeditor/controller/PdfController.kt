@@ -2,6 +2,7 @@ package com.pdfeditor.controller
 
 import com.pdfeditor.model.WorkHistory
 import com.pdfeditor.service.FileStorageService
+import com.pdfeditor.service.OfficeEditService
 import com.pdfeditor.service.OfficeToPdfService
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
@@ -28,6 +29,7 @@ data class ProjectDataRequest(
 class PdfController(
     private val fileStorageService: FileStorageService,
     private val officeToPdfService: OfficeToPdfService,
+    private val officeEditService: OfficeEditService,
     private val pdfWorkspaceRepository: PdfWorkspaceRepository
 ) {
 
@@ -80,6 +82,31 @@ class PdfController(
             ResponseEntity.badRequest()
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(ByteArrayResource(("{\"error\":\"${e.message?.replace("\"", "\\\"") ?: "invalid"}\"}").toByteArray()))
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ResponseEntity.internalServerError()
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ByteArrayResource(("{\"error\":\"${e.message?.replace("\"", "\\\"") ?: "internal"}\"}").toByteArray()))
+        }
+    }
+
+    @PostMapping("/office-save")
+    fun saveOfficeEdited(
+        @RequestParam("file") file: MultipartFile,
+        @RequestParam("elements") elementsJson: String,
+        @RequestParam("pageSizes") pageSizesJson: String
+    ): ResponseEntity<ByteArrayResource> {
+        return try {
+            val fileName = file.originalFilename ?: "document.pptx"
+            val edited = officeEditService.applyEdits(fileName, file.bytes, elementsJson, pageSizesJson)
+            ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header(
+                    HttpHeaders.CONTENT_DISPOSITION,
+                    "attachment; filename=\"${fileName}\""
+                )
+                .contentLength(edited.size.toLong())
+                .body(ByteArrayResource(edited))
         } catch (e: Exception) {
             e.printStackTrace()
             ResponseEntity.internalServerError()

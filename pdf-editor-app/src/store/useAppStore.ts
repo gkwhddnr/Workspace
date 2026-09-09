@@ -49,6 +49,12 @@ interface AppState {
     currentFileName: string | null;
     setCurrentFile: (path: string | null, name: string | null) => void;
 
+    // Office (PPT/PPTX) origin: the last document opened from an Office file.
+    // Saving in this mode writes the edited annotations back into the original file.
+    officeOriginalPath: string | null;
+    officeOriginalExt: string | null;
+    setOfficeOriginal: (path: string | null, ext: string | null) => void;
+
     // Web Viewer
     webUrl: string;
     setWebUrl: (url: string) => void;
@@ -203,6 +209,11 @@ export const useAppStore = create<AppState>((set) => ({
     currentFilePath: null,
     currentFileName: null,
     setCurrentFile: (path, name) => set({ currentFilePath: path, currentFileName: name }),
+
+    // Office origin defaults
+    officeOriginalPath: null,
+    officeOriginalExt: null,
+    setOfficeOriginal: (path, ext) => set({ officeOriginalPath: path, officeOriginalExt: ext }),
 
     // Web Viewer defaults
     webUrl: 'https://www.google.com',

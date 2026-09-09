@@ -7,10 +7,12 @@ export const useSavePdf = (
     createEditedPdfBlob: () => Promise<Blob | null>,
     originalData: Uint8Array | null,
     elements: Record<number, any>,
-    currentPage: number
+    currentPage: number,
+    getPageSizes: () => Promise<Record<number, [number, number]>>
 ) => {
     const { 
-        currentFilePath, currentFileName, setCurrentFile 
+        currentFilePath, currentFileName, setCurrentFile,
+        officeOriginalPath, officeOriginalExt
     } = useAppStore();
     
     const { 
@@ -21,15 +23,66 @@ export const useSavePdf = (
     // 1) 저장 로직
     const handleSave = useCallback(async (onSuccess?: () => void): Promise<boolean> => {
         setSaveStatus('저장 중...');
+
+        const anyWindow = window as any;
+        const electronAPI = anyWindow?.electronAPI;
+
+        // Office origin mode: rewrite the annotations into the original .ppt/.pptx file
+        // so the user keeps an editable PowerPoint document at the original location.
+        if (officeOriginalPath && officeOriginalExt && electronAPI?.readFile && electronAPI?.writeFile) {
+            try {
+                const readResult = await electronAPI.readFile(officeOriginalPath);
+                if (!readResult?.data) {
+                    setSaveStatus('저장 실패');
+                    setTimeout(() => setSaveStatus(null), 3000);
+                    return false;
+                }
+                const originalBytes = new Uint8Array(readResult.data);
+                const originalName = officeOriginalPath.split(/[\\/]/).pop() || `document.${officeOriginalExt}`;
+                const officeFile = new File([originalBytes], originalName);
+                const pageSizes = await getPageSizes();
+                const editedBytes = await workspaceApiService.saveOfficeEdited(
+                    officeFile,
+                    JSON.stringify(elements),
+                    JSON.stringify(pageSizes)
+                );
+
+                const base64 = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        const dataUrl = reader.result as string;
+                        resolve(dataUrl.split(',')[1] || '');
+                    };
+                    reader.onerror = reject;
+                    reader.readAsDataURL(new Blob([editedBytes], { type: 'application/octet-stream' }));
+                });
+
+                const result = await electronAPI.writeFile({ filePath: officeOriginalPath, data: base64 });
+                if (result?.success) {
+                    setSaveStatus('저장 완료');
+                    markSaved();
+                    setTimeout(() => setSaveStatus(null), 3000);
+                    if (typeof onSuccess === 'function') onSuccess();
+                    return true;
+                }
+                console.error('Office 파일 쓰기 실패:', result);
+                setSaveStatus('저장 실패');
+                setTimeout(() => setSaveStatus(null), 3000);
+                return false;
+            } catch (error) {
+                console.error('Office 저장 오류:', error);
+                setSaveStatus('저장 오류');
+                setTimeout(() => setSaveStatus(null), 3000);
+                return false;
+            }
+        }
+
         const blob = await createEditedPdfBlob();
         if (!blob) {
             setSaveStatus('저장 실패');
             setTimeout(() => setSaveStatus(null), 3000);
             return false;
         }
-
-        const anyWindow = window as any;
-        const electronAPI = anyWindow?.electronAPI;
 
         if (electronAPI?.autoSave && currentFilePath) {
             try {
@@ -91,7 +144,7 @@ export const useSavePdf = (
         }
         setTimeout(() => setSaveStatus(null), 3000);
         return true;
-    }, [createEditedPdfBlob, currentFilePath, currentFileName, originalData, elements, currentPage, setSaveStatus, markSaved]);
+    }, [createEditedPdfBlob, currentFilePath, currentFileName, originalData, elements, currentPage, setSaveStatus, markSaved, officeOriginalPath, officeOriginalExt, getPageSizes]);
 
     // 2) 다른 이름으로 저장 다이얼로그
     const openSaveAsDialog = useCallback(() => {

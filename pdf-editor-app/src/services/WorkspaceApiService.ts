@@ -98,6 +98,20 @@ export class WorkspaceApiService {
         };
     }
 
+    /** Write annotation elements back into the original .ppt/.pptx, returns resulting bytes. */
+    async saveOfficeEdited(file: File, elementsJson: string, pageSizesJson: string): Promise<Uint8Array> {
+        const formData = new FormData();
+        formData.append('file', file, file.name);
+        formData.append('elements', elementsJson);
+        formData.append('pageSizes', pageSizesJson);
+        const res = await apiClient.post('/office-save', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            responseType: 'arraybuffer',
+            timeout: 120000
+        });
+        return new Uint8Array(res.data);
+    }
+
     /** Save JSON project data (vectors, texts, images). */
     async saveProjectData(filename: string, projectData: string): Promise<void> {
         try {

@@ -149,7 +149,8 @@ const PdfViewer: React.FC = () => {
         currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTabs,
         activeTool, setActiveTool, toolSettings, setToolSettings,
         showToolIndicator,
-        pdfOriginalData, setPdfOriginalData
+        pdfOriginalData, setPdfOriginalData,
+        setOfficeOriginal
     } = useAppStore();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -1097,6 +1098,9 @@ const PdfViewer: React.FC = () => {
             const rawPath = (file as any)._filePath || (file as any).path || file.name;
             const dot = rawPath.lastIndexOf('.');
             const savePath = (dot > 0 ? rawPath.slice(0, dot) : rawPath) + '.pdf';
+            // Remember the original Office file so Ctrl+S can write annotations back into it.
+            const extMatch = /\.(ppt|pptx)$/i.exec(rawPath);
+            setOfficeOriginal(extMatch ? rawPath : null, extMatch ? extMatch[1].toLowerCase() : null);
             setCurrentFile(savePath, result.fileName);
             // Load the freshly generated PDF directly — skip backend original restore to
             // avoid loading a stale/broken saved original under the same filename.
@@ -1580,11 +1584,26 @@ const PdfViewer: React.FC = () => {
         }
     };
 
+    // PDF page sizes (points) used to scale annotation coordinates onto slides
+    // whose dimensions differ from the converted PDF pages.
+    const getPageSizes = useCallback(async (): Promise<Record<number, [number, number]>> => {
+        const sizes: Record<number, [number, number]> = {};
+        const doc = pdfDoc;
+        if (!doc) return sizes;
+        for (let i = 1; i <= doc.numPages; i++) {
+            const page = await doc.getPage(i);
+            const vp = page.getViewport({ scale: 1 });
+            sizes[i] = [vp.width, vp.height];
+        }
+        return sizes;
+    }, [pdfDoc]);
+
     const { handleSave, openSaveAsDialog, confirmSaveAs } = useSavePdf(
         createEditedPdfBlob,
         pdfOriginalData,
         elements,
-        currentPage
+        currentPage,
+        getPageSizes
     );
 
     // Global keyboard shortcuts and lifecycle events (Moved below dependencies to avoid hoisting issues)
