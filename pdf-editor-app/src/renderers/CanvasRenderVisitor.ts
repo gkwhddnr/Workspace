@@ -204,6 +204,8 @@ export class CanvasRenderVisitor implements ElementVisitor {
 
     visitShape(element: ShapeElement): void {
         const { shapeType, x, y, width, height, style, points } = element;
+        const outlineSegments = element.outlineSegments ?? [];
+        const safePoints = points ?? [];
         const s = this.scale;
         this.ctx.save();
         this.ctx.strokeStyle = style.color;
@@ -222,15 +224,24 @@ export class CanvasRenderVisitor implements ElementVisitor {
             this.ctx.fillStyle = style.color;
             this.ctx.fillRect(sx, sy, sw, sh);
         } else if (shapeType === 'rect') {
-            this.ctx.strokeRect(sx, sy, sw, sh);
+            if (outlineSegments.length > 0) {
+                this.ctx.beginPath();
+                for (const segment of outlineSegments) {
+                    this.ctx.moveTo(segment.x1 * s, segment.y1 * s);
+                    this.ctx.lineTo(segment.x2 * s, segment.y2 * s);
+                }
+                this.ctx.stroke();
+            } else {
+                this.ctx.strokeRect(sx, sy, sw, sh);
+            }
         } else if (shapeType === 'circle') {
             // Draw ellipse (not circle) to support non-square drag areas
             this.ctx.beginPath();
             this.ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
             this.ctx.stroke();
-        } else if ((shapeType === 'arrow' || shapeType.startsWith('arrow-')) && points.length >= 2) {
+        } else if ((shapeType === 'arrow' || shapeType.startsWith('arrow-')) && safePoints.length >= 2) {
             // Arrow rendering using points array
-            const pts = points;
+            const pts = safePoints;
             let renderPts: { x: number, y: number }[];
             let arrowheadFrom: { x: number, y: number };
             let arrowheadTo: { x: number, y: number };

@@ -1,9 +1,11 @@
 // ShapeTool.ts
 import { AbstractTool } from './AbstractTool';
 import { PointerEventParams } from './ToolState';
-import { ShapeElement, ShapeType } from '../../models/ShapeElement';
+import { BorderSegment, RectPart, ShapeElement, ShapeType } from '../../models/ShapeElement';
 import { GraphicStyle } from '../../models/GraphicStyle';
 import { AddElementCommand } from '../../commands/AddElementCommand';
+import { DeleteElementCommand } from '../../commands/DeleteElementCommand';
+import { CompositeCommand } from '../../commands/CompositeCommand';
 
 // Text block type for snap-to-text feature
 export type TextBlock = { text: string; rect: [number, number, number, number] };
@@ -315,8 +317,9 @@ export class ShapeTool extends AbstractTool {
             this.startPos = null;
             return;
         }
+        let snapped: { x: number; y: number; w: number; h: number } | null = null;
         if (this.isTextSnapTool()) {
-            const snapped = this.computeTextSnapRect(this.startPos, normalizedPos, scale);
+            snapped = this.computeTextSnapRect(this.startPos, normalizedPos, scale);
             if (snapped) {
                 this.previewElement.x = snapped.x;
                 this.previewElement.y = snapped.y;
@@ -329,12 +332,29 @@ export class ShapeTool extends AbstractTool {
                 this.previewElement.width = Math.abs(normalizedPos.x - this.startPos.x);
                 this.previewElement.height = Math.abs(normalizedPos.y - this.startPos.y);
             }
+
+            if (this.name === 'rect' && snapped && this.mergeOverlappingRectangles(state)) {
+                this.previewElement = null;
+                this.startPos = null;
+                this.snapPartner = null;
+                this.startSnapPartner = null;
+                return;
+            }
         } else {
             this.previewElement.points = [this.startPos, normalizedPos];
             this.previewElement.x = Math.min(this.startPos.x, normalizedPos.x);
             this.previewElement.y = Math.min(this.startPos.y, normalizedPos.y);
             this.previewElement.width = Math.abs(normalizedPos.x - this.startPos.x);
             this.previewElement.height = Math.abs(normalizedPos.y - this.startPos.y);
+        }
+
+        if (this.previewElement.width <= 0 || this.previewElement.height <= 0) {
+            // Fully covered by an existing rect — nothing new to add
+            this.previewElement = null;
+            this.startPos = null;
+            this.snapPartner = null;
+            this.startSnapPartner = null;
+            return;
         }
 
         // --- NEW: Merge Logic in ShapeTool ---
@@ -403,4 +423,88 @@ export class ShapeTool extends AbstractTool {
         this.snapPartner = null;
         this.startSnapPartner = null;
     }
+
+    private buildUnionOutline(rectangles: { x: number; y: number; width: number; height: number }[]): BorderSegment[] {
+        const xs = [...new Set(rectangles.flatMap(rectangle => [rectangle.x, rectangle.x + rectangle.width]))].sort((a, b) => a - b);
+        const ys = [...new Set(rectangles.flatMap(rectangle => [rectangle.y, rectangle.y + rectangle.height]))].sort((a, b) => a - b);
+        const isInside = (x: number, y: number) => rectangles.some(rectangle =>
+            x > rectangle.x && x < rectangle.x + rectangle.width
+            && y > rectangle.y && y < rectangle.y + rectangle.height
+        );
+        const segments: BorderSegment[] = [];
+        const epsilon = 0.001;
+
+        for (let xi = 0; xi < xs.length - 1; xi++) {
+            for (let yi = 0; yi < ys.length - 1; yi++) {
+                const left = xs[xi];
+                const right = xs[xi + 1];
+                const top = ys[yi];
+                const bottom = ys[yi + 1];
+                const centerX = (left + right) / 2;
+                const centerY = (top + bottom) / 2;
+                if (!isInside(centerX, centerY)) continue;
+
+                if (!isInside(centerX, top - epsilon)) segments.push({ x1: left, y1: top, x2: right, y2: top });
+                if (!isInside(centerX, bottom + epsilon)) segments.push({ x1: left, y1: bottom, x2: right, y2: bottom });
+                if (!isInside(left - epsilon, centerY)) segments.push({ x1: left, y1: top, x2: left, y2: bottom });
+                if (!isInside(right + epsilon, centerY)) segments.push({ x1: right, y1: top, x2: right, y2: bottom });
+            }
+        }
+        return segments;
+    }
+
+    private mergeOverlappingRectangles(state: any): boolean {
+        const el = this.previewElement;
+        if (!el) return false;
+        const elements: any[] = this.getPageElements?.() ?? [];
+        const selected: RectPart[] = [{ x: el.x, y: el.y, width: el.width, height: el.height }];
+        const mergedIds: string[] = [];
+
+        for (const candidate of elements) {
+            if (candidate.id === el.id || candidate.shapeType !== 'rect') continue;
+
+            const candidateParts: RectPart[] = Array.isArray(candidate.rectParts) && candidate.rectParts.length > 0
+                ? candidate.rectParts
+                : [{ x: candidate.x, y: candidate.y, width: candidate.width, height: candidate.height }];
+            const overlapsSelected = candidateParts.some(candidatePart => selected.some(rectangle =>
+                Math.min(rectangle.x + rectangle.width, candidatePart.x + candidatePart.width) > Math.max(rectangle.x, candidatePart.x)
+                && Math.min(rectangle.y + rectangle.height, candidatePart.y + candidatePart.height) > Math.max(rectangle.y, candidatePart.y)
+            ));
+            if (!overlapsSelected) continue;
+
+            mergedIds.push(candidate.id);
+            selected.push(...candidateParts.map(part => ({ ...part })));
+        }
+
+        if (!mergedIds.length) return false;
+
+        const mergedX = Math.min(...selected.map(rectangle => rectangle.x));
+        const mergedY = Math.min(...selected.map(rectangle => rectangle.y));
+        const mergedRight = Math.max(...selected.map(rectangle => rectangle.x + rectangle.width));
+        const mergedBottom = Math.max(...selected.map(rectangle => rectangle.y + rectangle.height));
+        const merged = new ShapeElement(
+            'merged-rect-' + Date.now(),
+            el.style.copy({}),
+            'rect',
+            mergedX,
+            mergedY,
+            mergedRight - mergedX,
+            mergedBottom - mergedY,
+            [],
+            0,
+            this.buildUnionOutline(selected),
+            selected.map(part => ({ ...part }))
+        );
+        const commands = elements
+            .filter(candidate => mergedIds.includes(candidate.id))
+            .map(candidate => new DeleteElementCommand(state.currentPage, candidate, state.setElements));
+        commands.push(new AddElementCommand(state.currentPage, merged, state.setElements));
+        const command = new CompositeCommand(commands);
+        const history = state.getCommandHistory?.(state.currentPage);
+        if (history) history.push(command);
+        else command.execute();
+        state.incrementRevision();
+        return true;
+    }
+
 }

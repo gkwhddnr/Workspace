@@ -986,6 +986,8 @@ const PdfViewer: React.FC = () => {
                                         });
                                         if (d.points) (element as any).points = d.points;
                                         if (d.shapeType) (element as any).shapeType = d.shapeType;
+                                        if (d.outlineSegments) (element as any).outlineSegments = d.outlineSegments;
+                                        if (d.rectParts) (element as any).rectParts = d.rectParts;
                                         if (type === 'image' && d.imageSrc) {
                                             (element as ImageElement).imageSrc = d.imageSrc;
                                         }
