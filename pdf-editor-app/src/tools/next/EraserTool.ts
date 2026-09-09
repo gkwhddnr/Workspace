@@ -6,32 +6,23 @@ import { RenderElement } from '../../models/RenderElement';
 
 /**
  * Concrete State: EraserTool
- * 
- * - Instant mode (ON):  erases whenever the mouse moves over an element (hover erase)
- * - Click mode  (OFF): erases only on pointerDown (single click)
+ *
+ * Deletes an annotation only on a single click (pointerDown). The old drag-to-erase
+ * behavior has been removed — moving the pointer no longer erases elements.
  */
 export class EraserTool extends AbstractTool {
     public name = 'eraser';
-    private isPressed = false;
 
     onPointerDown(params: PointerEventParams): void {
-        this.isPressed = true;
-        // OFF mode: erase on click
-        if (!params.eraserInstantDelete) {
-            this.erase(params);
-        }
+        this.erase(params);
     }
 
-    onPointerMove(params: PointerEventParams): void {
-        // ON mode: erase whenever cursor moves over an element (no click needed)
-        // OR OFF mode: erase if the mouse button is currently held down
-        if (params.eraserInstantDelete || this.isPressed) {
-            this.erase(params);
-        }
+    onPointerMove(_params: PointerEventParams): void {
+        // Drag erasing removed: moving the pointer must not delete anything.
     }
 
     onPointerUp(_params: PointerEventParams): void {
-        this.isPressed = false;
+        // Nothing to do.
     }
 
     private erase(params: PointerEventParams): void {

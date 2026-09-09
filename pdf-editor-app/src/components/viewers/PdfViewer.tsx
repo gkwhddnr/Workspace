@@ -148,7 +148,6 @@ const PdfViewer: React.FC = () => {
     const {
         currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTabs,
         activeTool, setActiveTool, toolSettings, setToolSettings,
-        eraserInstantDelete, setEraserInstantDelete,
         showToolIndicator,
         pdfOriginalData, setPdfOriginalData
     } = useAppStore();
@@ -292,6 +291,8 @@ const PdfViewer: React.FC = () => {
                             const uint8 = new Uint8Array(data);
                             const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
                             const file = new File([blob], currentFileName || 'restored_file', { type: mimeType || 'application/pdf' });
+                            // Preserve the original file path so Office→PDF saves land next to it.
+                            (file as any).path = currentFilePath;
 
                             setPdfOriginalData(uint8.slice());
                             await loadAnyDocument(file, true); // isRestore=true preserves elements
@@ -841,10 +842,10 @@ const PdfViewer: React.FC = () => {
             let targetPage = 1;
             let pData: string | null = null;
 
-            // For freshly converted Office documents we must load exactly the PDF we just
-            // generated — do not overwrite it with any previously saved (possibly broken)
-            // backend original that happens to share the same filename.
-            if (!skipBackendRestore && file.name) {
+            // Workspace lookup (last viewed page, project data) always runs so a reopened
+            // document resumes where the user left off — even for freshly converted Office
+            // files. Only the backend original PDF restore/upload is skipped for those.
+            if (file.name) {
                 const ws = await workspaceApiService.fetchWorkspace(file.name);
                 if (ws) {
                     if (ws.lastViewedPage >= 1) {
@@ -853,7 +854,7 @@ const PdfViewer: React.FC = () => {
                     if (ws.projectData) {
                         pData = ws.projectData;
                     }
-                    if (ws.hasOriginalPdf) {
+                    if (!skipBackendRestore && ws.hasOriginalPdf) {
                         const origBlob = await workspaceApiService.fetchOriginalPdf(file.name);
                         if (origBlob && origBlob.size > 0) {
                             actualFile = new File([origBlob], file.name, { type: 'application/pdf' });
@@ -861,11 +862,11 @@ const PdfViewer: React.FC = () => {
                         } else {
                             console.warn("[PdfViewer] Original PDF binary is missing or empty on backend. Falling back to local/user file.");
                         }
-                    } else if (file.size > 0) {
+                    } else if (!skipBackendRestore && file.size > 0) {
                         // Upload original only if not already backed up and not empty
                         workspaceApiService.uploadOriginalPdf(file.name, file).catch(console.error);
                     }
-                } else if (file.size > 0) {
+                } else if (!skipBackendRestore && file.size > 0) {
                     // No workspace record yet — upload original for first-time backup
                     workspaceApiService.uploadOriginalPdf(file.name, file).catch(console.error);
                 }
@@ -1090,8 +1091,12 @@ const PdfViewer: React.FC = () => {
             }
             const pdfBlob = new Blob([result.bytes], { type: 'application/pdf' });
             const pdfFile = new File([pdfBlob], result.fileName, { type: 'application/pdf' });
-            // Treat the converted PDF as a new working document so saves target the .pdf.
-            setCurrentFile(result.fileName, result.fileName);
+            // Save the edited PDF next to the original Office file (same folder, .pdf name)
+            // instead of overwriting the .ppt/.pptx (which would corrupt it).
+            const rawPath = (file as any).path || file.name;
+            const dot = rawPath.lastIndexOf('.');
+            const savePath = (dot > 0 ? rawPath.slice(0, dot) : rawPath) + '.pdf';
+            setCurrentFile(savePath, result.fileName);
             // Load the freshly generated PDF directly — skip backend original restore to
             // avoid loading a stale/broken saved original under the same filename.
             await loadPdf(pdfFile, isRestore, true);
@@ -1158,6 +1163,8 @@ const PdfViewer: React.FC = () => {
                     const uint8 = new Uint8Array(data);
                     const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
                     const file = new File([blob], fileName, { type: mimeType || 'application/pdf' });
+                    // Preserve the original file path so Office→PDF saves land next to it.
+                    (file as any).path = filePath;
 
                     setPdfOriginalData(uint8.slice());
                     setCurrentFile(filePath, fileName);
@@ -1635,7 +1642,6 @@ const PdfViewer: React.FC = () => {
             altKey: e.altKey,
             activeTool,
             toolSettings,
-            eraserInstantDelete,
             originalEvent: e
         });
         setIsDrawing(true);
@@ -1654,7 +1660,6 @@ const PdfViewer: React.FC = () => {
             altKey: e.altKey,
             activeTool,
             toolSettings,
-            eraserInstantDelete,
             originalEvent: e
         });
     };
@@ -1673,7 +1678,6 @@ const PdfViewer: React.FC = () => {
             altKey: e.altKey,
             activeTool,
             toolSettings,
-            eraserInstantDelete,
             originalEvent: e
         });
     };
@@ -1715,7 +1719,6 @@ const PdfViewer: React.FC = () => {
                     altKey: false,
                     activeTool,
                     toolSettings,
-                    eraserInstantDelete,
                     originalEvent: {} as any
                 });
                 setIsDrawing(false);
@@ -1723,7 +1726,7 @@ const PdfViewer: React.FC = () => {
         };
         window.addEventListener('blur', handleWindowBlur);
         return () => window.removeEventListener('blur', handleWindowBlur);
-    }, [isDrawing, scale, activeTool, toolSettings, eraserInstantDelete, toolManager]);
+    }, [isDrawing, scale, activeTool, toolSettings, toolManager]);
 
 
     const handleMouseLeaveCanvas = () => {
@@ -1737,7 +1740,6 @@ const PdfViewer: React.FC = () => {
                 altKey: false,
                 activeTool,
                 toolSettings,
-                eraserInstantDelete,
                 originalEvent: {} as any
             });
             setIsDrawing(false);
@@ -2114,7 +2116,7 @@ const PdfViewer: React.FC = () => {
     const toggleTextFormatting = (kind: 'fontWeight' | 'underline' | 'line-through') => {
         const editable = editableRef.current;
         if (!editable) return;
-        editable.focus();
+        editable.focus({ preventScroll: true });
 
         const command = kind === 'fontWeight' ? 'bold' : kind === 'underline' ? 'underline' : 'strikeThrough';
         document.execCommand(command);
@@ -2226,7 +2228,7 @@ const PdfViewer: React.FC = () => {
         if (isInputActive && ed) {
             // Render the stored text + partial formatting into the editable.
             ed.innerHTML = buildRichHtml(tempText, tempSpans);
-            ed.focus();
+            ed.focus({ preventScroll: true });
             // Place caret at the end.
             try {
                 const range = document.createRange();
@@ -2605,7 +2607,7 @@ const PdfViewer: React.FC = () => {
                                             onMouseDown={(e) => {
                                                 e.stopPropagation();
                                                 const ed = editableRef.current;
-                                                if (ed && document.activeElement !== ed) ed.focus();
+                                                if (ed && document.activeElement !== ed) ed.focus({ preventScroll: true });
                                             }}
                                             onKeyDown={handleInputKeyDown}
                                         />

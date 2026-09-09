@@ -9,7 +9,6 @@ export interface PointerEventParams {
     altKey: boolean;
     activeTool: string;
     toolSettings: ToolSettings;
-    eraserInstantDelete?: boolean;
     originalEvent: React.MouseEvent | MouseEvent;
 }
 

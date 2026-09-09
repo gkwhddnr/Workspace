@@ -43,9 +43,6 @@ interface AppState {
     setActiveTool: (tool: DrawingTool) => void;
     toolSettings: ToolSettings;
     setToolSettings: (settings: Partial<ToolSettings>) => void;
-    // Eraser mode: true = instant delete on click, false = drag to erase
-    eraserInstantDelete: boolean;
-    setEraserInstantDelete: (value: boolean) => void;
 
     // File State
     currentFilePath: string | null;
@@ -203,9 +200,6 @@ export const useAppStore = create<AppState>((set) => ({
     setToolSettings: (settings) =>
         set((s) => ({ toolSettings: { ...s.toolSettings, ...settings } })),
 
-    // Eraser mode defaults: ON = instant delete on click
-    eraserInstantDelete: false,
-    setEraserInstantDelete: (value) => set({ eraserInstantDelete: value }),
     currentFilePath: null,
     currentFileName: null,
     setCurrentFile: (path, name) => set({ currentFilePath: path, currentFileName: name }),

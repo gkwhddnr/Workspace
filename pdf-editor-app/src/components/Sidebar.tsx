@@ -27,20 +27,9 @@ const tools: { id: DrawingTool; label: string; shortcut: string; icon: React.Rea
 const Sidebar: React.FC = () => {
     const { 
         activeTool, setActiveTool, toolSettings, setToolSettings, 
-        eraserInstantDelete, setEraserInstantDelete,
         toolIndicator 
     } = useAppStore();
     const strokePreviewRef = useRef<HTMLDivElement>(null);
-    const [showEraserPopup, setShowEraserPopup] = useState(false);
-
-    // Show popup when eraser is selected, hide when switching away
-    useEffect(() => {
-        if (activeTool === 'eraser') {
-            setShowEraserPopup(true);
-        } else {
-            setShowEraserPopup(false);
-        }
-    }, [activeTool]);
 
     // Apply dynamic stroke preview styles via Ref to avoid inline style warnings
     useEffect(() => {
@@ -96,44 +85,6 @@ const Sidebar: React.FC = () => {
                                 </div>
                             )}
                         </button>
-
-                        {/* Eraser mode popup — chat bubble below the eraser button */}
-                        {tool.id === 'eraser' && showEraserPopup && (
-                            <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 z-[300] animate-in fade-in zoom-in duration-150">
-                                {/* Bubble tail pointing up */}
-                                <div className="flex justify-center">
-                                    <div className="w-3 h-3 bg-white border-l border-t border-slate-200 rotate-45 -mb-1.5 shadow-none" />
-                                </div>
-                                <div className="relative bg-white rounded-xl shadow-xl border border-slate-200 px-3 py-2.5 w-[150px]">
-                                    {/* Close */}
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); setShowEraserPopup(false); }}
-                                        className="absolute top-1.5 right-1.5 w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 text-[10px] font-bold transition-colors"
-                                    >✕</button>
-
-                                    <p className="text-[10px] font-black text-slate-600 mb-2 text-center">지우개 모드</p>
-
-                                    {/* Toggle */}
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); setEraserInstantDelete(!eraserInstantDelete); }}
-                                        className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg border transition-all duration-200 ${
-                                            eraserInstantDelete ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'
-                                        }`}
-                                    >
-                                        <span className={`text-[9px] font-bold ${eraserInstantDelete ? 'text-red-600' : 'text-slate-500'}`}>
-                                            {eraserInstantDelete ? '즉시 삭제' : '드래그 삭제'}
-                                        </span>
-                                        <div className={`relative w-7 h-3.5 rounded-full transition-colors duration-200 ${eraserInstantDelete ? 'bg-red-500' : 'bg-slate-300'}`}>
-                                            <div className={`absolute top-0.5 w-2.5 h-2.5 bg-white rounded-full shadow transition-transform duration-200 ${eraserInstantDelete ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
-                                        </div>
-                                    </button>
-
-                                    <p className="text-[8px] text-slate-400 mt-1.5 text-center leading-tight">
-                                        {eraserInstantDelete ? '클릭 즉시 삭제' : '드래그하면 삭제'}
-                                    </p>
-                                </div>
-                            </div>
-                        )}
                         </div>
                     ))}
                 </div>
