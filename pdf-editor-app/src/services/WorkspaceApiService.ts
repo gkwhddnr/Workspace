@@ -162,7 +162,66 @@ export class WorkspaceApiService {
             return null;
         }
     }
-}
 
-// Singleton export
+    // ── Office (.ppt/.pptx) pristine backup & last-save hash ───────────────
+
+    /** Upload pristine (un-edited) Office file keyed by the converted pdf name. */
+    async uploadOriginalOffice(key: string, blob: Blob): Promise<void> {
+        try {
+            const formData = new FormData();
+            formData.append('file', blob, 'original.ppt');
+            formData.append('key', key);
+            await apiClient.post('/workspace/original-office', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+                timeout: 60000
+            });
+        } catch (e) {
+            console.error('[WorkspaceApiService] uploadOriginalOffice failed:', e);
+            throw e;
+        }
+    }
+
+    /** Download pristine Office file. Returns null if never uploaded. */
+    async fetchOriginalOffice(key: string): Promise<Blob | null> {
+        try {
+            const res = await apiClient.get<Blob>('/workspace/original-office', {
+                params: { key },
+                responseType: 'blob',
+                timeout: 60000
+            });
+            return res.data;
+        } catch (e: any) {
+            if (e.response && e.response.status === 404) {
+                return null;
+            }
+            console.error('[WorkspaceApiService] fetchOriginalOffice failed:', e);
+            return null;
+        }
+    }
+
+    /** sha-256 of the last office-save output we wrote, or null. */
+    async getOfficeLastHash(key: string): Promise<string | null> {
+        try {
+            const res = await apiClient.get<{ hash?: string | null }>('/workspace/office-last-hash', {
+                params: { key },
+                timeout: 30000
+            });
+            return res.data?.hash || null;
+        } catch (e) {
+            console.error('[WorkspaceApiService] getOfficeLastHash failed:', e);
+            return null;
+        }
+    }
+
+    async setOfficeLastHash(key: string, hash: string): Promise<void> {
+        try {
+            await apiClient.post('/workspace/office-last-hash', null, {
+                params: { key, hash },
+                timeout: 30000
+            });
+        } catch (e) {
+            console.error('[WorkspaceApiService] setOfficeLastHash failed:', e);
+        }
+    }
+}
 export const workspaceApiService = new WorkspaceApiService();

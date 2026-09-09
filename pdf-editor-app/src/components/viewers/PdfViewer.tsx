@@ -143,6 +143,14 @@ function insertLineBreak(_editable: HTMLElement): void {
     document.execCommand('insertParagraph', false);
 }
 
+/** Hex-formatted sha-256 of a byte array (used for office dirty-detection). */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+}
+
 const PdfViewer: React.FC = () => {
 
     const {
@@ -150,7 +158,11 @@ const PdfViewer: React.FC = () => {
         activeTool, setActiveTool, toolSettings, setToolSettings,
         showToolIndicator,
         pdfOriginalData, setPdfOriginalData,
-        setOfficeOriginal
+        setOfficeOriginal,
+        setOfficeBakedIds,
+        setOfficePristineBytes,
+        officeClean,
+        setOfficeClean
     } = useAppStore();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -1030,6 +1042,18 @@ const PdfViewer: React.FC = () => {
                     // Mark as saved so loading existing annotations doesn't trigger unsaved warning
                     setTimeout(() => markSaved(), 0);
 
+                    // clean 모드(외부 수정 없음)에서는 현재 요소들이 미편집 원본 기준이라
+                    // 아직 파일에 반영되지 않았다. 저장 시 전체를 재구성해야 하므로 baked 목록 = {} (유지).
+                    // dirty 모드(파일이 PowerPoint 등에서 수정됨)에서는 기존 편집분이 이미 파일에
+                    // 셰이프로 새겨져 있으므로, 그 id를 기록해 저장 시 신규 요소만 병합해야 한다.
+                    if (!officeClean) {
+                        const bakedIdsMap: Record<number, string[]> = {};
+                        for (const [pg, els] of Object.entries(migrated)) {
+                            bakedIdsMap[Number(pg)] = els.map((e: any) => e.id).filter(Boolean);
+                        }
+                        setOfficeBakedIds(bakedIdsMap);
+                    }
+
                 } catch (e) {
                     console.error("Failed to parse projectData or migrate elements", e);
                 }
@@ -1095,7 +1119,56 @@ const PdfViewer: React.FC = () => {
 
     const loadOfficeDocument = async (file: File, isRestore: boolean = false) => {
         try {
-            const result = await workspaceApiService.convertOfficeToPdf(file);
+            const rawPath = (file as any)._filePath || (file as any).path || file.name;
+            const baseName = rawPath.replace(/\\/g, '/').split('/').pop() || file.name;
+            const extMatch = /\.(ppt|pptx)$/i.exec(baseName);
+            const ext = extMatch ? extMatch[1].toLowerCase() : 'pptx';
+            // project-data / original-pdf 와 동일한 키(변환된 pdf 이름)로 통일
+            const pdfKey = baseName.replace(/\.(ppt|pptx)$/i, '') + '.pdf';
+
+            // ── 준비: '미편집 원본' 백업 + 외부(PowerPoint) 수정 여부 판정 ──
+            // 백엔드에 미편집 원본이 있으면 그것을 기준으로 삼는다.
+            // 없으면 지금 연 파일(=최초 원본)을 백업한다.
+            // 디스크 파일이 우리가 마지막으로 쓴 출력과 다른 경우(어플 밖에서 수정됨)
+            // 원본 재구성은 위험하므로 저장 시 신규 요소만 병합하는 'dirty' 모드로 동작한다.
+            const diskBytes = new Uint8Array(await file.arrayBuffer());
+            let pristineBytes: Uint8Array | null = null;
+            let dirty = false;
+
+            try {
+                const pristine = await workspaceApiService.fetchOriginalOffice(pdfKey);
+                if (pristine && pristine.size > 0) {
+                    pristineBytes = new Uint8Array(await pristine.arrayBuffer());
+                    const lastHash = await workspaceApiService.getOfficeLastHash(pdfKey);
+                    if (lastHash) {
+                        try {
+                            const diskHash = await sha256Hex(diskBytes);
+                            dirty = diskHash !== lastHash;
+                        } catch (e) {
+                            console.warn('[PdfViewer] sha256 compare failed, treating as dirty:', e);
+                            dirty = true;
+                        }
+                    }
+                } else {
+                    // 첫 진입: 현재 파일을 미편집 원본으로 백업
+                    pristineBytes = diskBytes.slice();
+                    workspaceApiService.uploadOriginalOffice(pdfKey, new Blob([diskBytes.slice()]))
+                        .catch(e => console.warn('[PdfViewer] uploadOriginalOffice failed:', e));
+                }
+            } catch (e) {
+                console.warn('[PdfViewer] office baseline setup failed, falling back to disk:', e);
+                pristineBytes = diskBytes.slice();
+                dirty = true;
+            }
+
+            setOfficePristineBytes(pristineBytes.slice());
+            setOfficeClean(!dirty);
+
+            // 변환 기준: pristine(미편집) 또는 현재 디스크 파일
+            const baseBytes = pristineBytes && !dirty ? pristineBytes : diskBytes;
+            const result = await workspaceApiService.convertOfficeToPdf(
+                new File([baseBytes], baseName)
+            );
             if (!result || !result.bytes || result.bytes.length === 0) {
                 alert('PPT/PPTX를 PDF로 변환하는 데 실패했습니다.');
                 return;
@@ -1104,12 +1177,13 @@ const PdfViewer: React.FC = () => {
             const pdfFile = new File([pdfBlob], result.fileName, { type: 'application/pdf' });
             // Save the edited PDF next to the original Office file (same folder, .pdf name)
             // instead of overwriting the .ppt/.pptx (which would corrupt it).
-            const rawPath = (file as any)._filePath || (file as any).path || file.name;
-            const dot = rawPath.lastIndexOf('.');
-            const savePath = (dot > 0 ? rawPath.slice(0, dot) : rawPath) + '.pdf';
+            const dot = baseName.lastIndexOf('.');
+            const savePath = (dot > 0 ? baseName.slice(0, dot) : baseName) + '.pdf';
             // Remember the original Office file so Ctrl+S can write annotations back into it.
-            const extMatch = /\.(ppt|pptx)$/i.exec(rawPath);
-            setOfficeOriginal(extMatch ? rawPath : null, extMatch ? extMatch[1].toLowerCase() : null);
+            setOfficeOriginal(extMatch ? rawPath : null, ext);
+            // 신규 오피스 파일일 경우 요소 기록이 없으므로 기존 반영분이 없다고 초기화하고,
+            // loadPdf에서 projectData를 복원하면 실제 반영분이 덮어씌워진다.
+            setOfficeBakedIds({});
             setCurrentFile(savePath, result.fileName);
             // Load the freshly generated PDF directly — skip backend original restore to
             // avoid loading a stale/broken saved original under the same filename.
@@ -1140,10 +1214,14 @@ const PdfViewer: React.FC = () => {
         }
         if (lower.endsWith('.pdf') || file.type === 'application/pdf') {
             setOfficeOriginal(null, null);
+            setOfficePristineBytes(null);
+            setOfficeClean(true);
             return loadPdf(file, isRestore);
         }
         if (lower.endsWith('.png') || file.type === 'image/png') {
             setOfficeOriginal(null, null);
+            setOfficePristineBytes(null);
+            setOfficeClean(true);
             return loadImage(file, isRestore);
         }
 

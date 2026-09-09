@@ -27,6 +27,7 @@ const tools: { id: DrawingTool; label: string; shortcut: string; icon: React.Rea
 const Sidebar: React.FC = () => {
     const { 
         activeTool, setActiveTool, toolSettings, setToolSettings, 
+        customColors, isColorPickerActive, setColorPickerActive,
         toolIndicator 
     } = useAppStore();
     const strokePreviewRef = useRef<HTMLDivElement>(null);
@@ -38,6 +39,9 @@ const Sidebar: React.FC = () => {
             strokePreviewRef.current.style.setProperty('--stroke-height', `${toolSettings.strokeWidth * 2}px`);
         }
     }, [toolSettings.strokeWidth]);
+
+    const sanitizedCurrentColor = '#' + toolSettings.color.replace(/^#+/, '').toUpperCase();
+    const isCustomColor = customColors.includes(sanitizedCurrentColor);
 
     return (
         <div className="h-full flex flex-col gap-6 px-5 py-6 overflow-y-auto theme-bg-panel">
@@ -119,23 +123,83 @@ const Sidebar: React.FC = () => {
                     ))}
                 </div>
                 {/* Custom color input */}
-                <div className="flex items-center justify-between mt-3 px-1.5 py-2 bg-slate-50 theme-bg-sub rounded-xl border theme-border border-dashed">
-                    <div className="flex items-center gap-2">
-                        <Palette size={14} className="text-indigo-500" />
-                        <input
-                            id="custom-color-picker"
-                            type="color"
-                            value={toolSettings.color}
-                            onChange={(e) => setToolSettings({ color: e.target.value })}
-                            className="w-6 h-6 rounded-lg cursor-pointer border-0 p-0 overflow-hidden"
-                            title="커스텀 색상 선택"
-                        />
-                        <span className="text-[10px] font-mono font-bold theme-text-muted">{toolSettings.color.toUpperCase()}</span>
+                <div className={`flex flex-col mt-3 bg-slate-50 theme-bg-sub rounded-xl border theme-border transition-all ${isColorPickerActive ? 'border-indigo-500 shadow-md ring-1 ring-indigo-500' : 'border-dashed'}`}>
+                    <div className="flex items-center justify-between px-1.5 py-2">
+                        <div
+                            className="flex items-center gap-2 cursor-pointer"
+                            onClick={() => {
+                                setColorPickerActive(true);
+                                document.getElementById('custom-color-picker')?.click();
+                            }}
+                        >
+                            <Palette size={14} className="text-indigo-500" />
+                            <input
+                                id="custom-color-picker"
+                                type="color"
+                                value={toolSettings.color}
+                                onChange={(e) => {
+                                    setToolSettings({ color: e.target.value });
+                                    setColorPickerActive(true);
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                className="w-6 h-6 rounded-lg cursor-pointer border-0 p-0 overflow-hidden"
+                                title="커스텀 색상 선택"
+                            />
+                            <span className="text-[10px] font-mono font-bold theme-text-muted">{toolSettings.color.toUpperCase()}</span>
+                        </div>
+                        <div className="flex items-center gap-1 px-1.5 py-0.5 bg-white theme-bg-main border theme-border rounded shadow-sm">
+                            <span className="text-[8px] font-black text-indigo-600">Alt + C</span>
+                        </div>
                     </div>
-                    <div className="flex items-center gap-1 px-1.5 py-0.5 bg-white theme-bg-main border theme-border rounded shadow-sm">
-                        <span className="text-[8px] font-black text-indigo-600">Alt + C</span>
-                    </div>
+
+                    {isColorPickerActive && (
+                        <div className="px-2 pb-2 pt-1 flex justify-end gap-2 border-t border-slate-200 theme-border-subtle mt-1">
+                            <button
+                                disabled={!isCustomColor}
+                                onClick={() => {
+                                    useAppStore.getState().removeCustomColor(toolSettings.color);
+                                    setColorPickerActive(false);
+                                }}
+                                className={`flex items-center gap-1 px-3 py-1 rounded-md text-[10px] font-bold shadow-sm transition-colors ${
+                                    isCustomColor
+                                        ? 'bg-red-500 hover:bg-red-600 text-white'
+                                        : 'bg-slate-200 text-slate-400 cursor-not-allowed theme-bg-sub theme-text-muted'
+                                }`}
+                            >
+                                삭제 (D)
+                            </button>
+                            <button
+                                onClick={() => {
+                                    useAppStore.getState().addCustomColor(toolSettings.color);
+                                    setColorPickerActive(false);
+                                }}
+                                className="flex items-center gap-1 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-[10px] font-bold shadow-sm transition-colors"
+                            >
+                                저장 (S)
+                            </button>
+                        </div>
+                    )}
                 </div>
+
+                {/* Custom Colors List */}
+                {customColors.length > 0 && (
+                    <div className="mt-2">
+                        <p className="text-[9px] font-bold uppercase text-slate-400 mb-1.5 px-1">저장된 커스텀 색상</p>
+                        <div className="flex flex-wrap gap-1.5">
+                            {customColors.map((color) => (
+                                <button
+                                    key={`custom-${color}`}
+                                    ref={(el) => { if (el) el.style.setProperty('--bg-color', color); }}
+                                    onClick={() => setToolSettings({ color })}
+                                    title={`저장된 색상: ${color}`}
+                                    className={`sidebar-color-btn w-6 h-6 rounded-full shadow-sm transition-transform hover:scale-110 border ${
+                                        toolSettings.color.toUpperCase() === color.toUpperCase() ? 'border-indigo-500 scale-110' : 'border-white/50'
+                                    }`}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
 
             <div className="h-px bg-slate-200/50" />

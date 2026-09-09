@@ -236,4 +236,67 @@ class PdfController(
         println("[PdfController] downloadOriginalPdf: file NOT FOUND for filename=$filename")
         return ResponseEntity.notFound().build()
     }
+
+    // ── Office pristine backup ──────────────────────────────────────────────
+
+    /**
+     * Upload a pristine (un-edited) Office file. Keyed by the converted pdf name
+     * (same key the project-data / original-pdf flows use). Written once only;
+     * subsequent uploads are ignored so later sessions can keep rebuilding from
+     * a truly un-edited baseline.
+     */
+    @PostMapping("/workspace/original-office")
+    fun uploadOriginalOffice(@RequestParam("file") file: MultipartFile, @RequestParam("key") key: String): ResponseEntity<Void> {
+        return try {
+            val resolvedKey = key.takeIf { it.isNotBlank() } ?: file.originalFilename ?: "document.pptx"
+            println("[PdfController] uploadOriginalOffice: key=$resolvedKey, fileSize=${file.size}")
+            if (file.isEmpty) {
+                println("[PdfController] uploadOriginalOffice: Skipping empty file")
+                return ResponseEntity.ok().build()
+            }
+            fileStorageService.saveOriginalOffice(file, resolvedKey)
+            ResponseEntity.ok().build()
+        } catch (e: Exception) {
+            println("[PdfController] uploadOriginalOffice ERROR: ${e.message}")
+            e.printStackTrace()
+            ResponseEntity.internalServerError().build()
+        }
+    }
+
+    @GetMapping("/workspace/original-office")
+    fun downloadOriginalOffice(@RequestParam("key") key: String): ResponseEntity<org.springframework.core.io.Resource> {
+        println("[PdfController] downloadOriginalOffice: key=$key")
+        val path = fileStorageService.getOriginalOffice(key)
+        if (path != null) {
+            val resource = org.springframework.core.io.UrlResource(path.toUri())
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"${path.fileName}\"")
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(resource)
+        }
+        println("[PdfController] downloadOriginalOffice: file NOT FOUND for key=$key")
+        return ResponseEntity.notFound().build()
+    }
+
+    /** sha-256 of the last office-save output we wrote to disk for this file. */
+    @GetMapping("/workspace/office-last-hash")
+    fun getOfficeLastHash(@RequestParam("key") key: String): ResponseEntity<Map<String, String?>> {
+        return try {
+            ResponseEntity.ok(mapOf("hash" to fileStorageService.getOfficeLastHash(key)))
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ResponseEntity.internalServerError().build()
+        }
+    }
+
+    @PostMapping("/workspace/office-last-hash")
+    fun putOfficeLastHash(@RequestParam("key") key: String, @RequestParam("hash") hash: String): ResponseEntity<Void> {
+        return try {
+            if (hash.isNotBlank()) fileStorageService.putOfficeLastHash(key, hash)
+            ResponseEntity.ok().build()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ResponseEntity.internalServerError().build()
+        }
+    }
 }

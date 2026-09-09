@@ -168,4 +168,64 @@ class FileStorageService(
         println("[FileStorageService] getOriginalPdf: looking for ${target.toAbsolutePath()}")
         return if (Files.exists(target)) target else null
     }
+
+    // ── Office (.ppt/.pptx) pristine backup & last-output hash ─────────────
+
+    private fun officeDir(): Path {
+        val path = Paths.get("data", "originals-office")
+        if (!Files.exists(path)) Files.createDirectories(path)
+        return path
+    }
+
+    fun officeSanitize(name: String): String =
+        AbstractFileStorageService.sanitizeFilename(name.trim()).ifBlank { "document.pptx" }
+
+    /**
+     * Pristine (un-edited) Office file backup, keyed by the converted pdf name
+     * (e.g. "강화학습_1장.pdf" or the original ppt name — callers pass the
+     * converted pdf name for consistency with project-data keys).
+     * Only written once per key so later sessions can always rebuild from the
+     * truly un-edited baseline.
+     */
+    fun saveOriginalOffice(file: MultipartFile, key: String) {
+        if (file.isEmpty) {
+            println("[FileStorageService] saveOriginalOffice: Received empty file for $key, skipping.")
+            return
+        }
+        val safeKey = officeSanitize(key)
+        val path = officeDir().resolve("$safeKey.ppt")
+        if (Files.exists(path)) {
+            println("[FileStorageService] saveOriginalOffice: already exists at ${path.toAbsolutePath()}, skipping.")
+            return
+        }
+        Files.copy(file.inputStream, path, StandardCopyOption.REPLACE_EXISTING)
+        println("[FileStorageService] saveOriginalOffice: saved to ${path.toAbsolutePath()}")
+    }
+
+    fun getOriginalOffice(key: String): Path? {
+        val safeKey = officeSanitize(key)
+        val target = officeDir().resolve("$safeKey.ppt")
+        return if (Files.exists(target)) target else null
+    }
+
+    /**
+     * sha-256 of the last office-save output we wrote to disk, per key.
+     * On reopen the frontend compares the current disk file against this hash:
+     *  - equal → no external (PowerPoint) edits → safe to rebuild from pristine
+     *  - different → user edited the file outside the app → merge by delta only
+     */
+    fun putOfficeLastHash(key: String, hash: String) {
+        val safeKey = officeSanitize(key)
+        val target = officeDir().resolve("$safeKey.hash")
+        Files.write(target, hash.toByteArray())
+        println("[FileStorageService] putOfficeLastHash: $key -> ${hash.take(12)}...")
+    }
+
+    fun getOfficeLastHash(key: String): String? {
+        val safeKey = officeSanitize(key)
+        val target = officeDir().resolve("$safeKey.hash")
+        return if (Files.exists(target)) {
+            Files.readString(target).trim().ifBlank { null }
+        } else null
+    }
 }

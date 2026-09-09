@@ -43,6 +43,11 @@ interface AppState {
     setActiveTool: (tool: DrawingTool) => void;
     toolSettings: ToolSettings;
     setToolSettings: (settings: Partial<ToolSettings>) => void;
+    customColors: string[];
+    addCustomColor: (color: string) => void;
+    removeCustomColor: (color: string) => void;
+    isColorPickerActive: boolean;
+    setColorPickerActive: (active: boolean) => void;
 
     // File State
     currentFilePath: string | null;
@@ -54,6 +59,19 @@ interface AppState {
     officeOriginalPath: string | null;
     officeOriginalExt: string | null;
     setOfficeOriginal: (path: string | null, ext: string | null) => void;
+    // 이미 ppt/pptx 파일에 반영(_ONCE 적용)된 요소 id 목록.
+    // 저장 시 이 목록에 없는 신규 요소만 백엔드에 보내 중복 도형이 쌓이지 않도록 한다.
+    officeBakedIds: Record<number, string[]>;
+    setOfficeBakedIds: (ids: Record<number, string[]>) => void;
+    // 백엔드에 보관된 '미편집 원본' 오피스 파일. 이 기준에서 전체 요소로 재구성하면
+    // 기존 셰이프의 이동/색변경/삭제까지 모두 반영할 수 있다.
+    officePristineBytes: Uint8Array | null;
+    setOfficePristineBytes: (data: Uint8Array | null) => void;
+    // 현재 디스크 파일이 지난 office-save 출력(해시 비교)과 동일한 경우 true.
+    // false면 사용자가 PowerPoint 등에서 파일을 직접 수정한 것이므로
+    // 원본 재구성 대신 신규 요소만 병합(델타)해야 한다.
+    officeClean: boolean;
+    setOfficeClean: (clean: boolean) => void;
 
     // Web Viewer
     webUrl: string;
@@ -99,6 +117,17 @@ const getStoredThemeMode = (): ThemeMode => {
 
 const getStoredCustomColor = (): string => {
     return localStorage.getItem('customThemeColor') || '#fceabb';
+};
+
+const getStoredCustomColors = (): string[] => {
+    try {
+        const stored = localStorage.getItem('customColors');
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed)) return parsed.filter(c => typeof c === 'string');
+        }
+    } catch (e) { /* ignore */ }
+    return [];
 };
 
 const calculateLuminance = (hex: string) => {
@@ -206,6 +235,31 @@ export const useAppStore = create<AppState>((set) => ({
     setToolSettings: (settings) =>
         set((s) => ({ toolSettings: { ...s.toolSettings, ...settings } })),
 
+    customColors: getStoredCustomColors(),
+    addCustomColor: (color) => set((s) => {
+        let sanitized = color;
+        if (!sanitized.startsWith('#')) sanitized = '#' + sanitized;
+        sanitized = '#' + sanitized.replace(/^#+/, '').toUpperCase();
+
+        if (s.customColors.includes(sanitized)) return s;
+
+        // Keep up to 8 colors, move to front if it already exists
+        const newColors = [sanitized, ...s.customColors.filter(c => c !== sanitized)].slice(0, 8);
+        localStorage.setItem('customColors', JSON.stringify(newColors));
+        return { customColors: newColors, isColorPickerActive: false };
+    }),
+    removeCustomColor: (color) => set((s) => {
+        let sanitized = color;
+        if (!sanitized.startsWith('#')) sanitized = '#' + sanitized;
+        sanitized = '#' + sanitized.replace(/^#+/, '').toUpperCase();
+
+        const newColors = s.customColors.filter(c => c !== sanitized);
+        localStorage.setItem('customColors', JSON.stringify(newColors));
+        return { customColors: newColors };
+    }),
+    isColorPickerActive: false,
+    setColorPickerActive: (active) => set({ isColorPickerActive: active }),
+
     currentFilePath: null,
     currentFileName: null,
     setCurrentFile: (path, name) => set({ currentFilePath: path, currentFileName: name }),
@@ -214,6 +268,12 @@ export const useAppStore = create<AppState>((set) => ({
     officeOriginalPath: null,
     officeOriginalExt: null,
     setOfficeOriginal: (path, ext) => set({ officeOriginalPath: path, officeOriginalExt: ext }),
+    officeBakedIds: {},
+    setOfficeBakedIds: (ids) => set({ officeBakedIds: ids }),
+    officePristineBytes: null,
+    setOfficePristineBytes: (data) => set({ officePristineBytes: data }),
+    officeClean: true,
+    setOfficeClean: (clean) => set({ officeClean: clean }),
 
     // Web Viewer defaults
     webUrl: 'https://www.google.com',
