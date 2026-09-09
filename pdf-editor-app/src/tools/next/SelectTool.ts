@@ -443,12 +443,36 @@ class SelectDraggingSubState implements ISelectSubState {
             }
         }
 
-        // Register undo command
-        if (this.handle !== 'body' && !this.snapPartner) {
-            const history = this.tool.getCommandHistory?.(state.currentPage);
-            if (history) {
-                const cmd = new UpdateElementCommand(state.currentPage, this.element, this.initialSnapshot, state.setElements);
-                history.stack?.push(cmd);
+        // Register an undo command for body moves AND handle resize/endpoint drags.
+        // The live element is already mutated to its final state, so the command is
+        // built from pre-drag (initialSnapshot) and post-drag snapshots and pushed
+        // properly (execute + pointer advance). Skipped only for arrow-merge drops.
+        if (!this.snapPartner) {
+            const s = this.element as any;
+            const finalProps: Record<string, any> = {};
+            if (s.x !== undefined || this.initialSnapshot.x !== undefined) finalProps.x = s.x;
+            if (s.y !== undefined || this.initialSnapshot.y !== undefined) finalProps.y = s.y;
+            if (s.width !== undefined || this.initialSnapshot.width !== undefined) finalProps.width = s.width;
+            if (s.height !== undefined || this.initialSnapshot.height !== undefined) finalProps.height = s.height;
+            if (this.initialSnapshot.points) finalProps.points = s.points?.map((p: { x: number; y: number }) => ({ ...p }));
+
+            const changed = Object.keys(finalProps).some(key => {
+                if (key === 'points') {
+                    const a = this.initialSnapshot.points as { x: number; y: number }[];
+                    const b = finalProps.points as { x: number; y: number }[];
+                    if ((a?.length || 0) !== (b?.length || 0)) return true;
+                    return a.some((p, i) => p.x !== b[i].x || p.y !== b[i].y);
+                }
+                return this.initialSnapshot[key] !== finalProps[key];
+            });
+
+            if (changed) {
+                const history = this.tool.getCommandHistory?.(state.currentPage);
+                if (history) {
+                    const preDrag = { id: this.element.id, ...this.initialSnapshot } as any;
+                    const cmd = new UpdateElementCommand(state.currentPage, preDrag, finalProps, state.setElements);
+                    history.push(cmd);
+                }
             }
         }
         state.incrementRevision();

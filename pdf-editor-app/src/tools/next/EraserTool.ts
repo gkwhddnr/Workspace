@@ -41,9 +41,11 @@ export class EraserTool extends AbstractTool {
         });
 
         if (toDelete.length > 0) {
+            const history = state.getCommandHistory?.(state.currentPage);
             toDelete.forEach((el: RenderElement) => {
                 const command = new DeleteElementCommand(state.currentPage, el, state.setElements);
-                command.execute();
+                if (history) history.push(command);
+                else command.execute();
             });
             state.incrementRevision();
         }
