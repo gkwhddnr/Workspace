@@ -231,6 +231,44 @@
 
 ---
 
+## 2026-09-09
+
+### 완료된 작업
+
+#### 사각형 텍스트 스냅 병합
+
+- Q 도구로 텍스트 스냅 시 같은 가로/세로 띠에서 겹치는 기존 사각형을 하나의 외곽 사각형으로 병합
+- 공유되는 내부 변 제거 효과를 적용하고, 병합을 `CompositeCommand`로 기록하여 Undo/Redo 지원
+- 높이와 위치가 다른 부분 교차 사각형은 병합하지 않아 불필요한 영역이 외곽선으로 생성되지 않도록 제한
+- 겹친 사각형은 바운딩 박스 전체가 아니라 합집합의 외곽 선분만 렌더링하여 내부 빨간 변 제거
+- 기존 저장 도형에 `outlineSegments` 또는 `points`가 없을 때 빈 배열로 처리하여 복원 렌더링 크래시 방지
+- 병합된 사각형의 원본 `rectParts`를 보존하여 추가 스냅 시 기존 외곽선 형태가 바운딩 박스로 변형되지 않도록 수정
+- **파일**: `src/tools/next/ShapeTool.ts`
+
+### 검증
+
+- `npm run build` 성공
+
+#### Undo/Redo 정상화 (커맨드 등록 수정)
+
+- 선택 도구(SelectTool): 요소를 드래그해서 **이동**했을 때 커맨드에 기록되지 않아 Ctrl+Z가 동작하지 않던 문제 수정 — 이동 포함 모든 드래그를 사전(initialSnapshot)·사후(finalProps) 스냅샷 기반 `UpdateElementCommand`로 구성하고 `history.push()`로 정상 등록 (변화 없으면 건너뜀)
+- 크기 조절(리사이즈)·화살표 끝점 드래그가 `history.stack?.push(cmd)`로 push를 우회해 `execute()`·포인터 증가가 누락되어 Undo/Redo 순서가 뒤바뀌던 문제 수정 — `CommandHistory.push()`만 사용하도록 교체
+- 지우개(EraserTool): `DeleteElementCommand.execute()` 직접 호출로 히스토리에 남지 않아 삭제 후 복구가 안 되던 문제 수정 — `state.getCommandHistory()`로 `history.push()` 등록 (없으면 `execute()` 폴백)
+- **파일**: `src/tools/next/SelectTool.ts`, `src/tools/next/EraserTool.ts`
+
+#### PPT/PPTX 저장 안정화 (하이브리드 저장)
+
+- 원본 PPT를 디스크에 보관하고 sha-256 해시 비교로 외부(PowerPoint) 수정 여부 감지
+- clean(외부 수정 없음): 원본 + 전체 요소 재구성 / **dirty(외부 수정 있음)**: 디스크 + 신규 요소 델타 병합 → 반복 저장 시 도형이 중복으로 쌓이지 않고, 다시 열었을 때 이전 편집이 유지됨
+- 커스텀 색상 복원 및 saveProjectData 영속화
+- **파일**: `PdfViewer.tsx`, `useSavePdf.ts`, `WorkspaceApiService.ts`, `PdfController.kt`, `FileStorageService.kt`
+
+#### PPT(.ppt) 형광펜 가림 문제 해결
+
+- HSLF(HPPTRasterizer)가 셰이프 필 알파를 지원하지 않아 형광펜이 불투명 사각형으로 저장되어 아래 필기가 가려지던 문제 해결 — 형광펜만 반투명 PNG 삽입 방식으로 전환, rect/circle 타입 셰이프 유지
+- 회귀 테스트 `OfficeEditServiceTest` 추가
+- **파일**: `OfficeEditService.kt`, `OfficeEditServiceTest.kt`
+
 ## 2026-04-27
 
 ### 완료된 작업

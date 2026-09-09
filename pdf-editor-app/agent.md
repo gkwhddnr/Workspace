@@ -50,3 +50,4 @@
 - handleTextClick hit test는 `el.type === 'text'`만 대상으로
 - 한글 파일명은 `encodeURIComponent` / `URLDecoder.decode` 처리
 - textBgOpacity는 편집 시 덮어쓰지 말 것 (사용자 설정 유지)
+- 모든 편집(이동·크기조절·끝점 드래그·지우개)은 `CommandHistory.push()`로 커맨드 기록 (내부 `stack` 직접 조작 금지)

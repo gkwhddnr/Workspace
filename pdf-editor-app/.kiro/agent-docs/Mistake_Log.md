@@ -99,3 +99,11 @@
 - **한글 파일명 PPT/PPTX 변환 실패 (500)**: 임시 변환 폴더에 원본 한글 파일명을 그대로 저장하고, COM 스크립트(.ps1)를 UTF-8 **BOM 없이** `Files.writeString`로 기록 → PowerShell 5.1이 ANSI(CP949)로 해석해 경로가 깨져 변환 실패. **해결**: 임시 파일명 ASCII 고정(`input.$ext`) + .ps1은 반드시 `BOM(EF BB BF) + UTF-8`로 기록할 것.
 - **변환 성공 후 Quit() RPC 예외 오판**: PowerPoint COM 변환 성공 뒤 `Quit()`의 RPC 예외가 변환 실패로 오판되어 성공한 결과를 버리던 문제. COM **정리(cleanup) 단계의 예외는 성공/실패 판정과 분리**해야 함.
 - **Git 작업 트리 부분 롤백 주의**: 특정 기능을 되돌리기 위해 이전 커밋의 파일을 체크아웃할 때, 대상 파일을 정확히 특정하지 않으면 그 사이의 다른 수정(변환 타임아웃/확장자 판별 등)까지 같이 날아갈 수 있음. 롤백 후에는 `git diff <대상커밋>`으로 의도한 차이만 존재하는지 반드시 검증할 것. (실제로 `PdfViewer.tsx`·`WorkspaceApiService.ts`가 4addf54로 남아 3개 픽스가 유실됨)
+
+---
+
+## 2026-09-09
+
+- **이동 드래그 커맨드 미등록**: `SelectTool`이 `handle !== 'body'` 조건으로 본문 이동을 커맨드에 기록하지 않아 Ctrl+Z가 동작하지 않음. **이동 등 모든 사용자 편집은 Undo/Redo 커맨드로 기록해야 함.**
+- **히스토리 내부 스택 직접 조작**: `history.stack?.push(cmd)`로 push를 우회하면 `execute()`와 포인터 증가가 누락되어 canRedo가 잘못 참이 되고 Undo/Redo 순서가 뒤바뀜. **반드시 `CommandHistory.push()`만 사용할 것.**
+- **지우개 커맨드 미등록**: erase 시 `DeleteElementCommand.execute()` 직접 호출로 히스토리에 남지 않아 삭제 후 복구가 불가능. **삭제 동작도 `history.push()`로 기록할 것.**

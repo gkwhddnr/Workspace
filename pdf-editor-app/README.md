@@ -103,6 +103,7 @@ cd backend
 - 드래그로 크기 결정
 - 원은 타원형 지원 (가로/세로 자유 조절)
 - **텍스트 스냅**: 형광펜과 동일하게 PDF 텍스트 영역에 맞게 자동 조정
+- 텍스트 스냅 사각형이 기존 사각형과 겹치면 겹친 내부 변을 제거하고 합집합 외곽선만 하나로 렌더링
 
 ---
 
@@ -353,7 +354,7 @@ graph TD
 #### 4. Model Layer — Composite Pattern
 - **RenderElement**: 모든 그래픽 요소의 추상 기반 클래스. `accept(visitor)`, `getBoundingBox()`, `move()`, `clone()` 인터페이스를 정의합니다.
 - **PathElement**: 펜/형광펜의 점 배열 경로.
-- **ShapeElement**: 화살표, 사각형, 원, 형광펜 도형. `shapeType`으로 세부 타입을 구분합니다.
+- **ShapeElement**: 화살표, 사각형, 원, 형광펜 도형. `shapeType`으로 세부 타입을 구분합니다. 사각형 병합 시 합집합 외곽 선분(`outlineSegments`)과 원본 사각형(`rectParts`) 필드를 지닙니다.
 - **TextElement**: 텍스트 박스. 폰트, 크기, 색상, 줄 바꿈 정보와 함께 **부분 서식** 데이터(`fontWeight`/`textDecoration`, 선택 범위 `spans`)를 포함합니다.
 - **ImageElement**: 삽입된 이미지. Base64 src와 위치/크기 정보를 포함합니다.
 
@@ -365,7 +366,7 @@ graph TD
 - **CommandHistory**: 페이지별 Undo/Redo 스택. `push(command)`는 즉시 실행 후 스택에 추가합니다.
 - **AddElementCommand / DeleteElementCommand / UpdateElementCommand**: 각각 요소 추가/삭제/수정 작업을 캡슐화합니다. `undo()`로 역작업이 가능합니다.
 - **AddTextCommand / UpdateTextCommand / DeleteTextCommand**: 텍스트 요소 전용 커맨드. 텍스트 부분 서식 변경도 하나의 명령으로 Undo/Redo됩니다.
-- **CompositeCommand**: 여러 커맨드를 하나로 묶어 묶음 실행/되돌리기를 지원합니다.
+- **CompositeCommand**: 여러 커맨드를 하나로 묶어 묶음 실행/되돌리기를 지원합니다. 사각형(Q) 텍스트 스냅 병합 시 기존 사각형 삭제 + 병합 도형 추가를 하나의 Undo/Redo 단위로 묶습니다.
 
 #### 7. Backend Layer
 - **WorkspaceApiService**: 백엔드 HTTP 호출을 캡슐화하는 Axios 기반 Facade. 타임아웃, 인터셉터, 보안 헤더가 통합되어 있습니다.
@@ -384,6 +385,15 @@ graph TD
 ---
 
 ## 📋 업데이트 이력
+
+### 2026-09-09
+- **사각형(Q) 도구 텍스트 스냅 병합**: 텍스트에 스냅된 새 사각형이 기존 사각형과 겹치면, 겹친 내부 변을 제거한 **합집합 외곽선만 하나의 도형으로 병합**
+  - `ShapeElement`에 `outlineSegments`(외곽 선분) / `rectParts`(원본 사각형) 필드 추가 → 병합 사각형은 바운딩 박스가 아닌 합집합 외곽 선분만 렌더링
+  - 겹친 사각형 삭제 + 병합 도형 추가를 `CompositeCommand`로 묶어 Undo/Redo 지원
+  - `rectParts` 보존으로 연속 병합 시 기존 외곽선 형태가 바운딩 박스로 변형되지 않음, 저장/복원 시 필드 안전 처리
+- **Undo/Redo 정상화**: 요소 이동(드래그)·크기 조절·화살표 끝점 드래그가 커맨드에 기록되지 않거나 `stack` 우회 push로 Undo/Redo 순서가 뒤바뀌던 문제 수정, 지우개 삭제도 Undo 가능하도록 개선
+- **PPT/PPTX 저장 안정화 (하이브리드 저장)**: 원본 PPT 보관 + 디스크 sha-256 해시 비교로 외부(PowerPoint) 수정 감지 — clean이면 원본+전체 요소 재구성, dirty면 디스크+신규 요소만 델타 병합하여 반복 저장 도형 중복 방지, 재열기 편집 유지, 커스텀 색상 복원
+- **PPT(.ppt) 형광펜 가림 문제 해결**: HSLF가 셰이프 필 알파를 지원하지 않아 형광펜이 불투명 사각형으로 저장되던 문제를 반투명 PNG 삽입으로 해결
 
 ### 2026-09-07
 - **PPT/PPTX 변환 인코딩 수정**: 한글 파일명 원본이 PowerShell ANSI(CP949) 해석으로 깨져 변환이 500으로 실패하던 문제 해결 — 임시 파일명은 ASCII 고정, 변환 스크립트는 UTF-8 BOM으로 기록

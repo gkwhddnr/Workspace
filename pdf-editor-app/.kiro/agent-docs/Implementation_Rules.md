@@ -131,3 +131,26 @@
 
 - 특정 기능 롤백을 위해 `git checkout <커밋> -- <파일>`을 사용하면, 다른 커밋이 함께 섞여 의도하지 않은 픽스까지 날아갈 수 있음.
 - **검증 필수**: 롤백 후 `git diff <대상 커밋> -- <해당 파일들>`의 결과가 의도한 변경뿐인지, 그리고 `git diff HEAD -- <파일>`의 예상 넓이를 확인할 것.
+
+---
+
+## Undo/Redo 커맨드 등록 원칙 (Command History Registration)
+
+- **규칙 1**: 사용자 편집(그리기·이동·크기 조절·끝점 드래그·삭제·텍스트 편집)은 반드시 `CommandHistory.push(command)`를 통해 기록할 것. `push()`가 즉시 실행 + 스택 추가 + 포인터 증가를 모두 처리한다.
+- **규칙 2**: `history.stack?.push(cmd)`처럼 내부 스택을 직접 조작하지 말 것 — `execute()`와 포인터 증가가 누락되어 canRedo 상태가 어긋나 Undo/Redo 순서가 뒤바뀜.
+- **규칙 3**: 요소 **이동(드래그)도 커맨드로 기록**해야 한다. 요소가 이미 변형된 상태일 경우 사전(`initialSnapshot`)·사후(`finalProps`) 스냅샷으로 `UpdateElementCommand`를 구성하여 `push()`하면 재실행이 무해(idempotent)해진다.
+- **규칙 4**: 지우개 등 삭제 동작도 `DeleteElementCommand`를 `history.push()`로 등록할 것. `command.execute()` 직접 호출은 Undo 불가.
+- **관련 파일**: `SelectTool.ts`, `EraserTool.ts`, `CommandHistory.ts`
+
+---
+
+## 사각형 합집합 병합 (Rect Union Merge)
+
+- **목적**: Q 도구로 텍스트에 스냅(snapped)된 새 사각형이 기존 사각형과 겹치면, 겹친 내부 변을 제거한 합집합 외곽선 하나로 병합한다. 빈 영역 드래그(스냅 없음)는 일반 추가로만 동작.
+- **병합 대상**: `candidate.rectParts`(있으면) 또는 단일 사각형과 새 사각형이 **면적이 양수로 겹치는** 기존 `rect` 요소 전부.
+- **외곽선 추출**: `buildUnionOutline()` — 모든 rect의 x/y 경계를 그리드로 나누고, 내부 셀 중 외부에 접한 변만 `outlineSegments`(BorderSegment[])로 수집 (수학적 boolean union, 픽셀 비의존).
+- **병합 도형**: 반드시 `new ShapeElement(...)` 생성자로 만들고 `x/y/width/height`는 합집합 전체 바운딩 박스, `outlineSegments`=외곽 선분, `rectParts`=원본 사각형들. 클래스 생성자를 꼭 사용할 것 (JSON 직렬화 메서드 유실 방지).
+- **렌더링**: `CanvasRenderVisitor`는 rect에 `outlineSegments`가 있으면 스트로크 rect 대신 외곽 선분만 그려 내부 변을 숨긴다. null/빈 배열이면 빈 배열로 fallback (복원 크래시 방지).
+- **Undo/Redo**: 기존 rect 삭제(`DeleteElementCommand`) + 병합 rect 추가(`AddElementCommand`)를 `CompositeCommand`로 묶어 하나의 Undo/Redo 단위로 기록.
+- **복원**: `PdfViewer` 요소 로드 시 `d.outlineSegments`/`d.rectParts`를 복원해 연속 병합 시 기존 외곽선 형태가 바운딩 박스로 변형되지 않게 함.
+- **관련 파일**: `ShapeTool.ts`, `ShapeElement.ts`, `CanvasRenderVisitor.ts`, `PdfViewer.tsx`, `CompositeCommand.ts`
