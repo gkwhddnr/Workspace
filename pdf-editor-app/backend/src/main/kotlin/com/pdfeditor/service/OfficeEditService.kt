@@ -249,9 +249,9 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
                 pathBbox(item), sx, sy
             )
             "text" -> addTextToHslf(slide, item, sx, sy)
-            "highlight" -> addShapeToHslf(slide, true, xOf(item), yOf(item), wOf(item), hOf(item), sx, sy, style, opacity)
-            "rect" -> addShapeToHslf(slide, false, xOf(item), yOf(item), wOf(item), hOf(item), sx, sy, style, opacity)
-            "circle" -> addShapeToHslf(slide, false, xOf(item), yOf(item), wOf(item), hOf(item), sx, sy, style, opacity)
+            "highlight" -> addShapeToHslf(slide, true, ShapeType.RECT, xOf(item), yOf(item), wOf(item), hOf(item), sx, sy, style, opacity)
+            "rect" -> addShapeToHslf(slide, false, ShapeType.RECT, xOf(item), yOf(item), wOf(item), hOf(item), sx, sy, style, opacity)
+            "circle" -> addShapeToHslf(slide, false, ShapeType.ELLIPSE, xOf(item), yOf(item), wOf(item), hOf(item), sx, sy, style, opacity)
             "arrow", "arrow-up", "arrow-down", "arrow-left", "arrow-right",
             "arrow-l-1", "arrow-l-2" -> insertPngHslf(
                 slide,
@@ -288,24 +288,34 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
     private fun addShapeToHslf(
         slide: HSLFSlide,
         fill: Boolean,
+        shapeType: ShapeType,
         x: Double, y: Double, w: Double, h: Double,
         sx: Double, sy: Double,
         style: JsonNode,
         opacity: Double
     ) {
         if (w <= 0 || h <= 0) return
-        val sh = HSLFAutoShape(if (fill) ShapeType.RECT else ShapeType.RECT)
-        sh.anchor = Rectangle2D.Double(x * sx, y * sy, w * sx, h * sy)
         val color = safeColor(style.path("color").asText("#2563EB"))
+        val strokeWidth = style.path("strokeWidth").asDouble(2.0)
 
         if (fill) {
-            sh.fillColor = color
-            sh.lineColor = null
-        } else {
-            sh.fillColor = null
-            sh.lineColor = color
-            sh.lineWidth = style.path("strokeWidth").asDouble(2.0) * (sx + sy) / 2.0
+            // HSLF(.ppt)는 셰이프 필의 알파(투명도)를 지원하지 않는다. 불투명한 RECT를
+            // 그대로 넣으면 형광펜 영역이 내용을 덮어 가리므로, pptx의 반투명 결과와
+            // 동일하게 투명도가 적용된 PNG로 렌더링해 삽입한다.
+            val png = renderRectPng(color, w, h, fill = true, strokeWidth = 0.0, opacity = opacity)
+            insertPngHslf(
+                slide, png,
+                floatArrayOf(x.toFloat(), y.toFloat(), w.toFloat(), h.toFloat()),
+                sx, sy
+            )
+            return
         }
+
+        val sh = HSLFAutoShape(shapeType)
+        sh.anchor = Rectangle2D.Double(x * sx, y * sy, w * sx, h * sy)
+        sh.fillColor = null
+        sh.lineColor = color
+        sh.lineWidth = strokeWidth * (sx + sy) / 2.0
         slide.addShape(sh)
     }
 
@@ -418,6 +428,23 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
             g2d.color = color
             g2d.stroke = BasicStroke(strokeWidth.toFloat(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
             g2d.draw(path)
+        }
+    }
+
+    /** Filled (highlight) or outlined rect as a transparent PNG for HSLF (.ppt). */
+    private fun renderRectPng(color: Color, w: Double, h: Double, fill: Boolean, strokeWidth: Double, opacity: Double): ByteArray? {
+        return renderPng(
+            if (fill) 0.0 else strokeWidth, opacity, 0.0, 0.0, w, h
+        ) { g2d, _ ->
+            if (fill) {
+                // opacity를 알파 채널에 반영 → 사각형이 내용을 가리지 않고 반투명하게 보인다
+                g2d.color = alphaColor(color, opacity)
+                g2d.fillRect(0, 0, w.toInt(), h.toInt())
+            } else {
+                g2d.color = color
+                g2d.stroke = BasicStroke(strokeWidth.toFloat(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+                g2d.drawRect(0, 0, w.toInt(), h.toInt())
+            }
         }
     }
 
