@@ -99,11 +99,18 @@ class OfficeToPdfService {
             val outDir = workDir.resolve("out").also { Files.createDirectories(it) }
 
             // LibreOffice -> PowerPoint COM fallback
-            val generatedPdf = convertWithLibreOffice(inputPath, outDir)
-                ?: convertWithPowerPoint(inputPath, outDir)
-                ?: throw IllegalStateException(
-                    "PPT/PPTX를 PDF로 변환할 수 있는 도구가 없습니다. " +
-                        "LibreOffice를 설치하거나 Microsoft PowerPoint를 설치해 주세요."
+            var libErr: String? = null
+            var pptErr: String? = null
+            val generatedPdf = runCatching { convertWithLibreOffice(inputPath, outDir) }
+                .getOrElse {
+                    libErr = it.message ?: it.javaClass.simpleName
+                    null
+                } ?: runCatching { convertWithPowerPoint(inputPath, outDir) }
+                .getOrElse {
+                    pptErr = it.message ?: it.javaClass.simpleName
+                    null
+                } ?: throw IllegalStateException(
+                    buildFailureMessage(libErr, pptErr)
                 )
 
             val bytes = Files.readAllBytes(generatedPdf)
@@ -151,17 +158,19 @@ class OfficeToPdfService {
             val finished = process.waitFor(90, TimeUnit.SECONDS)
             if (!finished) {
                 process.destroyForcibly()
-                null
+                throw IllegalStateException("LibreOffice 변환 타임아웃(90초)")
             } else {
                 readerThread.join(2000)
                 if (process.exitValue() != 0) {
-                    println("[OfficeToPdfService] LibreOffice convert failed:\n${output.toString(Charset.defaultCharset())}")
-                    null
+                    val errText = output.toString(Charset.defaultCharset())
+                    println("[OfficeToPdfService] LibreOffice convert failed:\n$errText")
+                    throw IllegalStateException("LibreOffice 변환 실패:\n$errText")
                 } else {
                     locateGeneratedPdf(outDir)
                 }
             }
         } catch (e: Exception) {
+            if (e is IllegalStateException) throw e
             e.printStackTrace()
             null
         }
@@ -173,16 +182,24 @@ class OfficeToPdfService {
 
         val script = buildString {
             appendLine("\$ErrorActionPreference = 'Continue'")
+            // 다른 프로그램이 PowerPoint를 이미 실행 중이라면 COM이 그 인스턴스에 붙는다.
+            // 이때 finally의 Quit()가 사용자가 열어둔 프레젠테이션까지 닫아버리므로,
+            // 우리가 새로 띄운 경우에만 Quit() 하도록 실행 전 존재 여부를 기록한다.
+            appendLine("\$wasRunning = [System.Diagnostics.Process]::GetProcessesByName('POWERPNT').Count -gt 0")
             appendLine("\$ppt = New-Object -ComObject PowerPoint.Application")
             appendLine("try {")
-            appendLine("  \$pres = \$ppt.Presentations.Open('${psQuote(inputPath.toString())}', \$true, \$false, \$false)")
-            appendLine("  \$pres.SaveAs('${psQuote(outPath.toString())}', 32)") // 32 = ppSaveAsPDF
-            appendLine("  \$pres.Close()")
-            appendLine("  Write-Output 'PPT2PDF_OK'")
-            appendLine("} catch {")
-            appendLine("  Write-Output \"PPT2PDF_ERR: \$_\"")
+            appendLine("  try {")
+            appendLine("    \$pres = \$ppt.Presentations.Open('${psQuote(inputPath.toString())}', \$true, \$false, \$false)")
+            appendLine("    \$pres.SaveAs('${psQuote(outPath.toString())}', 32)") // 32 = ppSaveAsPDF
+            appendLine("    \$pres.Close()")
+            appendLine("    Write-Output 'PPT2PDF_OK'")
+            appendLine("  } catch {")
+            appendLine("    Write-Output \"PPT2PDF_ERR: \$_\"")
+            appendLine("  }")
             appendLine("} finally {")
-            appendLine("  try { \$ppt.Quit() } catch { }")
+            appendLine("  if (-not \$wasRunning) {")
+            appendLine("    try { \$ppt.Quit() } catch { }")
+            appendLine("  }")
             appendLine("}")
             appendLine("exit 0")
         }
@@ -210,19 +227,25 @@ class OfficeToPdfService {
             val finished = process.waitFor(120, TimeUnit.SECONDS)
             if (!finished) {
                 process.destroyForcibly()
-                null
+                throw IllegalStateException("PowerPoint 변환 타임아웃(120초). 파워포인트에서 원본 파일이 열려 있으면 닫고 다시 시도하세요.")
             } else {
                 readerThread.join(2000)
                 if (process.exitValue() != 0) {
-                    println("[OfficeToPdfService] PowerPoint convert failed:\n${output.toString(Charset.defaultCharset())}")
-                    null
+                    val errText = output.toString(Charset.defaultCharset())
+                    println("[OfficeToPdfService] PowerPoint convert failed:\n$errText")
+                    throw IllegalStateException("PowerPoint 변환 실패:\n$errText")
                 } else if (Files.exists(outPath) && Files.size(outPath) > 0) {
                     outPath
                 } else {
-                    null
+                    val errText = output.toString(Charset.defaultCharset())
+                    println("[OfficeToPdfService] PowerPoint convert failed (no output):\n$errText")
+                    throw IllegalStateException(
+                        "PowerPoint 변환 결과가 없습니다(원본 파일이 파워포인트에 열려 있으면 닫고 재시도).\n$errText"
+                    )
                 }
             }
         } catch (e: Exception) {
+            if (e is IllegalStateException) throw e
             e.printStackTrace()
             null
         } finally {
@@ -236,6 +259,14 @@ class OfficeToPdfService {
                 .findFirst()
                 .orElse(null)
         }
+
+    private fun buildFailureMessage(libErr: String?, pptErr: String?): String = buildString {
+        append("PPT/PPTX를 PDF로 변환하지 못했습니다.\n")
+        if (libErr != null) append("LibreOffice: $libErr\n")
+        if (pptErr != null) append("PowerPoint: $pptErr\n")
+        append("변환 도구가 없거나, 원본 파일을 다른 프로그램(특히 PowerPoint)에서 편집 중이면 열 수 없습니다.")
+        append(" 파일을 닫은 뒤 다시 열어 주세요.")
+    }.toString()
 
     /** Escape a file path for embedding inside a single-quoted PowerShell string. */
     private fun psQuote(path: String): String =

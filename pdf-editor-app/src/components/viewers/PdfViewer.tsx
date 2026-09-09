@@ -840,6 +840,15 @@ const PdfViewer: React.FC = () => {
         try {
             console.log('Loading PDF file:', file.name, file.size);
 
+            // 급히 이전 문서의 진행 중 렌더를 취소하지 않으면 두 문서가 같은
+            // canvas를 동시에 render() 하면서 'Cannot use the same canvas...'
+            // 오류가 나고, 화면은 이전 파일 페이지에 남아 '화살표 누르면
+            // 갱신'되는 것처럼 보인다.
+            if (renderTaskRef.current) {
+                try { renderTaskRef.current.cancel(); } catch (_) { }
+                renderTaskRef.current = null;
+            }
+
             let actualFile = file;
             let targetPage = 1;
             let pData: string | null = null;
