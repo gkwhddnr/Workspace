@@ -1129,8 +1129,14 @@ const PdfViewer: React.FC = () => {
             file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
             return loadOfficeDocument(file, isRestore);
         }
-        if (lower.endsWith('.pdf') || file.type === 'application/pdf') return loadPdf(file, isRestore);
-        if (lower.endsWith('.png') || file.type === 'image/png') return loadImage(file, isRestore);
+        if (lower.endsWith('.pdf') || file.type === 'application/pdf') {
+            setOfficeOriginal(null, null);
+            return loadPdf(file, isRestore);
+        }
+        if (lower.endsWith('.png') || file.type === 'image/png') {
+            setOfficeOriginal(null, null);
+            return loadImage(file, isRestore);
+        }
 
         alert('지원하지 않는 파일 형식입니다. (PDF, PNG, PPT, PPTX)');
     };

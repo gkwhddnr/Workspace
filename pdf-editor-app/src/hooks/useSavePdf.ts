@@ -69,10 +69,17 @@ export const useSavePdf = (
                 setSaveStatus('저장 실패');
                 setTimeout(() => setSaveStatus(null), 3000);
                 return false;
-            } catch (error) {
+            } catch (error: any) {
                 console.error('Office 저장 오류:', error);
-                setSaveStatus('저장 오류');
-                setTimeout(() => setSaveStatus(null), 3000);
+                const msg = String(error?.message || error);
+                const isLocked = /EBUSY|EPERM|ETXTBSY|resource busy|locked|다른 프로그램/i.test(msg);
+                if (isLocked) {
+                    setSaveStatus('저장 실패: 파일이 다른 프로그램에서 열려 있습니다');
+                    alert('원본 파일이 다른 프로그램(예: Microsoft PowerPoint)에서 열려 있어 저장할 수 없습니다.\n파일을 닫은 뒤 다시 저장해 주세요.');
+                } else {
+                    setSaveStatus('저장 오류');
+                }
+                setTimeout(() => setSaveStatus(null), 4000);
                 return false;
             }
         }

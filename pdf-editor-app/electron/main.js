@@ -188,6 +188,25 @@ ipcMain.handle('dialog:saveFile', async (event, { defaultName, data, fileType })
   }
 });
 
+// 파일 잠금(EBUSY/EPERM/ETXTBSY)에 대한 일시적 재시도
+// OneDrive 동기화나 바이러스 스캔의 일시적 잠금을 우회하고,
+// PowerPoint가 원본 파일을 잠근 경우에는 명확한 오류로 이어지도록 한다.
+const writeFileWithRetry = async (filePath, buffer, attempts = 5) => {
+  let lastError;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      await fs.writeFile(filePath, buffer);
+      return;
+    } catch (err) {
+      lastError = err;
+      const isLock = err && ['EBUSY', 'EPERM', 'ETXTBSY'].includes(err.code);
+      if (!isLock || i === attempts) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 300 * i));
+    }
+  }
+  throw lastError;
+};
+
 // 자동 저장
 ipcMain.handle('file:autoSave', async (event, { filePath, data }) => {
   if (!filePath) {
@@ -196,7 +215,7 @@ ipcMain.handle('file:autoSave', async (event, { filePath, data }) => {
 
   try {
     const buffer = Buffer.from(data, 'base64');
-    await fs.writeFile(filePath, buffer);
+    await writeFileWithRetry(filePath, buffer);
     return {
       success: true,
       timestamp: new Date().toISOString()
@@ -227,7 +246,7 @@ ipcMain.handle('file:read', async (event, filePath) => {
 ipcMain.handle('file:write', async (event, { filePath, data }) => {
   try {
     const buffer = Buffer.from(data, 'base64');
-    await fs.writeFile(filePath, buffer);
+    await writeFileWithRetry(filePath, buffer);
     return { success: true };
   } catch (error) {
     throw new Error(`파일 쓰기 실패: ${error.message}`);
