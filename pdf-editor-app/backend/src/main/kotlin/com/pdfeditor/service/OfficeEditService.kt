@@ -2,6 +2,7 @@ package com.pdfeditor.service
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.springframework.stereotype.Service
 import org.apache.poi.hslf.usermodel.*
 import org.apache.poi.sl.usermodel.PictureData
 import org.apache.poi.sl.usermodel.ShapeType
@@ -25,6 +26,7 @@ import kotlin.math.max
  * back onto the original Office slide file. The resulting document keeps the
  * original editable shapes, so the user can keep working in PowerPoint later.
  */
+@Service
 class OfficeEditService(private val objectMapper: ObjectMapper) {
 
     private data class Pt(val x: Double, val y: Double)
