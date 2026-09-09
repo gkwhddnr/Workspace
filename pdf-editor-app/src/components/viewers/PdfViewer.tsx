@@ -292,7 +292,8 @@ const PdfViewer: React.FC = () => {
                             const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
                             const file = new File([blob], currentFileName || 'restored_file', { type: mimeType || 'application/pdf' });
                             // Preserve the original file path so Office→PDF saves land next to it.
-                            (file as any).path = currentFilePath;
+                            // (File.prototype.path is getter-only, so use a writable custom property.)
+                            Object.defineProperty(file, '_filePath', { value: currentFilePath, writable: true, configurable: true, enumerable: false });
 
                             setPdfOriginalData(uint8.slice());
                             await loadAnyDocument(file, true); // isRestore=true preserves elements
@@ -1093,7 +1094,7 @@ const PdfViewer: React.FC = () => {
             const pdfFile = new File([pdfBlob], result.fileName, { type: 'application/pdf' });
             // Save the edited PDF next to the original Office file (same folder, .pdf name)
             // instead of overwriting the .ppt/.pptx (which would corrupt it).
-            const rawPath = (file as any).path || file.name;
+            const rawPath = (file as any)._filePath || (file as any).path || file.name;
             const dot = rawPath.lastIndexOf('.');
             const savePath = (dot > 0 ? rawPath.slice(0, dot) : rawPath) + '.pdf';
             setCurrentFile(savePath, result.fileName);
@@ -1164,7 +1165,7 @@ const PdfViewer: React.FC = () => {
                     const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
                     const file = new File([blob], fileName, { type: mimeType || 'application/pdf' });
                     // Preserve the original file path so Office→PDF saves land next to it.
-                    (file as any).path = filePath;
+                    Object.defineProperty(file, '_filePath', { value: filePath, writable: true, configurable: true, enumerable: false });
 
                     setPdfOriginalData(uint8.slice());
                     setCurrentFile(filePath, fileName);
@@ -1187,7 +1188,7 @@ const PdfViewer: React.FC = () => {
                 isFileDialogOpenRef.current = false;
                 const file = (e.target as HTMLInputElement).files?.[0];
                 if (file) {
-                    const path = (file as any).path || file.name;
+                    const path = (file as any)._filePath || (file as any).path || file.name;
                     setCurrentFile(path, file.name);
                     await loadAnyDocument(file);
                 }
@@ -1218,7 +1219,7 @@ const PdfViewer: React.FC = () => {
         const file = files[0];
 
         const doOpen = async () => {
-            const path = (file as any).path || file.name;
+            const path = (file as any)._filePath || (file as any).path || file.name;
             setCurrentFile(path, file.name);
             await loadAnyDocument(file);
         };
@@ -1347,7 +1348,7 @@ const PdfViewer: React.FC = () => {
                 const file = files[0];
 
                 const doOpen = async () => {
-                    const path = (file as any).path || file.name;
+                    const path = (file as any)._filePath || (file as any).path || file.name;
                     setCurrentFile(path, file.name);
                     await loadAnyDocument(file);
                 };
