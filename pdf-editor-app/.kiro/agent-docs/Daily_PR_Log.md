@@ -279,9 +279,20 @@
 - `addAiMessage`/`clearAiMessages`를 활성 스레드와 동기화(자동 저장), `createAiThread`/`selectAiThread`/`deleteAiThread` 액션 추가, 초기 상태는 저장된 스레드에서 일관 복원
 - **파일**: `src/store/useAppStore.ts`, `src/components/AiPanel.tsx`
 
+#### AI 코파일럿 대화 스레드 백엔드 저장
+
+- 사용자 요구: "껐다 켜도 이어지고 내용이 저장되어야 하니 백엔드에 저장해야 하지 않나?" → 대화 스레드를 브라우저/localStorage가 아닌 **백엔드(Spring + H2 DB)에 영구 저장**하도록 변경
+- **백엔드**: 신규 `AiThread` 엔티티(`ai_thread` 테이블, `id`=클라이언트 스레드 식별자, `messagesJson` TEXT) + `AiThreadRepository` + `AiThreadController`(`GET /api/pdf/ai-threads` 전체 목록, `GET/{id}`, `POST` Upsert, `DELETE/{id}`) — H2 `ddl-auto=update`로 테이블 자동 생성
+- **프론트**: 신규 `AiThreadService`(Axios `baseURL:'/api/pdf'`) — `fetchAiThreads`/`saveAiThread`/`deleteAiThreadBackend`
+- `useAppStore`: 메시지 추가·초기화·스레드 생성 시 **0.5초 디바운스**로 백엔드 자동 저장, 스레드 삭제 시 백엔드 삭제 호출
+- **시작 동기화**: `syncAiThreadsWithBackend()`가 AiPanel 최초 마운트 시 백엔드 스레드를 로드해 로컬 상태 갱신 / 백엔드가 비어 있으면(최초 실행) 기존 localStorage 스레드를 백엔드로 마이그레이션 / 오프라인이면 localStorage 캐시 유지
+- **파일**: `backend/.../model/AiThread.kt`(신규), `backend/.../repository/AiThreadRepository.kt`(신규), `backend/.../controller/AiThreadController.kt`(신규), `src/services/AiThreadService.ts`(신규), `src/store/useAppStore.ts`, `src/components/AiPanel.tsx`
+
 ### 검증
 
 - `npx vite build` 성공 (2136 modules) — 런타임 수정·플러그인 토글 수정·AI 컨텍스트 공유·대화 스레드 구현 후 재검증 완료
+- `gradlew compileKotlin` + `gradlew bootJar` 성공 — 백엔드 신규 스레드 API 컴파일/패키징 검증 완료
+- ⚠️ 현재 8080에서 구동 중인 백엔드는 구버전이라 새 `/api/pdf/ai-threads`가 404 응답 — **재시작 후** 신규 엔드포인트와 `ai_thread` 테이블이 활성화됨
 
 ---
 
