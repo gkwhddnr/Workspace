@@ -3,7 +3,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { Search, ArrowLeft, ArrowRight, RefreshCw, Home, ExternalLink } from 'lucide-react';
 
 const WebViewer: React.FC = () => {
-    const { webUrl, setWebUrl, sharedCode } = useAppStore();
+    const { webUrl, setWebUrl, setWebPageText, sharedCode } = useAppStore();
     const [inputUrl, setInputUrl] = useState(webUrl);
     // webview의 src 속성에 직접 webUrl을 바인딩하면 did-navigate 시 무한 갱신/로딩 취소가 발생할 수 있으므로 분리합니다.
     const [currentSrc, setCurrentSrc] = useState(webUrl);
@@ -44,8 +44,32 @@ const WebViewer: React.FC = () => {
             setInputUrl(url);
         };
 
+        // 현재 페이지 본문을 추출해 AI 컨텍스트용으로 스토어에 저장합니다.
+        let lastExtractAt = 0;
+        const extractPageText = async () => {
+            try {
+                const url = typeof webview.getURL === 'function' ? webview.getURL() : '';
+                if (!url || url.startsWith('workspace:') || url.startsWith('data:')) return;
+                if (typeof webview.executeJavaScript !== 'function') return;
+                const result = await webview.executeJavaScript(
+                    `(() => { try { return { title: document.title || '', text: document.body && document.body.innerText || '' }; } catch (e) { return { title: '', text: '' }; } })()`
+                );
+                if (result && typeof result.text === 'string') {
+                    const combined = (result.title ? `${result.title}\n\n` : '') + result.text;
+                    setWebPageText(combined.slice(0, 100_000));
+                }
+            } catch { /* ignore — 페이지 로드가 진행 중이거나 접근 불가한 경우 */ }
+        };
+
         const startLoading = () => setLoading(true);
-        const stopLoading = () => setLoading(false);
+        const stopLoading = () => {
+            setLoading(false);
+            // 연속 로딩 이벤트 시 중복 추출을 방지합니다.
+            const now = Date.now();
+            if (now - lastExtractAt < 1500) return;
+            lastExtractAt = now;
+            extractPageText();
+        };
 
         webview.addEventListener('dom-ready', handleDomReady);
         webview.addEventListener('did-navigate', handleNavigate);
@@ -62,7 +86,7 @@ const WebViewer: React.FC = () => {
             webview.removeEventListener('did-start-loading', startLoading);
             webview.removeEventListener('did-stop-loading', stopLoading);
         };
-    }, [setWebUrl]);
+    }, [setWebUrl, setWebPageText]);
 
     // ─── Real-time Code Preview (workspace://preview) ───
     React.useEffect(() => {

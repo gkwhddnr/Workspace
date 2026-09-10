@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, ChevronDown } from 'lucide-react';
 import { callAi, refineError, AiProvider } from '../services/AiService';
+import { pdfTextService } from '../services/PdfTextService';
 
 // ─── AI 제공자 설정 ─────────────────────────────────────────────────────────────
 const PROVIDERS: {
@@ -70,6 +71,7 @@ const AiPanel: React.FC = () => {
     const {
         aiMessages, addAiMessage, clearAiMessages,
         activeTabs, currentFileName, webUrl, codeLanguage,
+        sharedCode, pdfOriginalData, webPageText,
         aiAgent, setAiAgent,
         apiKeys, setApiKey,
     } = useAppStore();
@@ -77,6 +79,8 @@ const AiPanel: React.FC = () => {
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
+    // 현재 화면 · 열린 파일의 실제 내용을 AI에 공유할지 여부 (localStorage 영속화)
+    const [includeContext, setIncludeContext] = useState(() => localStorage.getItem('aiIncludeContext') !== 'false');
     const [showKeys, setShowKeys] = useState<Record<AiProvider, boolean>>({
         gemini: false, chatgpt: false, claude: false
     });
@@ -118,6 +122,47 @@ const AiPanel: React.FC = () => {
         return key.startsWith(p.keyPrefix);
     };
 
+    // 현재 화면(코드·웹)과 열린 파일(PDF 전체 텍스트)의 실제 내용을 문자열로 수집합니다.
+    const buildContext = async (): Promise<string> => {
+        const sections: string[] = [];
+
+        // ① 코드 에디터 — 전체 소스
+        if (activeTabs.includes('code')) {
+            const code: string[] = [];
+            if (sharedCode.html.trim()) code.push(`<html>\n${sharedCode.html}`);
+            if (sharedCode.css.trim()) code.push(`<css>\n${sharedCode.css}`);
+            if (sharedCode.javascript.trim()) code.push(`<javascript>\n${sharedCode.javascript}`);
+            if (code.length > 0) {
+                let joined = code.join('\n\n');
+                if (joined.length > 60_000) joined = joined.slice(0, 60_000) + '\n...(이후 코드 생략)';
+                sections.push(`[코드 에디터]\n다음은 코드 에디터에 열려 있는 전체 소스 코드입니다.\n${joined}`);
+            }
+        }
+
+        // ② 웹 서퍼 — 현재 페이지 본문 (실시간 미리보기는 코드 에디터와 중복이므로 제외)
+        if (activeTabs.includes('web') && webUrl && !webUrl.startsWith('workspace://')) {
+            const pageText = (webPageText || '').trim();
+            if (pageText) {
+                const t = pageText.length > 80_000 ? pageText.slice(0, 80_000) + '\n...(본문 일부 생략)' : pageText;
+                sections.push(`[웹 서퍼]\n현재 주소: ${webUrl}\n다음은 현재 표시 중인 웹 페이지의 텍스트입니다.\n${t}`);
+            } else {
+                sections.push(`[웹 서퍼]\n현재 주소: ${webUrl} (페이지 텍스트를 추출할 수 없습니다)`);
+            }
+        }
+
+        // ③ PDF 편집 — 열린 파일의 전체 텍스트
+        if (pdfOriginalData && currentFileName) {
+            const cacheKey = `${currentFileName}:${pdfOriginalData.byteLength}`;
+            const pdfText = await pdfTextService.extractDocumentText(pdfOriginalData, cacheKey);
+            if (pdfText.trim()) {
+                const t = pdfText.length > 120_000 ? pdfText.slice(0, 120_000) + '\n...(문서 일부만 포함됨, 나머지 생략)' : pdfText;
+                sections.push(`[PDF 편집]\n파일: ${currentFileName}\n다음은 열려 있는 PDF 파일의 전체 추출 텍스트입니다.\n${t}`);
+            }
+        }
+
+        return sections.join('\n\n');
+    };
+
     const handleSend = async () => {
         const text = input.trim();
         if (!text || isLoading) return;
@@ -140,10 +185,28 @@ const AiPanel: React.FC = () => {
 - 코드 에디터 언어: ${codeLanguage}
 한국어로 친절하고 간결하게 답변해 주세요.`;
 
+        // 현재 화면(코드·웹)과 열린 파일(PDF 전체 텍스트)의 실제 내용을 컨텍스트로 첨부합니다.
+        let finalSystemPrompt = systemPrompt;
+        if (includeContext) {
+            try {
+                const ctxText = await buildContext();
+                if (ctxText) {
+                    finalSystemPrompt += `\n\n[현재 작업 컨텍스트]
+아래는 사용자가 편집 중인 실제 화면과 열린 파일의 전체 내용입니다.
+파일 요약, 코드 검토, 내용 분석 등에 참고하여 답변해 주세요.
+
+${ctxText}
+[/현재 작업 컨텍스트]`;
+                }
+            } catch (e) {
+                console.warn('[AiPanel] 컨텍스트 수집 실패:', e);
+            }
+        }
+
         try {
             // 현재 메시지 히스토리 (마지막으로 추가된 user 메시지 포함)
             const history = [...aiMessages, { role: 'user' as const, content: text }];
-            const reply = await callAi(aiAgent, currentKey, history, systemPrompt, selectedModel[aiAgent]);
+            const reply = await callAi(aiAgent, currentKey, history, finalSystemPrompt, selectedModel[aiAgent]);
             addAiMessage('assistant', reply);
         } catch (error: any) {
             const raw = error?.response?.data?.error?.message || error.message || '알 수 없는 오류';
@@ -273,6 +336,23 @@ const AiPanel: React.FC = () => {
                                 </div>
                             );
                         })}
+
+                        <label className="flex items-start gap-2 text-[11px] theme-text-muted cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={includeContext}
+                                onChange={(e) => {
+                                    const v = e.target.checked;
+                                    setIncludeContext(v);
+                                    localStorage.setItem('aiIncludeContext', String(v));
+                                }}
+                                className="mt-0.5 accent-indigo-600"
+                            />
+                            <span>
+                                현재 화면·열린 파일 내용을 AI에 공유
+                                <span className="block text-[10px] opacity-70">코드 전체 · 웹 페이지 본문 · PDF 전체 텍스트를 요약/분석에 사용합니다.</span>
+                            </span>
+                        </label>
 
                         <button
                             onClick={handleSaveKeys}

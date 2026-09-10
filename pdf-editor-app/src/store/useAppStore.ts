@@ -77,6 +77,10 @@ interface AppState {
     webUrl: string;
     setWebUrl: (url: string) => void;
 
+    // Web Viewer page text (AI 코파일럿 컨텍스트 제공용 — 현재 페이지 본문)
+    webPageText: string;
+    setWebPageText: (text: string) => void;
+
     // Code Editor
     codeLanguage: 'html' | 'css' | 'javascript';
     setCodeLanguage: (lang: 'html' | 'css' | 'javascript') => void;
@@ -278,6 +282,8 @@ export const useAppStore = create<AppState>((set) => ({
     // Web Viewer defaults
     webUrl: 'https://www.google.com',
     setWebUrl: (url) => set({ webUrl: url }),
+    webPageText: '',
+    setWebPageText: (text) => set({ webPageText: text }),
 
     // Code Editor defaults
     codeLanguage: 'html',
