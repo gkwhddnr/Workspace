@@ -262,9 +262,18 @@
 - **헤더 배지 연동**: 'AI Pilot Live' 고정 표시를 플러그인 활성 상태에 따라 'AI Pilot Live/Off'로 전환
 - **파일**: `src/store/usePluginStore.ts`, `src/components/PluginManagerPanel.tsx`, `src/components/plugin/PluginListItem.tsx`, `src/layouts/MainLayout.tsx`
 
+#### AI 코파일럿 화면·파일 컨텍스트 공유 (전체 파일 읽기/요약)
+
+- 사용자가 편집 중인 **화면과 열린 파일의 실제 내용**을 시스템 프롬프트에 첨부하여, 모든 AI(Gemini·ChatGPT·Claude)가 순수 메타데이터가 아닌 **전체 내용**을 읽고 요약·분석·코드 검토할 수 있도록 구현
+- **코드 에디터**: `sharedCode`의 html/css/javascript 전체 소스 첨부 (60,000자 캡)
+- **웹 서퍼**: `<webview>`의 `executeJavaScript`로 현재 페이지 본문(`title`+`innerText`)을 추출해 `useAppStore.webPageText`에 저장(100,000자 캡), 페이지 로딩 종료 시 자동 갱신 — 실시간 미리보기(`workspace://preview`·`data:`)는 코드와 중복이라 제외
+- **PDF 편집**: 신규 `PdfTextService`가 `pdfjsLib.getDocument`로 열린 PDF의 **전체 페이지 텍스트**를 추출(400페이지/200,000자 내 캐시, 파일명+바이트 크기 키) — 요청 시 비동기 추출 후 첨부(12만자 캡)
+- **공유 토글**: 설정 패널에 '현재 화면·열린 파일 내용을 AI에 공유' 체크박스 추가, `localStorage('aiIncludeContext')`로 영속화(기본 ON)
+- **파일**: `src/services/PdfTextService.ts`(신규), `src/store/useAppStore.ts`, `src/components/viewers/WebViewer.tsx`, `src/components/AiPanel.tsx`
+
 ### 검증
 
-- `npx vite build` 성공 (2136 modules) — 런타임 수정·플러그인 토글 수정 후 재검증 완료
+- `npx vite build` 성공 (2136 modules) — 런타임 수정·플러그인 토글 수정·AI 컨텍스트 공유 구현 후 재검증 완료
 
 ---
 
