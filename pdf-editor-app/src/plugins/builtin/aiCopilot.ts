@@ -10,8 +10,8 @@ export function registerAiCopilotPlugin(aiPanelComponent: unknown) {
     registerPlugin({
         id: 'ai-copilot',
         name: 'AI 코파일럿',
-        version: '1.0.0',
-        description: 'PDF 편집, 코드 작성, 웹 검색을 보조하는 AI 채팅 플러그인. Gemini / ChatGPT / Claude 제공자를 지원합니다.',
+        version: '2.1.0',
+        description: 'PDF 편집, 코드 작성, 웹 검색을 보조하는 AI 채팅 플러그인. Gemini(3.8 Flash·3.1 Pro) / GPT-5.6(Sol·Terra·Luna) / Claude(Opus 5·Sonnet 5) 등 최신 모델 라인업을 지원합니다.',
         author: 'Workspace Pro',
         icon: 'bot',
         render: {

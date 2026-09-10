@@ -21,11 +21,12 @@ const PROVIDERS: {
         color: 'from-blue-500 to-cyan-400',
         badge: 'bg-blue-100 text-blue-700',
         placeholder: 'AIza...',
-        modelDefault: 'gemini-3-flash',
+        modelDefault: 'gemini-3.8-flash',
         modelOptions: [
-            { value: 'gemini-3-flash', label: 'Gemini 3 Flash' },
-            { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-            { value: 'gemini-1.5-pro-latest', label: 'Gemini 1.5 Pro' },
+            { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
+            { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
+            { value: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (Preview)' },
+            { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
         ],
         keyPrefix: 'AIza',
         docUrl: 'https://aistudio.google.com/app/apikey',
@@ -36,11 +37,12 @@ const PROVIDERS: {
         color: 'from-emerald-500 to-green-400',
         badge: 'bg-emerald-100 text-emerald-700',
         placeholder: 'sk-...',
-        modelDefault: 'gpt-5.5',
+        modelDefault: 'gpt-5.6-sol',
         modelOptions: [
+            { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
+            { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+            { value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
             { value: 'gpt-5.5', label: 'GPT-5.5' },
-            { value: 'gpt-4o', label: 'GPT-4o' },
-            { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
         ],
         keyPrefix: 'sk-',
         docUrl: 'https://platform.openai.com/api-keys',
@@ -51,11 +53,12 @@ const PROVIDERS: {
         color: 'from-orange-500 to-amber-400',
         badge: 'bg-orange-100 text-orange-700',
         placeholder: 'sk-ant-...',
-        modelDefault: 'claude-opus-4-7-20250514',
+        modelDefault: 'claude-opus-5',
         modelOptions: [
-            { value: 'claude-opus-4-7-20250514', label: 'Claude Opus 4.7' },
-            { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
-            { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
+            { value: 'claude-opus-5', label: 'Claude Opus 5' },
+            { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+            { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+            { value: 'claude-opus-4-8', label: 'Claude Opus 4.8 (Legacy)' },
         ],
         keyPrefix: 'sk-ant-',
         docUrl: 'https://console.anthropic.com/settings/keys',
@@ -78,9 +81,9 @@ const AiPanel: React.FC = () => {
         gemini: false, chatgpt: false, claude: false
     });
     const [selectedModel, setSelectedModel] = useState<Record<AiProvider, string>>({
-        gemini:  'gemini-3-flash',
-        chatgpt: 'gpt-5.5',
-        claude:  'claude-opus-4-7-20250514',
+        gemini:  'gemini-3.8-flash',
+        chatgpt: 'gpt-5.6-sol',
+        claude:  'claude-opus-5',
     });
     const [tempKeys, setTempKeys] = useState<Record<AiProvider, string>>({
         gemini: apiKeys.gemini,
@@ -140,7 +143,7 @@ const AiPanel: React.FC = () => {
         try {
             // 현재 메시지 히스토리 (마지막으로 추가된 user 메시지 포함)
             const history = [...aiMessages, { role: 'user' as const, content: text }];
-            const reply = await callAi(aiAgent, currentKey, history, systemPrompt);
+            const reply = await callAi(aiAgent, currentKey, history, systemPrompt, selectedModel[aiAgent]);
             addAiMessage('assistant', reply);
         } catch (error: any) {
             const raw = error?.response?.data?.error?.message || error.message || '알 수 없는 오류';

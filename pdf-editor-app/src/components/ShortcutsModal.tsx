@@ -23,7 +23,7 @@ const CONTENT = `
   버전       v${APP_VERSION}
   플랫폼     Electron + React (Vite)
   렌더러     PDF.js (v3.11) + Canvas 2D API
-  AI 엔진    Gemini AI Copilot (Live)
+  AI 엔진    Gemini · ChatGPT · Claude (Live)
   저장 형식  PDF (원본 보존 / 플래튼 내보내기)
 
 
@@ -104,7 +104,7 @@ const CONTENT = `
   🤖  AI Copilot
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  우측 AI 패널에서 Gemini AI와 실시간으로 대화하세요.
+  우측 AI 패널에서 Gemini·ChatGPT·Claude와 실시간으로 대화하세요.
   현재 탭 컨텍스트 (PDF / 웹 / 코드)가 AI에게 자동으로
   전달되어 더욱 정확한 도움을 받을 수 있습니다.
 
