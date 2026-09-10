@@ -271,9 +271,17 @@
 - **공유 토글**: 설정 패널에 '현재 화면·열린 파일 내용을 AI에 공유' 체크박스 추가, `localStorage('aiIncludeContext')`로 영속화(기본 ON)
 - **파일**: `src/services/PdfTextService.ts`(신규), `src/store/useAppStore.ts`, `src/components/viewers/WebViewer.tsx`, `src/components/AiPanel.tsx`
 
+#### AI 코파일럿 대화 스레드 (저장 공간)
+
+- 대화 내용이 **localStorage(`aiThreads` / `aiActiveThreadId`)**에 자동 저장되는 스레드 공간 추가 — 재시작 후에도 대화 유지
+- 헤더에 스레드 메뉴 버튼 추가: 새 스레드 생성, 스레드 전환, 스레드 삭제(최소 1개 유지), 스레드별 메시지 수 표시
+- '새 대화' 스레드 제목은 첫 사용자 메시지의 앞부분(24자)으로 자동 변경, 헤더 상태줄에 활성 스레드명 표시
+- `addAiMessage`/`clearAiMessages`를 활성 스레드와 동기화(자동 저장), `createAiThread`/`selectAiThread`/`deleteAiThread` 액션 추가, 초기 상태는 저장된 스레드에서 일관 복원
+- **파일**: `src/store/useAppStore.ts`, `src/components/AiPanel.tsx`
+
 ### 검증
 
-- `npx vite build` 성공 (2136 modules) — 런타임 수정·플러그인 토글 수정·AI 컨텍스트 공유 구현 후 재검증 완료
+- `npx vite build` 성공 (2136 modules) — 런타임 수정·플러그인 토글 수정·AI 컨텍스트 공유·대화 스레드 구현 후 재검증 완료
 
 ---
 
