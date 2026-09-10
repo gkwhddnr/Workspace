@@ -105,6 +105,11 @@ const AiPanel: React.FC = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [aiMessages]);
 
+    // 앱 시작/패널 최초 진입 시 백엔드에 저장된 대화 스레드를 불러와 동기화합니다.
+    useEffect(() => {
+        syncAiThreadsWithBackend();
+    }, []);
+
     // 현재 선택된 제공자 정보
     const currentProvider = PROVIDERS.find(p => p.id === aiAgent)!;
 

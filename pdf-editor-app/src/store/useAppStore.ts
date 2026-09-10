@@ -1,4 +1,9 @@
 import { create } from 'zustand';
+import {
+    fetchAiThreads,
+    saveAiThread,
+    deleteAiThreadBackend,
+} from '../services/AiThreadService';
 
 export type ActiveTab = 'pdf' | 'web' | 'code' | 'shortcuts' | 'plugins';
 export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2' | 'image';
@@ -64,6 +69,65 @@ const persistAiThreads = (threads: AiThread[], activeId: string | null) => {
         if (activeId) localStorage.setItem(AI_ACTIVE_THREAD_KEY, activeId);
     } catch (e) {
         console.warn('[AppStore] AI 스레드 저장 실패:', e);
+    }
+};
+
+let aiThreadSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+// 메시지 입력마다 백엔드를 호출하지 않도록 마지막 갱신을 디바운스해 저장합니다.
+// 백엔드는 대화 내용의 영구 저장소(앱 재시작 후에도 유지)입니다.
+const scheduleAiThreadBackup = (thread: AiThread) => {
+    if (aiThreadSaveTimer) clearTimeout(aiThreadSaveTimer);
+    aiThreadSaveTimer = setTimeout(() => {
+        aiThreadSaveTimer = null;
+        saveAiThread(thread.id, thread.title, thread.messages).catch(err =>
+            console.warn('[AppStore] AI 스레드 백엔드 저장 실패:', err)
+        );
+    }, 500);
+};
+
+let backendThreadSyncStarted = false;
+
+// 앱 시작 시 백엔드 스레드를 불러와 로컬 상태를 갱신합니다.
+// - 백엔드가 비어 있으면 현재 로컬(localStorage) 스레드를 백엔드로 마이그레이션(최초 실행).
+// - 백엔드 접근 불가(오프라인)면 로컬 캐시 상태를 그대로 유지합니다.
+export const syncAiThreadsWithBackend = async (): Promise<void> => {
+    if (backendThreadSyncStarted) return;
+    backendThreadSyncStarted = true;
+    try {
+        const remote = await fetchAiThreads();
+        const local = useAppStore.getState();
+
+        if (!Array.isArray(remote)) return;
+
+        if (remote.length === 0) {
+            // 최초 실행: 로컬 스레드를 백엔드로 미러링
+            local.aiThreads.forEach(t => {
+                saveAiThread(t.id, t.title, t.messages).catch(() => {});
+            });
+            return;
+        }
+
+        const threads: AiThread[] = remote.map(d => ({
+            id: d.id,
+            title: d.title || '새 대화',
+            createdAt: d.createdAt ? new Date(d.createdAt).getTime() : Date.now(),
+            updatedAt: d.updatedAt ? new Date(d.updatedAt).getTime() : Date.now(),
+            messages: d.messages,
+        }));
+
+        const activeId = threads.some(t => t.id === local.activeThreadId)
+            ? local.activeThreadId
+            : threads[0]?.id ?? null;
+        const active = threads.find(t => t.id === activeId);
+        const aiMessages = active && active.messages.length > 0
+            ? active.messages
+            : [{ role: 'assistant' as const, content: AI_DEFAULT_GREETING }];
+
+        useAppStore.setState({ aiThreads: threads, activeThreadId: activeId, aiMessages });
+        persistAiThreads(threads, activeId);
+    } catch {
+        // 오프라인 등 백엔드 접근 불가 → 로컬(localStorage) 상태 유지
     }
 };
 
@@ -423,6 +487,8 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
                 );
             }
             persistAiThreads(threads, s.activeThreadId);
+            const activeThread = threads.find(t => t.id === s.activeThreadId);
+            if (activeThread) scheduleAiThreadBackup(activeThread);
             return { aiMessages: messages, aiThreads: threads };
         }),
     clearAiMessages: () =>
@@ -433,6 +499,8 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
                     : t
             );
             persistAiThreads(threads, s.activeThreadId);
+            const activeThread = threads.find(t => t.id === s.activeThreadId);
+            if (activeThread) scheduleAiThreadBackup(activeThread);
             return { aiMessages: [], aiThreads: threads };
         }),
     createAiThread: () =>
@@ -440,6 +508,7 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
             const t = makeAiThread('새 대화');
             const threads = [...s.aiThreads, t];
             persistAiThreads(threads, t.id);
+            scheduleAiThreadBackup(t);
             return { aiThreads: threads, activeThreadId: t.id, aiMessages: t.messages };
         }),
     selectAiThread: (id) =>
@@ -469,6 +538,9 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
                     : [{ role: 'assistant', content: AI_DEFAULT_GREETING }];
             }
             persistAiThreads(threads, activeId);
+            deleteAiThreadBackend(id).catch(err =>
+                console.warn('[AppStore] AI 스레드 백엔드 삭제 실패:', err)
+            );
             return { aiThreads: threads, activeThreadId: activeId, aiMessages: messages };
         }),
 
