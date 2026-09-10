@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, ChevronDown } from 'lucide-react';
+import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, ChevronDown, MessagesSquare, Plus, X } from 'lucide-react';
 import { callAi, refineError, AiProvider } from '../services/AiService';
 import { pdfTextService } from '../services/PdfTextService';
 
@@ -70,6 +70,7 @@ const PROVIDERS: {
 const AiPanel: React.FC = () => {
     const {
         aiMessages, addAiMessage, clearAiMessages,
+        aiThreads, activeThreadId, createAiThread, selectAiThread, deleteAiThread,
         activeTabs, currentFileName, webUrl, codeLanguage,
         sharedCode, pdfOriginalData, webPageText,
         aiAgent, setAiAgent,
@@ -79,6 +80,7 @@ const AiPanel: React.FC = () => {
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
+    const [threadsOpen, setThreadsOpen] = useState(false);
     // 현재 화면 · 열린 파일의 실제 내용을 AI에 공유할지 여부 (localStorage 영속화)
     const [includeContext, setIncludeContext] = useState(() => localStorage.getItem('aiIncludeContext') !== 'false');
     const [showKeys, setShowKeys] = useState<Record<AiProvider, boolean>>({
@@ -94,6 +96,8 @@ const AiPanel: React.FC = () => {
         chatgpt: apiKeys.chatgpt,
         claude: apiKeys.claude,
     });
+
+    const activeThread = aiThreads.find(t => t.id === activeThreadId) ?? null;
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -235,12 +239,65 @@ ${ctxText}
 
                 <div className="flex-1 min-w-0">
                     <h2 className="font-bold theme-text-main text-xs">AI 코파일럿</h2>
-                    <div className="flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                    <div className="flex items-center gap-1 min-w-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse shrink-0" />
                         <span className="text-[9px] theme-text-muted font-bold uppercase tracking-wider">
                             {isLoading ? 'Thinking...' : 'Online & Ready'}
                         </span>
+                        {activeThread && (
+                            <span className="text-[9px] theme-text-muted truncate min-w-0">· {activeThread.title}</span>
+                        )}
                     </div>
+                </div>
+
+                {/* 대화 스레드 메뉴 */}
+                <div className="relative">
+                    <button
+                        onClick={() => setThreadsOpen(v => !v)}
+                        title="대화 스레드 (저장된 대화)"
+                        className={`p-2 rounded-xl transition-all ${threadsOpen ? 'bg-indigo-100 text-indigo-600' : 'theme-tool-hover theme-text-muted hover:text-indigo-600'}`}
+                    >
+                        <MessagesSquare size={14} />
+                    </button>
+                    {threadsOpen && (
+                        <>
+                            <div className="fixed inset-0 z-40" onClick={() => setThreadsOpen(false)} />
+                            <div className="absolute right-0 top-full mt-2 w-72 theme-bg-panel border theme-border rounded-2xl shadow-2xl z-50 p-2 space-y-1 max-h-80 overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
+                                <div className="flex items-center justify-between px-2 py-1 border-b theme-border-subtle mb-1">
+                                    <span className="text-[10px] font-black theme-text-muted uppercase tracking-widest">대화 스레드</span>
+                                    <button
+                                        onClick={() => { createAiThread(); setThreadsOpen(false); }}
+                                        className="flex items-center gap-1 text-[10px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
+                                    >
+                                        <Plus size={11} /> 새 스레드
+                                    </button>
+                                </div>
+                                {aiThreads.map(t => (
+                                    <div
+                                        key={t.id}
+                                        onClick={() => { selectAiThread(t.id); setThreadsOpen(false); }}
+                                        className={`flex items-center gap-2 rounded-xl px-2 py-1.5 cursor-pointer text-[11px] transition-colors ${t.id === activeThreadId
+                                            ? 'bg-indigo-600 text-white'
+                                            : 'theme-tool-hover theme-text-main'
+                                            }`}
+                                        title={t.title}
+                                    >
+                                        <MessagesSquare size={11} className="shrink-0 opacity-60" />
+                                        <span className="flex-1 truncate">{t.title}</span>
+                                        <span className={`shrink-0 text-[10px] ${t.id === activeThreadId ? 'text-white/70' : 'theme-text-muted'}`}>{t.messages.length}</span>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); deleteAiThread(t.id); }}
+                                            disabled={aiThreads.length <= 1}
+                                            title="스레드 삭제"
+                                            className="shrink-0 p-0.5 rounded hover:bg-red-500/20 theme-text-muted hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed"
+                                        >
+                                            <X size={12} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </>
+                    )}
                 </div>
 
                 {/* 제공자 선택 드롭다운 */}

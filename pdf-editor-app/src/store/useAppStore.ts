@@ -21,6 +21,74 @@ interface ToolSettings {
     textDecoration?: '' | 'underline' | 'line-through' | 'underline line-through';
 }
 
+// ─── AI 코파일럿 대화 스레드 ─────────────────────────────────────────────────
+export interface AiThreadMessage {
+    role: 'user' | 'assistant';
+    content: string;
+    agent?: string;
+}
+
+export interface AiThread {
+    id: string;
+    title: string;
+    createdAt: number;
+    updatedAt: number;
+    messages: AiThreadMessage[];
+}
+
+const AI_THREADS_KEY = 'aiThreads';
+const AI_ACTIVE_THREAD_KEY = 'aiActiveThreadId';
+const AI_DEFAULT_GREETING = '안녕하세요! 저는 AI 코파일럿입니다. PDF 편집, 코드 작성, 웹 검색 등 어떤 것이든 도와드릴 수 있습니다. 무엇을 도와드릴까요?';
+
+const makeAiThread = (title: string, greeting = AI_DEFAULT_GREETING): AiThread => ({
+    id: `thread-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    title,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    messages: [{ role: 'assistant', content: greeting }],
+});
+
+const loadAiThreads = (): AiThread[] => {
+    try {
+        const raw = localStorage.getItem(AI_THREADS_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
+};
+
+const persistAiThreads = (threads: AiThread[], activeId: string | null) => {
+    try {
+        localStorage.setItem(AI_THREADS_KEY, JSON.stringify(threads));
+        if (activeId) localStorage.setItem(AI_ACTIVE_THREAD_KEY, activeId);
+    } catch (e) {
+        console.warn('[AppStore] AI 스레드 저장 실패:', e);
+    }
+};
+
+// 초기 스레드 목록/활성 스레드/현재 메시지를 일관되게 복원합니다.
+const initialThreadState = () => {
+    let threads = loadAiThreads();
+    let activeId = localStorage.getItem(AI_ACTIVE_THREAD_KEY);
+
+    if (threads.length === 0) {
+        const t = makeAiThread('기본 대화');
+        threads = [t];
+        activeId = t.id;
+        persistAiThreads(threads, activeId);
+    } else if (!activeId || !threads.some(t => t.id === activeId)) {
+        activeId = threads[0].id;
+        persistAiThreads(threads, activeId);
+    }
+
+    const active = threads.find(t => t.id === activeId)!;
+    const aiMessages = active.messages.length > 0
+        ? active.messages
+        : [{ role: 'assistant', content: AI_DEFAULT_GREETING }];
+    return { aiThreads: threads, activeThreadId: activeId, aiMessages };
+};
+
 interface AppState {
     // Layout
     isLeftPanelOpen: boolean;
@@ -93,6 +161,13 @@ interface AppState {
     aiMessages: { role: 'user' | 'assistant'; content: string; agent?: string }[];
     addAiMessage: (role: 'user' | 'assistant', content: string) => void;
     clearAiMessages: () => void;
+
+    // AI 대화 스레드 (localStorage 영속화 — 대화 저장 공간)
+    aiThreads: AiThread[];
+    activeThreadId: string | null;
+    createAiThread: () => void;
+    selectAiThread: (id: string) => void;
+    deleteAiThread: (id: string) => void;
 
     // AI API Keys (localStorage persistent)
     apiKeys: { gemini: string; chatgpt: string; claude: string };
@@ -172,6 +247,9 @@ const removeCustomThemeVariables = () => {
     document.body.style.removeProperty('--border-glass');
     document.body.style.removeProperty('--border-subtle');
 };
+
+// 초기 상태 일관성 확보 (create 평가 시 1회만 호출)
+const initialThread = initialThreadState();
 
 export const useAppStore = create<AppState>((set) => ({
     // Layout defaults
@@ -322,12 +400,77 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
     // AI Copilot defaults
     aiAgent: 'gemini',
     setAiAgent: (agent) => set({ aiAgent: agent }),
-    aiMessages: [
-        { role: 'assistant', content: '안녕하세요! 저는 AI 코파일럿입니다. PDF 편집, 코드 작성, 웹 검색 등 어떤 것이든 도와드릴 수 있습니다. 무엇을 도와드릴까요?' }
-    ],
+    aiThreads: initialThread.aiThreads,
+    activeThreadId: initialThread.activeThreadId,
+    aiMessages: initialThread.aiMessages,
     addAiMessage: (role, content) =>
-        set((s) => ({ aiMessages: [...s.aiMessages, { role, content, agent: s.aiAgent }] })),
-    clearAiMessages: () => set({ aiMessages: [] }),
+        set((s) => {
+            const msg: AiThreadMessage = { role, content, agent: s.aiAgent };
+            const messages = [...s.aiMessages, msg];
+            let threads = s.aiThreads;
+            if (s.activeThreadId) {
+                threads = s.aiThreads.map(t =>
+                    t.id === s.activeThreadId
+                        ? {
+                            ...t,
+                            title: (t.title === '새 대화' && role === 'user')
+                                ? content.slice(0, 24)
+                                : t.title,
+                            updatedAt: Date.now(),
+                            messages: [...t.messages, msg],
+                        }
+                        : t
+                );
+            }
+            persistAiThreads(threads, s.activeThreadId);
+            return { aiMessages: messages, aiThreads: threads };
+        }),
+    clearAiMessages: () =>
+        set((s) => {
+            const threads = s.aiThreads.map(t =>
+                t.id === s.activeThreadId
+                    ? { ...t, updatedAt: Date.now(), messages: [] }
+                    : t
+            );
+            persistAiThreads(threads, s.activeThreadId);
+            return { aiMessages: [], aiThreads: threads };
+        }),
+    createAiThread: () =>
+        set((s) => {
+            const t = makeAiThread('새 대화');
+            const threads = [...s.aiThreads, t];
+            persistAiThreads(threads, t.id);
+            return { aiThreads: threads, activeThreadId: t.id, aiMessages: t.messages };
+        }),
+    selectAiThread: (id) =>
+        set((s) => {
+            const t = s.aiThreads.find(x => x.id === id);
+            if (!t) return s;
+            persistAiThreads(s.aiThreads, id);
+            return {
+                activeThreadId: id,
+                aiMessages: t.messages.length > 0
+                    ? t.messages
+                    : [{ role: 'assistant', content: AI_DEFAULT_GREETING }],
+            };
+        }),
+    deleteAiThread: (id) =>
+        set((s) => {
+            // 최소 1개의 스레드는 유지
+            if (s.aiThreads.length <= 1) return s;
+            const threads = s.aiThreads.filter(t => t.id !== id);
+            let activeId = s.activeThreadId;
+            let messages = s.aiMessages;
+            if (activeId === id) {
+                activeId = threads[threads.length - 1].id;
+                const active = threads.find(t => t.id === activeId)!;
+                messages = active.messages.length > 0
+                    ? active.messages
+                    : [{ role: 'assistant', content: AI_DEFAULT_GREETING }];
+            }
+            persistAiThreads(threads, activeId);
+            return { aiThreads: threads, activeThreadId: activeId, aiMessages: messages };
+        }),
 
     // AI API Keys — localStorage에서 복원
     apiKeys: {
