@@ -231,6 +231,34 @@
 
 ---
 
+## 2026-09-10
+
+### 완료된 작업
+
+#### AI 코파일럿 모델 라인업 최신화
+
+- Claude(ChatGPT/GPT·Anthropic) 및 Gemini 공식 문서/사이트를 확인하여 최신 모델로 갱신
+- **Gemini**: `gemini-3.8-flash`(기본), `gemini-3.5-flash`, `gemini-3.1-pro-preview`, `gemini-2.5-flash` — 기존 생성형(generateContent) 엔드포인트 그대로 유지
+- **ChatGPT**: `gpt-5.6-sol`(기본), `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` — 구형 gpt-4o 계열 제거
+- **Claude**: `claude-opus-5`(기본), `claude-sonnet-5`, `claude-haiku-4-5`, `claude-opus-4-8`(Legacy) — 구형 4.7/3.5 계열 제거
+- 단축키 안내(`ShortcutsModal`, `ShortcutsViewer`)의 "Gemini AI Copilot (Live)"를 "Gemini · ChatGPT · Claude (Live)"로 변경, AI 코파일럿 플러그인 설명·버전(2.1.0) 갱신
+- `AiService.ts`/`AiPanel.tsx`/`aiProviders.ts`의 기본 모델도 신규 플래그십으로 일괄 변경
+- **파일**: `src/services/AiService.ts`, `src/services/aiProviders.ts`, `src/components/AiPanel.tsx`, `src/plugins/builtin/aiCopilot.ts`, `src/components/ShortcutsModal.tsx`, `src/components/viewers/ShortcutsViewer.tsx`, `README.md`
+
+#### AI 호출 안정성 및 웹뷰 예외 수정
+
+- **Gemini 503 자동 재시도**: `gemini-3.8-flash` 등 신규 GA 모델은 출시 초기 서버 과부하(503/502)가 잦아 최대 3회 백오프(700ms·1400ms) 자동 재시도 추가 — 테스트 중 503이 3회 연속 발생한 문제 대응
+- **모델 선택 동작 수정**: `AiPanel`에서 고른 모델이 `callAi`에 전달되지 않아 항상 기본 모델로만 호출되던 문제 수정 — 설정 드롭다운의 모델 선택이 실제 요청에 반영됨
+- **오류 메시지 개선**: `refineError`에 503(서버 과부하)·404(모델 없음)·429(요청 한도 초과) 한글 매핑 추가
+- **웹뷰 `dom-ready` 예외 수정**: `<webview>`의 `dom-ready` 이벤트 발생 전(StrictMode 이중 실행 포함) `loadURL()`이 호출되어 예외가 나던 문제 수정 — `domReadyRef`/`pendingLoadRef`/`safeLoadURL()`로 준비 전 요청은 대기열에 보관 후 `dom-ready` 시 자동 로드
+- **파일**: `src/services/AiService.ts`, `src/components/AiPanel.tsx`, `src/components/viewers/WebViewer.tsx`
+
+### 검증
+
+- `npx vite build` 성공 (2136 modules) — 런타임 수정 후 재검증 완료
+
+---
+
 ## 2026-09-09
 
 ### 완료된 작업
