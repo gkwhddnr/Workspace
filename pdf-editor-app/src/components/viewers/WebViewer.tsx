@@ -9,11 +9,34 @@ const WebViewer: React.FC = () => {
     const [currentSrc, setCurrentSrc] = useState(webUrl);
     const [loading, setLoading] = useState(false);
     const webviewRef = useRef<any>(null);
+    // dom-ready 이벤트가 발생하기 전에 loadURL()을 호출하면 예외가 발생하므로 준비 상태를 추적하고, 준비 전 요청은 대기열에 보관합니다.
+    const domReadyRef = useRef(false);
+    const pendingLoadRef = useRef<string | null>(null);
+
+    // dom-ready 전에는 URL을 대기열에 보관했다가 준비되면 자동으로 로드합니다.
+    const safeLoadURL = (url: string) => {
+        if (domReadyRef.current) {
+            webviewRef.current?.loadURL(url);
+        } else {
+            pendingLoadRef.current = url;
+        }
+    };
 
     // Event listeners to sync URL and loading state
     React.useEffect(() => {
         const webview = webviewRef.current;
         if (!webview) return;
+
+        domReadyRef.current = false;
+
+        const handleDomReady = () => {
+            domReadyRef.current = true;
+            if (pendingLoadRef.current) {
+                const url = pendingLoadRef.current;
+                pendingLoadRef.current = null;
+                webview.loadURL(url);
+            }
+        };
 
         const handleNavigate = (e: any) => {
             const url = e.url;
@@ -24,12 +47,16 @@ const WebViewer: React.FC = () => {
         const startLoading = () => setLoading(true);
         const stopLoading = () => setLoading(false);
 
+        webview.addEventListener('dom-ready', handleDomReady);
         webview.addEventListener('did-navigate', handleNavigate);
         webview.addEventListener('did-navigate-in-page', handleNavigate);
         webview.addEventListener('did-start-loading', startLoading);
         webview.addEventListener('did-stop-loading', stopLoading);
 
         return () => {
+            domReadyRef.current = false;
+            pendingLoadRef.current = null;
+            webview.removeEventListener('dom-ready', handleDomReady);
             webview.removeEventListener('did-navigate', handleNavigate);
             webview.removeEventListener('did-navigate-in-page', handleNavigate);
             webview.removeEventListener('did-start-loading', startLoading);
@@ -58,7 +85,7 @@ const WebViewer: React.FC = () => {
             const dataUrl = `data:text/html;base64,${base64Html}`;
             
             // React 렌더링 사이클(src prop 변경)을 우회하여 무거운 Data URI를 직접 주입합니다.
-            webviewRef.current.loadURL(dataUrl);
+            safeLoadURL(dataUrl);
             setInputUrl('workspace://preview ⚡');
         }
     }, [sharedCode, webUrl]);
@@ -84,9 +111,7 @@ const WebViewer: React.FC = () => {
         setCurrentSrc(finalUrl); // 외부에서 이동할 때만 src를 명시적으로 변경합니다.
         
         // React 상태가 변하지 않았을 때도 강제로 이동하기 위해 직접 메서드를 호출합니다.
-        if (webviewRef.current) {
-            webviewRef.current.loadURL(finalUrl);
-        }
+        safeLoadURL(finalUrl);
     };
 
     const handleSubmit = (e: React.FormEvent) => {
