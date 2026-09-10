@@ -34,6 +34,7 @@ const MainLayout: React.FC = () => {
     } = useAppStore();
 
     const { activeView: pluginActiveView, entries: pluginEntries, stopView: stopPluginView } = usePluginStore();
+    const aiCopilotActive = pluginEntries.find(e => e.definition.id === 'ai-copilot')?.active ?? false;
 
     const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
     const [isFlattenModalOpen, setIsFlattenModalOpen] = useState(false);
@@ -244,12 +245,19 @@ const hasPdf = activeTabs.includes('pdf');
                     </div>
 
                     {/* AI Pilot badge */}
-                    <div className="flex items-center bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 rounded-xl px-3 py-1.5 gap-2 shadow-sm">
+                    <div className={`flex items-center gap-2 rounded-xl px-3 py-1.5 shadow-sm ${aiCopilotActive
+                        ? 'bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20'
+                        : 'bg-slate-100 border border-slate-200 dark:bg-slate-700/40 dark:border-slate-600'
+                        }`}>
                         <div className="relative">
-                            <Bot size={16} className="text-purple-600" />
-                            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-green-500 border-2 border-white animate-pulse" />
+                            <Bot size={16} className={aiCopilotActive ? 'text-purple-600' : 'text-slate-400'} />
+                            {aiCopilotActive && (
+                                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-green-500 border-2 border-white animate-pulse" />
+                            )}
                         </div>
-                        <span className="text-xs text-purple-700 font-bold hidden xl:block uppercase tracking-wider">AI Pilot Live</span>
+                        <span className={`text-xs font-bold hidden xl:block uppercase tracking-wider ${aiCopilotActive ? 'text-purple-700' : 'text-slate-400'}`}>
+                            {aiCopilotActive ? 'AI Pilot Live' : 'AI Pilot Off'}
+                        </span>
                     </div>
                 </div>
             </header>

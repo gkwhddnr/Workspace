@@ -75,9 +75,12 @@ export const PluginListItem: React.FC<PluginListItemProps> = ({
                     </button>
                     <button
                         onClick={() => onRun(id)}
-                        disabled={runningPluginId !== null}
-                        title="실행"
-                        className="p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40"
+                        disabled={runningPluginId !== null || !entry.active}
+                        title={entry.active ? '실행' : '비활성 상태 — 먼저 활성화 후 실행 가능'}
+                        className={`p-1.5 rounded-lg transition-colors ${entry.active
+                            ? 'bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40'
+                            : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                            }`}
                     >
                         {isRunning
                             ? <RefreshCw size={14} className="animate-spin" />

@@ -106,11 +106,7 @@ const PluginManagerPanel: React.FC = () => {
 export default PluginManagerPanel;
 
 // AI 코파일럿을 빌트인 플러그인으로 등록 (설치된 플러그인 목록에 표시)
+// 영속화된 스텁(활성 상태 유지)이 이미 있으면 정의만 보강하고, 없으면 새로 등록합니다.
 if (typeof window !== 'undefined') {
-    const hasBuiltin = usePluginStore
-        .getState()
-        .entries.find(e => e.definition.id === 'ai-copilot');
-    if (!hasBuiltin) {
-        registerAiCopilotPlugin(AiPanel);
-    }
+    registerAiCopilotPlugin(AiPanel);
 }

@@ -66,7 +66,7 @@ function loadPersisted(): PersistedPlugin[] {
 
 function savePersisted(entries: PluginRegistryEntry[]) {
     const persisted: PersistedPlugin[] = entries
-        .filter(e => e.source.kind !== 'builtin' && e.code.length <= MAX_PERSIST_CODE)
+        .filter(e => e.source.kind === 'builtin' || e.code.length <= MAX_PERSIST_CODE)
         .map(e => ({
             code: e.code,
             active: e.active,
@@ -144,6 +144,8 @@ export const usePluginStore = create<PluginState>((set, get) => ({
                 ),
             }));
             savePersisted(get().entries);
+            // 활성화 즉시 패널(렌더러) 표시 — 활성/비활성 토글이 실제로 동작함을 보여줍니다.
+            if (entry.definition.render) get().setActiveView(id);
             return;
         }
 
@@ -177,6 +179,16 @@ export const usePluginStore = create<PluginState>((set, get) => ({
     runPlugin: async (id) => {
         const entry = get().entries.find(e => e.definition.id === id);
         if (!entry) return;
+        if (!entry.active) {
+            get().pushNotification({
+                id: `disabled-${id}-${Date.now()}`,
+                pluginId: id,
+                pluginName: entry.definition.name,
+                message: '비활성화된 플러그인입니다. 실행 전에 활성화해 주세요.',
+                type: 'warning',
+            });
+            return;
+        }
         const ctx = entry.context ?? createPluginContext(entry);
         set({ runningPluginId: id });
         try {
@@ -246,6 +258,18 @@ function restorePersistedPlugins() {
     const persisted = loadPersisted();
     const pluginStore = usePluginStore.getState();
     persisted.forEach(p => {
+        if (p.source.kind === 'builtin') {
+            // 빌트인 플러그인: 정의는 앱 코드가 등록하므로, 활성 상태만 먼저 복원하고
+            // 이후 registerPlugin 호출 시 render/hooks 정의가 보강된다.
+            pluginStore.registerEntry({
+                definition: { id: p.id, name: p.name, version: '', description: '' },
+                source: p.source,
+                code: '',
+                active: p.active,
+                installedAt: p.installedAt,
+            });
+            return;
+        }
         if (!p.code) return;
         const result = evaluatePluginCode(p.code, p.source);
         if (result.definition && result.definition.id === p.id) {
