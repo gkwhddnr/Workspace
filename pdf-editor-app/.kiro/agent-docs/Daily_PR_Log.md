@@ -253,9 +253,18 @@
 - **웹뷰 `dom-ready` 예외 수정**: `<webview>`의 `dom-ready` 이벤트 발생 전(StrictMode 이중 실행 포함) `loadURL()`이 호출되어 예외가 나던 문제 수정 — `domReadyRef`/`pendingLoadRef`/`safeLoadURL()`로 준비 전 요청은 대기열에 보관 후 `dom-ready` 시 자동 로드
 - **파일**: `src/services/AiService.ts`, `src/components/AiPanel.tsx`, `src/components/viewers/WebViewer.tsx`
 
+#### AI 코파일럿 플러그인 활성/비활성 토글 정상화
+
+- 기존에는 활성/비활성 토글이 배지 표시에만 영향 — 패널 표시는 실행 버튼(`runPlugin`)이 좌우하고, `active` 상태가 실제 동작에 반영되지 않던 문제 수정
+- **활성화 시**: 패널(렌더러) 즉시 표시 / **비활성화 시**: 열려 있던 패널 닫힘(기존 동작 유지)
+- **실행 차단**: 비활성 상태에서 실행 버튼을 누르면 안내 알림을 띄우고 차단, 플러그인 목록의 실행 버튼도 비활성 상태로 비활성화 표시
+- **영속화**: 빌트인 플러그인의 `active` 상태를 localStorage에 저장(스텁 복원 → 정의 보강 방식), 재시작 후에도 활성 상태 유지
+- **헤더 배지 연동**: 'AI Pilot Live' 고정 표시를 플러그인 활성 상태에 따라 'AI Pilot Live/Off'로 전환
+- **파일**: `src/store/usePluginStore.ts`, `src/components/PluginManagerPanel.tsx`, `src/components/plugin/PluginListItem.tsx`, `src/layouts/MainLayout.tsx`
+
 ### 검증
 
-- `npx vite build` 성공 (2136 modules) — 런타임 수정 후 재검증 완료
+- `npx vite build` 성공 (2136 modules) — 런타임 수정·플러그인 토글 수정 후 재검증 완료
 
 ---
 
