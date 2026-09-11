@@ -162,7 +162,6 @@ const PdfViewer: React.FC = () => {
         setOfficeOriginal,
         setOfficeBakedIds,
         setOfficePristineBytes,
-        officeClean,
         setOfficeClean
     } = useAppStore();
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1066,7 +1065,7 @@ const PdfViewer: React.FC = () => {
                     // 아직 파일에 반영되지 않았다. 저장 시 전체를 재구성해야 하므로 baked 목록 = {} (유지).
                     // dirty 모드(파일이 PowerPoint 등에서 수정됨)에서는 기존 편집분이 이미 파일에
                     // 셰이프로 새겨져 있으므로, 그 id를 기록해 저장 시 신규 요소만 병합해야 한다.
-                    if (!officeClean) {
+                    if (!useAppStore.getState().officeClean) {
                         const bakedIdsMap: Record<number, string[]> = {};
                         for (const [pg, els] of Object.entries(migrated)) {
                             bakedIdsMap[Number(pg)] = els.map((e: any) => e.id).filter(Boolean);
@@ -1151,15 +1150,16 @@ const PdfViewer: React.FC = () => {
             // project-data / original-pdf 와 동일한 키(변환된 pdf 이름)로 통일
             const pdfKey = baseName.replace(/\.(ppt|pptx)$/i, '') + '.pdf';
 
-            // ── 준비: '미편집 원본' 백업 + 디스크가 이미 편집됐는지(베이크/외부수정) 판정 ──
-            // 재오픈 시 변환 기준은 항상 사용자가 연 디스크의 현재 파일이다.
+            // ── 준비: '미편집 원본' 백업 + 디스크에 어떤 편집(save-bake/외부수정)이 있는지 판정 ──
             // originals-office는 (1) 최초 진입 시 미편집 원본 백업과
             // (2) 저장 시 clean 모드 재구성용 보조 데이터로만 쓴다.
-            // 디스크 파일이 미편집 원본과 다르면(우리가 저장해 셰이프를 베이크했거나
-            // PowerPoint에서 직접 수정) 해당 변화를 존중해야 하므로:
-            //  - 변환/표시는 디스크 파일 그대로 (originals-office 무시)
-            //  - projectData의 기존 요소는 이미 셰이프로 새겨졌다고 보고 오버레이하지 않음
-            //  - 이어지는 저장은 신규 요소만 병합하는 dirty 방식으로 동작
+            // 디스크 파일은 미편집 원본과 비교해 '수정 여부'(diskModified), 그리고
+            // 우리가 마지막으로 저장(save-office)해 쓴 출력과 같은지('우리 편집분',
+            // diskMatchesLastSave)를 각각 판정한다:
+            //  - 우리 편집분(외부 수정 없음): 미편집 원본으로 변환 + projectData 요소를
+            //    오버레이 → 기존 필기/도형이 다시 편집 가능하게 열린다.
+            //  - 그 외 수정(PowerPoint에서 직접 수정 등): 디스크 현재 파일 그대로 변환 +
+            //    오버레이 없음 → 외부 변경을 존중하고 저장은 dirty 방식으로 동작.
             const diskBytes = new Uint8Array(await file.arrayBuffer());
             let pristineBytes: Uint8Array | null = null;
             let diskModified = false;
@@ -1187,12 +1187,60 @@ const PdfViewer: React.FC = () => {
                 diskModified = true;
             }
 
-            setOfficePristineBytes(pristineBytes.slice());
-            setOfficeClean(!diskModified);
+            // 마지막으로 우리가 저장해 디스크에 쓴 출력의 해시와 같은지 확인한다.
+            // 일치하면 어플 밖 수정이 없는 '우리 편집분'이므로 미편집 원본 기준으로
+            // 변환 + 요소 오버레이로 다시 편집 가능한 상태로 열 수 있다.
+            let diskMatchesLastSave = false;
+            try {
+                const lastHash = await workspaceApiService.getOfficeLastHash(pdfKey);
+                if (lastHash) {
+                    diskMatchesLastSave = await sha256Hex(diskBytes) === lastHash;
+                }
+            } catch (e) {
+                console.warn('[PdfViewer] getOfficeLastHash failed:', e);
+            }
 
-            // 변환 기준: 항상 디스크의 현재 파일
+            // 외부 수정 등 '우리 저장분이 아닌' 변경이 있는 경우만 요소 오버레이를 건너뛴다.
+            let skipElementRestore = diskModified && !diskMatchesLastSave;
+
+            // 변환 기준: 우리 편집분/미편집 원본이면 미편집 원본(베이크 내역 없음),
+            // 그 외에는 디스크의 현재 파일 그대로.
+            let convertBytes = (!diskModified || diskMatchesLastSave) ? (pristineBytes ?? diskBytes) : diskBytes;
+            let officeClean = !diskModified || diskMatchesLastSave;
+
+            // 우리 저장분(diskMatchesLastSave)으로 판정됐지만 projectData에 남아있는 요소가
+            // 없으면(예: 과거 세션에서 빈 projectData로 저장됨) 빈 오버레이 + 미편집 원본 변환 탓에
+            // 필기가 화면에서 사라지지 않도록, 베이크가 담긴 디스크를 그대로 보여준다.
+            // 이 경우 저장도 clean(전체 재구성)이 아닌 dirty(신규만 병합)로 동작시켜
+            // 남아있는 베이크를 지우지 않는다.
+            if (diskMatchesLastSave) {
+                try {
+                    const ws = await workspaceApiService.fetchWorkspace(pdfKey);
+                    let hasElements = !!ws?.projectData;
+                    if (hasElements) {
+                        try {
+                            const parsed = JSON.parse(ws!.projectData as string);
+                            const els = parsed?.elements ?? parsed?.pageDrawings ?? parsed?.pageTextAnnotations;
+                            hasElements = Object.keys(els || {}).length > 0;
+                        } catch { hasElements = false; }
+                    }
+                    if (!hasElements) {
+                        skipElementRestore = true;
+                        convertBytes = diskBytes;
+                        officeClean = false;
+                    }
+                } catch (e) {
+                    console.warn('[PdfViewer] office element-presence check failed, falling back to disk:', e);
+                    skipElementRestore = true;
+                    convertBytes = diskBytes;
+                    officeClean = false;
+                }
+            }
+
+            setOfficePristineBytes(pristineBytes.slice());
+            setOfficeClean(officeClean);
             const result = await workspaceApiService.convertOfficeToPdf(
-                new File([diskBytes], baseName)
+                new File([convertBytes], baseName)
             );
             if (!result || !result.bytes || result.bytes.length === 0) {
                 alert('PPT/PPTX를 PDF로 변환하는 데 실패했습니다.');
@@ -1212,9 +1260,9 @@ const PdfViewer: React.FC = () => {
             setCurrentFile(savePath, result.fileName);
             // Load the freshly generated PDF directly — skip backend original restore to
             // avoid loading a stale/broken saved original under the same filename.
-            // 디스크 파일이 이미 편집됐다면(diskModified) projectData의 기존 요소는
-            // 셰이프로 베이크되어 디스크에 반영된 상태이므로 오버레이하지 않는다.
-            await loadPdf(pdfFile, isRestore, true, diskModified);
+            // skipElementRestore=true(외부 수정)면 projectData의 기존 요소는 셰이프로
+            // 디스크에 반영된 상태이므로 오버레이하지 않고, 우리 편집분이면 오버레이한다.
+            await loadPdf(pdfFile, isRestore, true, skipElementRestore);
         } catch (error: any) {
             console.error('Error converting office document:', error);
             let msg = error instanceof Error ? error.message : String(error);
