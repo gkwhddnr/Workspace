@@ -1208,29 +1208,39 @@ const PdfViewer: React.FC = () => {
             let convertBytes = (!diskModified || diskMatchesLastSave) ? (pristineBytes ?? diskBytes) : diskBytes;
             let officeClean = !diskModified || diskMatchesLastSave;
 
-            // 우리 저장분(diskMatchesLastSave)으로 판정됐지만 projectData에 남아있는 요소가
-            // 없으면(예: 과거 세션에서 빈 projectData로 저장됨) 빈 오버레이 + 미편집 원본 변환 탓에
-            // 필기가 화면에서 사라지지 않도록, 베이크가 담긴 디스크를 그대로 보여준다.
-            // 이 경우 저장도 clean(전체 재구성)이 아닌 dirty(신규만 병합)로 동작시켜
-            // 남아있는 베이크를 지우지 않는다.
-            if (diskMatchesLastSave) {
+            // ── projectData 기반 오버레이 판정 ──
+            // lastHash가 없거나 불일치하더라도 projectData에 기존 편집 요소가 남아있으면
+            // 오버레이해 다시 편집 가능하게 열고, 미편집 원본으로 변환해 베이크와 겹침을 피한다.
+            // 반대로 우리 저장분이지만 projectData가 비어있으면(과거 세션에서 빈 projectData로
+            // 저장된 경우) 빈 오버레이 대신 베이크가 담긴 디스크를 그대로 보여준다.
+            if (diskMatchesLastSave || diskModified) {
                 try {
                     const ws = await workspaceApiService.fetchWorkspace(pdfKey);
-                    let hasElements = !!ws?.projectData;
-                    if (hasElements) {
+                    let hasElements = false;
+                    if (ws?.projectData) {
                         try {
-                            const parsed = JSON.parse(ws!.projectData as string);
+                            const parsed = JSON.parse(ws.projectData as string);
                             const els = parsed?.elements ?? parsed?.pageDrawings ?? parsed?.pageTextAnnotations;
                             hasElements = Object.keys(els || {}).length > 0;
                         } catch { hasElements = false; }
                     }
-                    if (!hasElements) {
+
+                    if (diskMatchesLastSave && !hasElements) {
+                        // 우리 저장분이지만 요소가 없음 → 베이크가 담긴 디스크 그대로 표시
                         skipElementRestore = true;
                         convertBytes = diskBytes;
                         officeClean = false;
+                    } else if (!diskMatchesLastSave && hasElements) {
+                        // lastHash 불일치(없거나 외부 수정)지만 기존 편집분이 projectData에 있음
+                        // → 미편집 원본으로 변환 + 오버레이로 편집 가능하게 열기
+                        skipElementRestore = false;
+                        convertBytes = pristineBytes ?? diskBytes;
+                        officeClean = true;
                     }
+                    // 그 외: diskMatchesLastSave && hasElements → clean-ours (이미 위에서 설정됨)
+                    //        !diskMatchesLastSave && !hasElements → 외부 수정, 요소 없음 (이미 설정됨)
                 } catch (e) {
-                    console.warn('[PdfViewer] office element-presence check failed, falling back to disk:', e);
+                    console.warn('[PdfViewer] office annotation-presence check failed, falling back to disk:', e);
                     skipElementRestore = true;
                     convertBytes = diskBytes;
                     officeClean = false;
@@ -1239,6 +1249,7 @@ const PdfViewer: React.FC = () => {
 
             setOfficePristineBytes(pristineBytes.slice());
             setOfficeClean(officeClean);
+            console.log('[PdfViewer] office baseline:', { pdfKey, diskModified, diskMatchesLastSave, skipElementRestore, officeClean });
             const result = await workspaceApiService.convertOfficeToPdf(
                 new File([convertBytes], baseName)
             );
