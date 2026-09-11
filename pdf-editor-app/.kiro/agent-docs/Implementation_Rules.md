@@ -153,4 +153,28 @@
 - **렌더링**: `CanvasRenderVisitor`는 rect에 `outlineSegments`가 있으면 스트로크 rect 대신 외곽 선분만 그려 내부 변을 숨긴다. null/빈 배열이면 빈 배열로 fallback (복원 크래시 방지).
 - **Undo/Redo**: 기존 rect 삭제(`DeleteElementCommand`) + 병합 rect 추가(`AddElementCommand`)를 `CompositeCommand`로 묶어 하나의 Undo/Redo 단위로 기록.
 - **복원**: `PdfViewer` 요소 로드 시 `d.outlineSegments`/`d.rectParts`를 복원해 연속 병합 시 기존 외곽선 형태가 바운딩 박스로 변형되지 않게 함.
+- **형광펜 지원**: `mergeOverlappingRectangles(state, mergeType)`는 `'rect' | 'highlight'` 공용으로 동작. `rect`는 텍스트 스냅(`snapped`) 시에만, `highlight`는 스냅 여부와 무관하게 기존 하이라이트와 겹치면 병합. 병합 하이라이트는 bbox로 채우면 오목 부분까지 칠해지므로 `CanvasRenderVisitor`에서 `rectParts`를 **하나의 패스(nonzero 윈도잉)** 로 채워 누수·심(seam) 없이 유니온 윤곽만 렌더링. 부분별 `fillRect` 반복은 겹침 부분 이중 채우기(심)를 유발하므로 사용 금지.
 - **관련 파일**: `ShapeTool.ts`, `ShapeElement.ts`, `CanvasRenderVisitor.ts`, `PdfViewer.tsx`, `CompositeCommand.ts`
+
+---
+
+## 요소 클립보드 복사/붙여넣기 (Element Clipboard Copy/Paste)
+
+- **목적**: 선택 도구에서 도형·펜·텍스트·화살표를 선택 후 `Ctrl+C`/`Ctrl+X`/`Ctrl+V`로 복사·잘라내기·붙여넣기.
+- **클립보드 저장 위치**: `usePdfEditorStore.clipboard: RenderElement[]` (비영속) — `setClipboard()`로 교체. 컴포넌트 언마운트·탭 전환에도 유지되므로 다른 문서/페이지로도 붙여넣기 가능.
+- **딥 클론 필수**: 저장 시 각 요소의 `clone()`을 사용해 딥 클론할 것. `clone()`은 `id + '_copy'` 접미사를 붙이므로 복사 시점에 곧바로 사용해도 되고, 붙여넣기 시에는 반드시 새 고유 id(`Date.now()`+랜덤)로 덮어쓰고 `move(dx, dy)`로 오프셋을 준다.
+- **연속 붙여넣기**: `pasteStepRef`를 증가시켜 붙여넣을 때마다 오프셋(16×step)을 밀어낸다. 새 복사/잘라내기 시 0으로 리셋.
+- **Undo/Redo**: 붙여넣기=각 요소 `AddElementCommand`, 잘라내기=각 요소 `DeleteElementCommand`를 `CompositeCommand`로 묶어 `history.push()` 한 번으로 처리. 복사는 픽셀/요소 변화가 없어 커맨드 불필요.
+- **단축키 배선**: PDF 탭 활성 시에만 동작하며, input/textarea/contenteditable이 포커스된 상태는 상위 가드를 통해 무시(브라우저 네이티브 복사와 충돌 방지). 단축키 목록은 `ShortcutsModal.tsx`·`viewers/ShortcutsViewer.tsx`·`README.md` 세 곳 모두 갱신.
+- **관련 파일**: `usePdfEditorStore.ts`, `PdfViewer.tsx`, `useEditorShortcuts.ts`, `AddElementCommand.ts`, `DeleteElementCommand.ts`, `CompositeCommand.ts`
+
+---
+
+## Office 재오픈 시 디스크 파일 우선 (Disk-First Office Reopen)
+
+- **목적**: 예전에 작업한 PPT/PPTX를 다시 열 때 `backend/data/originals-office`의 미편집 원본 대신 사용자가 연 디스크의 현재 파일을 변환 기준으로 사용한다.
+- **변환 기준**: `loadOfficeDocument`에서 `baseBytes = diskBytes` **항상** 사용 (`fetchOriginalOffice`를 변환 기준으로 쓰지 않는다). `originals-office`는 (1) 최초 진입 시 미편집 원본 백업, (2) 저장 시 clean 모드 재구성용 보조 데이터로만 사용.
+- **수정 판정**: 디스크 해시와 미편집 원본 해시(`sha256Hex`)를 직접 비교해서 달라지면 `diskModified=true → setOfficeClean(false)`, 같으면 `false → setOfficeClean(true)`. (기존 `getOfficeLastHash` 기반 판정 제거, 프리스틴 직접 비교로 단순화)
+- **요소 오버레이 스킵**: `diskModified`가 참이면(디스크에 이미 베이크/외부 편집 존재) `loadPdf(file, isRestore, true, skipElementRestore=true)`로 호출해 `projectData`의 기존 요소를 오버레이하지 않는다 — 중복 시각화 방지. 저장은 신규 요소만 병합하는 dirty 방식으로 동작.
+- **최초 진입/미저장 파일**: 프리스틴이 없으면 현재 디스크를 백업하고 `diskModified=false` → clean 모드 + 요소 오버레이를 유지해 기존 동작(첫 세션 이동/색변경/삭제 반영)을 보존.
+- **관련 파일**: `PdfViewer.tsx`, `useSavePdf.ts`, `WorkspaceApiService.ts`
