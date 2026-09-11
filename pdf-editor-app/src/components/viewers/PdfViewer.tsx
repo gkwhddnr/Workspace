@@ -20,6 +20,7 @@ import { FormatSpan } from '../../models/TextElement';
 import { AddElementCommand } from '../../commands/AddElementCommand';
 import { UpdateElementCommand } from '../../commands/UpdateElementCommand';
 import { DeleteElementCommand } from '../../commands/DeleteElementCommand';
+import { CompositeCommand } from '../../commands/CompositeCommand';
 import { CommandHistory } from '../../commands/CommandHistory';
 import './PdfViewer.css';
 
@@ -185,7 +186,8 @@ const PdfViewer: React.FC = () => {
         isExitDialogOpen, toggleExitDialog,
         historyRevision, incrementRevision, lastSavedRevision, markSaved,
         elements, setElements, setAllElements, selectedElementIds, setSelectedElements,
-        clearElements
+        clearElements,
+        clipboard, setClipboard,
     } = usePdfEditorStore();
 
 
@@ -848,7 +850,7 @@ const PdfViewer: React.FC = () => {
     );
 
 
-    const loadPdf = async (file: File, isRestore: boolean = false, skipBackendRestore: boolean = false) => {
+    const loadPdf = async (file: File, isRestore: boolean = false, skipBackendRestore: boolean = false, skipElementRestore: boolean = false) => {
         try {
             console.log('Loading PDF file:', file.name, file.size);
 
@@ -933,7 +935,7 @@ const PdfViewer: React.FC = () => {
             setPageInput(targetPage.toString());
             lastPageRef.current = targetPage; // Prevent cross-page data corruption during load effect
 
-            if (pData) {
+            if (pData && !skipElementRestore) {
                 try {
                     const parsed = JSON.parse(pData);
                     const migrated: Record<number, RenderElement[]> = {};
@@ -1128,48 +1130,48 @@ const PdfViewer: React.FC = () => {
             // project-data / original-pdf 와 동일한 키(변환된 pdf 이름)로 통일
             const pdfKey = baseName.replace(/\.(ppt|pptx)$/i, '') + '.pdf';
 
-            // ── 준비: '미편집 원본' 백업 + 외부(PowerPoint) 수정 여부 판정 ──
-            // 백엔드에 미편집 원본이 있으면 그것을 기준으로 삼는다.
-            // 없으면 지금 연 파일(=최초 원본)을 백업한다.
-            // 디스크 파일이 우리가 마지막으로 쓴 출력과 다른 경우(어플 밖에서 수정됨)
-            // 원본 재구성은 위험하므로 저장 시 신규 요소만 병합하는 'dirty' 모드로 동작한다.
+            // ── 준비: '미편집 원본' 백업 + 디스크가 이미 편집됐는지(베이크/외부수정) 판정 ──
+            // 재오픈 시 변환 기준은 항상 사용자가 연 디스크의 현재 파일이다.
+            // originals-office는 (1) 최초 진입 시 미편집 원본 백업과
+            // (2) 저장 시 clean 모드 재구성용 보조 데이터로만 쓴다.
+            // 디스크 파일이 미편집 원본과 다르면(우리가 저장해 셰이프를 베이크했거나
+            // PowerPoint에서 직접 수정) 해당 변화를 존중해야 하므로:
+            //  - 변환/표시는 디스크 파일 그대로 (originals-office 무시)
+            //  - projectData의 기존 요소는 이미 셰이프로 새겨졌다고 보고 오버레이하지 않음
+            //  - 이어지는 저장은 신규 요소만 병합하는 dirty 방식으로 동작
             const diskBytes = new Uint8Array(await file.arrayBuffer());
             let pristineBytes: Uint8Array | null = null;
-            let dirty = false;
+            let diskModified = false;
 
             try {
                 const pristine = await workspaceApiService.fetchOriginalOffice(pdfKey);
                 if (pristine && pristine.size > 0) {
                     pristineBytes = new Uint8Array(await pristine.arrayBuffer());
-                    const lastHash = await workspaceApiService.getOfficeLastHash(pdfKey);
-                    if (lastHash) {
-                        try {
-                            const diskHash = await sha256Hex(diskBytes);
-                            dirty = diskHash !== lastHash;
-                        } catch (e) {
-                            console.warn('[PdfViewer] sha256 compare failed, treating as dirty:', e);
-                            dirty = true;
-                        }
+                    try {
+                        diskModified = await sha256Hex(diskBytes) !== await sha256Hex(pristineBytes);
+                    } catch (e) {
+                        console.warn('[PdfViewer] sha256 compare failed, treating as modified:', e);
+                        diskModified = true;
                     }
                 } else {
                     // 첫 진입: 현재 파일을 미편집 원본으로 백업
                     pristineBytes = diskBytes.slice();
                     workspaceApiService.uploadOriginalOffice(pdfKey, new Blob([diskBytes.slice()]))
                         .catch(e => console.warn('[PdfViewer] uploadOriginalOffice failed:', e));
+                    diskModified = false;
                 }
             } catch (e) {
                 console.warn('[PdfViewer] office baseline setup failed, falling back to disk:', e);
                 pristineBytes = diskBytes.slice();
-                dirty = true;
+                diskModified = true;
             }
 
             setOfficePristineBytes(pristineBytes.slice());
-            setOfficeClean(!dirty);
+            setOfficeClean(!diskModified);
 
-            // 변환 기준: pristine(미편집) 또는 현재 디스크 파일
-            const baseBytes = pristineBytes && !dirty ? pristineBytes : diskBytes;
+            // 변환 기준: 항상 디스크의 현재 파일
             const result = await workspaceApiService.convertOfficeToPdf(
-                new File([baseBytes], baseName)
+                new File([diskBytes], baseName)
             );
             if (!result || !result.bytes || result.bytes.length === 0) {
                 alert('PPT/PPTX를 PDF로 변환하는 데 실패했습니다.');
@@ -1189,7 +1191,9 @@ const PdfViewer: React.FC = () => {
             setCurrentFile(savePath, result.fileName);
             // Load the freshly generated PDF directly — skip backend original restore to
             // avoid loading a stale/broken saved original under the same filename.
-            await loadPdf(pdfFile, isRestore, true);
+            // 디스크 파일이 이미 편집됐다면(diskModified) projectData의 기존 요소는
+            // 셰이프로 베이크되어 디스크에 반영된 상태이므로 오버레이하지 않는다.
+            await loadPdf(pdfFile, isRestore, true, diskModified);
         } catch (error: any) {
             console.error('Error converting office document:', error);
             let msg = error instanceof Error ? error.message : String(error);
@@ -1400,6 +1404,67 @@ const PdfViewer: React.FC = () => {
             incrementRevision();
         }
     }, [currentPage, getCommandHistory, incrementRevision]);
+
+    // ─── 클립보드 복사/붙여넣기/잘라내기 ───
+    // 붙여넣기할 때마다 원본에서 일정 간격씩 벌려 배치해, 연속 Ctrl+V로 복제를 늘릴 수 있다.
+    const pasteStepRef = useRef(0);
+    const newElementId = () => Date.now().toString() + Math.random().toString(36).substring(2, 8);
+
+    // 선택된 요소를 딥 클론해 내부 클립보드에 보관 (원본 수정과 무관하게 유지)
+    const handleCopy = useCallback(() => {
+        const state = usePdfEditorStore.getState();
+        const pageEls = state.elements[state.currentPage] || [];
+        const selected = pageEls.filter((e: RenderElement) => state.selectedElementIds.includes(e.id));
+        if (selected.length === 0) return;
+        const clones = selected.map(el => ((el as any).clone?.() as RenderElement) ?? el);
+        setClipboard(clones);
+        pasteStepRef.current = 0;
+    }, [setClipboard]);
+
+    // 복사 후 원본 제거 (undone으로 실행 취소 가능)
+    const handleCut = useCallback(() => {
+        const state = usePdfEditorStore.getState();
+        const pageEls = state.elements[state.currentPage] || [];
+        const selected = pageEls.filter((e: RenderElement) => state.selectedElementIds.includes(e.id));
+        if (selected.length === 0) return;
+        setClipboard(selected.map(el => ((el as any).clone?.() as RenderElement) ?? el));
+        pasteStepRef.current = 0;
+
+        const history = getCommandHistory(state.currentPage);
+        history.push(new CompositeCommand(
+            selected.map(el => new DeleteElementCommand(state.currentPage, el, setElements))
+        ));
+        setSelectedElements([]);
+        setSelectedElementId(null);
+        setActiveHandle(null);
+        incrementRevision();
+    }, [setClipboard, getCommandHistory, setElements, setSelectedElements, incrementRevision]);
+
+    // 클립보드의 요소를 새 id + 오프셋으로 현재 페이지에 추가
+    const handlePaste = useCallback(() => {
+        if (!clipboard.length || editingId) return;
+        const state = usePdfEditorStore.getState();
+        const page = state.currentPage;
+        const step = pasteStepRef.current;
+        pasteStepRef.current += 1;
+        const offset = 16 * (step + 1);
+
+        const clones = clipboard.map(el => {
+            const c = ((el as any).clone?.() as RenderElement) ?? el;
+            c.id = newElementId();
+            c.move(offset, offset);
+            return c;
+        });
+
+        const history = getCommandHistory(page);
+        history.push(new CompositeCommand(
+            clones.map(c => new AddElementCommand(page, c, setElements))
+        ));
+        setSelectedElements(clones.map(c => c.id));
+        setSelectedElementId(clones[clones.length - 1]?.id ?? null);
+        setActiveHandle('body');
+        incrementRevision();
+    }, [clipboard, editingId, getCommandHistory, setElements, setSelectedElements, incrementRevision]);
 
     // ─── Global Drag & Drop Recovery ───
     useEffect(() => {
@@ -1717,6 +1782,9 @@ const PdfViewer: React.FC = () => {
         editingId,
         handleUndo,
         handleRedo,
+        handleCopy,
+        handleCut,
+        handlePaste,
         handleFileOpen,
         handleSave,
         openSaveAsDialog,

@@ -18,6 +18,9 @@ export interface PdfEditorState {
     toolSettings: ToolSettings;
     selectedElementIds: string[];
     isDragging: boolean;
+
+    // 3-1. 내부 클립보드 (복사/붙여넣기용) — 영속화하지 않음
+    clipboard: RenderElement[];
     isSaveAsDialogOpen: boolean;
     saveAsName: string;
     isExitDialogOpen: boolean;
@@ -37,6 +40,7 @@ export interface PdfEditorState {
     setElements: (page: number, updater: RenderElement[] | ((prev: RenderElement[]) => RenderElement[])) => void;
     setAllElements: (elements: Record<number, RenderElement[]>) => void;
     setSelectedElements: (ids: string[]) => void;
+    setClipboard: (elements: RenderElement[]) => void;
     
     // 저장 모달 액션
     setSaveStatus: (status: string | null) => void;
@@ -73,6 +77,7 @@ export const usePdfEditorStore = create<PdfEditorState>((set, get) => ({
     },
     selectedElementIds: [],
     isDragging: false,
+    clipboard: [],
     isSaveAsDialogOpen: false,
     saveAsName: '',
     isExitDialogOpen: false,
@@ -100,6 +105,7 @@ export const usePdfEditorStore = create<PdfEditorState>((set, get) => ({
     
     setAllElements: (elements) => set({ elements }),
     setSelectedElements: (ids) => set({ selectedElementIds: ids }),
+    setClipboard: (clipboard) => set({ clipboard }),
     setActiveTool: (tool) => set({ activeTool: tool }),
     setToolSettings: (settings) => set((state) => ({
         toolSettings: { ...state.toolSettings, ...settings }

@@ -15,6 +15,9 @@ interface ShortcutProps {
     editingId: string | null;
     handleUndo: () => void;
     handleRedo: () => void;
+    handleCopy: () => void;
+    handleCut: () => void;
+    handlePaste: () => void;
     handleFileOpen: () => void;
     handleSave: () => void;
     openSaveAsDialog: () => void;
@@ -43,6 +46,9 @@ export const useEditorShortcuts = ({
     editingId,
     handleUndo,
     handleRedo,
+    handleCopy,
+    handleCut,
+    handlePaste,
     handleFileOpen,
     handleSave,
     openSaveAsDialog,
@@ -101,6 +107,24 @@ export const useEditorShortcuts = ({
                 return;
             }
 
+            // Copy / Cut / Paste (요소 클립보드)
+            const lowerKey = e.key.toLowerCase();
+            if (isCtrl && lowerKey === 'c') {
+                e.preventDefault();
+                handleCopy();
+                return;
+            }
+            if (isCtrl && lowerKey === 'x') {
+                e.preventDefault();
+                handleCut();
+                return;
+            }
+            if (isCtrl && lowerKey === 'v') {
+                e.preventDefault();
+                handlePaste();
+                return;
+            }
+
             // Open File
             if (isCtrl && e.key.toLowerCase() === 'o') {
                 e.preventDefault();
@@ -156,7 +180,7 @@ export const useEditorShortcuts = ({
         return () => window.removeEventListener('keydown', handleKey);
     }, [
         activeTabs, pdfDoc, imageDoc, numPages, currentPage, 
-        handleUndo, handleRedo, handleFileOpen, setCurrentPage, 
+        handleUndo, handleRedo, handleCopy, handleCut, handlePaste, handleFileOpen, setCurrentPage, 
         toolSettings, activeTool, isInputActive, setToolSettings, showSettingIndicator, showToolIndicator
     ]);
 

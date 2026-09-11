@@ -199,20 +199,6 @@ export class WorkspaceApiService {
         }
     }
 
-    /** sha-256 of the last office-save output we wrote, or null. */
-    async getOfficeLastHash(key: string): Promise<string | null> {
-        try {
-            const res = await apiClient.get<{ hash?: string | null }>('/workspace/office-last-hash', {
-                params: { key },
-                timeout: 30000
-            });
-            return res.data?.hash || null;
-        } catch (e) {
-            console.error('[WorkspaceApiService] getOfficeLastHash failed:', e);
-            return null;
-        }
-    }
-
     async setOfficeLastHash(key: string, hash: string): Promise<void> {
         try {
             await apiClient.post('/workspace/office-last-hash', null, {
