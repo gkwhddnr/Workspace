@@ -174,6 +174,9 @@ const PdfViewer: React.FC = () => {
     const imageCache = useRef<Record<string, HTMLImageElement>>({});
     const lastMousePos = useRef<{ x: number, y: number } | null>(null);
     const renderTaskRef = useRef<any>(null);
+    // 문서 세대(gen) 카운터 — 문서 전환 시 이전 문서의 렌더 완료 콜백이
+    // 새 문서 화면을 덮어쓰거나 revision을 올리지 못하게 막는다.
+    const docGenRef = useRef(0);
 
     const {
         docType, setDocType,
@@ -249,6 +252,10 @@ const PdfViewer: React.FC = () => {
     // Selection handle state for rendering
     const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
     const [activeHandle, setActiveHandle] = useState<string | null>(null);
+    // 렌더 강제 트리거 — loadPdf가 상태 커밋 후 마지막에 증가시켜
+    // (오피스 재오픈처럼 여러 상태가 한 번에 바뀔 때에도) 새 문서 페이지가
+    // '방향키 누를 때까지 이전 화면'이 남는 일 없이 즉시 그려지게 한다.
+    const [renderTick, setRenderTick] = useState(0);
 
     // Wire toolManager preview callback to local state
     useEffect(() => {
@@ -790,10 +797,15 @@ const PdfViewer: React.FC = () => {
 
             const renderTask = page.render(renderContext);
             renderTaskRef.current = renderTask;
+            const gen = docGenRef.current;
 
             try {
                 await renderTask.promise;
-                setCanvasRevision(prev => prev + 1);
+                // 이전 문서의 렌더가 뒤늦게 끝나도 revision을 올리지 않는다
+                // (오래된 캔버스가 새 문서 위에 그려지는 것 방지).
+                if (docGenRef.current === gen) {
+                    setCanvasRevision(prev => prev + 1);
+                }
             } catch (err: any) {
                 if (err?.name !== 'RenderingCancelledException') {
                     console.error('PDF render error:', err);
@@ -822,6 +834,8 @@ const PdfViewer: React.FC = () => {
 
             if (!pdfProxies.current[pageNum]) {
                 pdfProxies.current[pageNum] = new PdfPageProxy(doc, pageNum);
+                // 문서 소유 표시: 같은 문서면 캐시 재사용, 다른 문서면 폐기
+                (pdfProxies.current[pageNum] as any)._doc = doc;
             }
 
             const proxy = pdfProxies.current[pageNum];
@@ -862,6 +876,8 @@ const PdfViewer: React.FC = () => {
                 try { renderTaskRef.current.cancel(); } catch (_) { }
                 renderTaskRef.current = null;
             }
+            // 새 문서 세대 시작 — 이후 렌더들은 이 세대의 캔버스만 유효하다.
+            docGenRef.current += 1;
 
             let actualFile = file;
             let targetPage = 1;
@@ -1088,6 +1104,11 @@ const PdfViewer: React.FC = () => {
             // loadPage and renderImage are automatically handled by the useEffect that watches pdfDoc, imageDoc, currentPage, scale
             // Mark as saved — loading a file (with or without annotations) is not an unsaved change
             setTimeout(() => markSaved(), 100);
+
+            // 새 문서 상태 커밋이 끝난 뒤 한 번 더 렌더를 강제한다.
+            // 오피스(PPT/PPTX) 재오픈처럼 pdfDoc·numPages·currentPage가 한 번에
+            // 바뀌어도 이전 문서 화면이 남지 않고 즉시 새 화면을 그린다.
+            setRenderTick((t) => t + 1);
         } catch (error) {
             console.error('Error loading PDF:', error);
             alert(`PDF 로드 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
@@ -1872,7 +1893,7 @@ const PdfViewer: React.FC = () => {
         } else if (imageDoc) {
             renderImage(imageDoc, scale);
         }
-    }, [pdfDoc, imageDoc, currentPage, scale, numPages, loadPage, renderImage]);
+    }, [pdfDoc, imageDoc, currentPage, scale, numPages, renderTick, loadPage, renderImage]);
 
     // ─── Stable refs so the page-switch effect can always see the latest data ───
     // ─── Stable refs so the page-switch effect can always see the latest data ───
