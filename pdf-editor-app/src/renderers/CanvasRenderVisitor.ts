@@ -221,8 +221,20 @@ export class CanvasRenderVisitor implements ElementVisitor {
 
         if (shapeType === 'highlight') {
             // Highlight: filled rectangle with semi-transparent color
+            // 병합된 형광펜(rectParts 보유)은 각 사각형을 하나의 패스로 그린 뒤
+            // nonzero 윈도잉으로 채워 유니온 윤곽만 채운다. 바운딩 박스 채우기나
+            // 부분별 이중 채우기(fill)로 인한 누수·심(seam)을 방지한다.
             this.ctx.fillStyle = style.color;
-            this.ctx.fillRect(sx, sy, sw, sh);
+            const parts = element.rectParts ?? [];
+            if (parts.length > 1) {
+                this.ctx.beginPath();
+                for (const part of parts) {
+                    this.ctx.rect(part.x * s, part.y * s, part.width * s, part.height * s);
+                }
+                this.ctx.fill();
+            } else {
+                this.ctx.fillRect(sx, sy, sw, sh);
+            }
         } else if (shapeType === 'rect') {
             if (outlineSegments.length > 0) {
                 this.ctx.beginPath();

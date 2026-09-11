@@ -333,7 +333,17 @@ export class ShapeTool extends AbstractTool {
                 this.previewElement.height = Math.abs(normalizedPos.y - this.startPos.y);
             }
 
-            if (this.name === 'rect' && snapped && this.mergeOverlappingRectangles(state)) {
+            if (this.name === 'rect' && snapped && this.mergeOverlappingRectangles(state, 'rect')) {
+                this.previewElement = null;
+                this.startPos = null;
+                this.snapPartner = null;
+                this.startSnapPartner = null;
+                return;
+            }
+
+            // [형광펜] 텍스트 스냅과 무관하게 기존 형광펜과 겹치면(걸친 영역 포함)
+            // 유니온(rectParts + outlineSegments) 골격으로 병합해 한 요소로 만든다.
+            if (this.name === 'highlight' && this.mergeOverlappingRectangles(state, 'highlight')) {
                 this.previewElement = null;
                 this.startPos = null;
                 this.snapPartner = null;
@@ -453,7 +463,7 @@ export class ShapeTool extends AbstractTool {
         return segments;
     }
 
-    private mergeOverlappingRectangles(state: any): boolean {
+    private mergeOverlappingRectangles(state: any, mergeType: 'rect' | 'highlight'): boolean {
         const el = this.previewElement;
         if (!el) return false;
         const elements: any[] = this.getPageElements?.() ?? [];
@@ -461,7 +471,7 @@ export class ShapeTool extends AbstractTool {
         const mergedIds: string[] = [];
 
         for (const candidate of elements) {
-            if (candidate.id === el.id || candidate.shapeType !== 'rect') continue;
+            if (candidate.id === el.id || candidate.shapeType !== mergeType) continue;
 
             const candidateParts: RectPart[] = Array.isArray(candidate.rectParts) && candidate.rectParts.length > 0
                 ? candidate.rectParts
@@ -483,9 +493,9 @@ export class ShapeTool extends AbstractTool {
         const mergedRight = Math.max(...selected.map(rectangle => rectangle.x + rectangle.width));
         const mergedBottom = Math.max(...selected.map(rectangle => rectangle.y + rectangle.height));
         const merged = new ShapeElement(
-            'merged-rect-' + Date.now(),
+            'merged-' + mergeType + '-' + Date.now(),
             el.style.copy({}),
-            'rect',
+            mergeType,
             mergedX,
             mergedY,
             mergedRight - mergedX,
