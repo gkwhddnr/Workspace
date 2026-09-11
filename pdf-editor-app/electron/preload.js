@@ -33,5 +33,3 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 });
-
-console.log('Preload script loaded');

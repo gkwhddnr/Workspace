@@ -29,12 +29,10 @@ function createWindow() {
   const isDev = !app.isPackaged;
 
   if (isDev) {
-    console.log('Development mode - Loading from localhost:5173');
     mainWindow.loadURL('http://localhost:5173');
     // 사용자가 원할 때만 F12로 열기 위해 자동 실행 주석 처리
     // mainWindow.webContents.openDevTools();
   } else {
-    console.log('Production mode - Loading from dist');
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
@@ -73,22 +71,6 @@ function createWindow() {
     delete responseHeaders['Content-Security-Policy'];
     delete responseHeaders['content-security-policy'];
     callback({ cancel: false, responseHeaders });
-  });
-
-  console.log('Window created successfully');
-  checkForOrphanJavaProcesses();
-}
-
-async function checkForOrphanJavaProcesses() {
-  const { exec } = require('child_process');
-  exec('tasklist /FI "IMAGENAME eq java.exe" /V', (err, stdout) => {
-    if (err) return;
-    const lines = stdout.split('\n');
-    const javaProcesses = lines.filter(line => line.toLowerCase().includes('java.exe'));
-    if (javaProcesses.length > 0) {
-      console.warn(`Detected ${javaProcesses.length} running Java processes. This might cause database locks if they are from a previous session.`);
-      // We don't automatically kill them to be safe, but we log it.
-    }
   });
 }
 
@@ -144,7 +126,6 @@ ipcMain.handle('dialog:openFile', async (event, options = {}) => {
 
   try {
     const fileBuffer = await fs.readFile(filePath);
-    console.log(`Success: Read ${filePath} (${fileBuffer.length} bytes)`);
 
     return {
       canceled: false,
@@ -276,9 +257,6 @@ if (AI_PROVIDER === 'openai' && OPENAI_API_KEY && OPENAI_API_KEY !== 'your-opena
   activeProvider = 'google';
   USE_REAL_AI = true;
   console.log('✅ Google (Gemini) 연결됨');
-} else {
-  console.log('⚠️  AI API 키가 설정되지 않았습니다. 시뮬레이션 모드로 작동합니다.');
-  console.log('💡 .env 파일을 생성하고 API 키를 설정하세요.');
 }
 
 // ==================== OpenAI API ====================
@@ -898,9 +876,3 @@ function getMimeType(extension) {
 
   return mimeTypes[extension] || 'application/octet-stream';
 }
-
-console.log('===========================================');
-console.log('Electron Main Process Started');
-console.log('App Path:', app.getAppPath());
-console.log('Is Packaged:', app.isPackaged);
-console.log('===========================================');

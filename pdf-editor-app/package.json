@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron ./electron/main.js\"",
+    "dev": "cross-env NODE_OPTIONS=--no-deprecation VITE_CJS_IGNORE_WARNING=1 concurrently \"vite\" \"wait-on http://localhost:5173 && electron ./electron/main.js\"",
     "dev:vite": "vite",
     "dev:electron": "electron ./electron/main.js",
     "build": "vite build",
@@ -37,6 +37,7 @@
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.16",
     "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
     "electron": "^28.1.0",
     "electron-builder": "^24.9.1",
     "png-to-ico": "^3.0.1",
