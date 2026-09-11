@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useAppStore } from '../store/useAppStore';
+import { useAppStore, syncAiThreadsWithBackend } from '../store/useAppStore';
 import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, ChevronDown, MessagesSquare, Plus, X } from 'lucide-react';
 import { callAi, refineError, AiProvider } from '../services/AiService';
 import { pdfTextService } from '../services/PdfTextService';
@@ -83,6 +83,16 @@ const AiPanel: React.FC = () => {
     const [threadsOpen, setThreadsOpen] = useState(false);
     // 현재 화면 · 열린 파일의 실제 내용을 AI에 공유할지 여부 (localStorage 영속화)
     const [includeContext, setIncludeContext] = useState(() => localStorage.getItem('aiIncludeContext') !== 'false');
+    // 항목별 파일 액세스 권한 — AI가 파악/요약할 수 있는 소스를 개별 제어합니다.
+    // AI는 '파일을 읽으려는데 권한이 제한된다'처럼 파일 액세스가 차단된 환경에 놓이므로,
+    // 아래 권한이 켜진 소스의 내용만 컨텍스트로 첨부됩니다. (localStorage 영속화)
+    const [accessPermissions, setAccessPermissions] = useState<Record<'file' | 'web' | 'code', boolean>>(() => {
+        try {
+            const raw = localStorage.getItem('aiAccessPermissions');
+            if (raw) return { file: true, web: true, code: true, ...JSON.parse(raw) };
+        } catch { /* corrupted → fall through to defaults */ }
+        return { file: true, web: true, code: true };
+    });
     const [showKeys, setShowKeys] = useState<Record<AiProvider, boolean>>({
         gemini: false, chatgpt: false, claude: false
     });
@@ -135,8 +145,8 @@ const AiPanel: React.FC = () => {
     const buildContext = async (): Promise<string> => {
         const sections: string[] = [];
 
-        // ① 코드 에디터 — 전체 소스
-        if (activeTabs.includes('code')) {
+        // ① 코드 에디터 — 전체 소스 (코드 에디터 화면 읽기 권한)
+        if (accessPermissions.code && activeTabs.includes('code')) {
             const code: string[] = [];
             if (sharedCode.html.trim()) code.push(`<html>\n${sharedCode.html}`);
             if (sharedCode.css.trim()) code.push(`<css>\n${sharedCode.css}`);
@@ -148,8 +158,8 @@ const AiPanel: React.FC = () => {
             }
         }
 
-        // ② 웹 서퍼 — 현재 페이지 본문 (실시간 미리보기는 코드 에디터와 중복이므로 제외)
-        if (activeTabs.includes('web') && webUrl && !webUrl.startsWith('workspace://')) {
+        // ② 웹 서퍼 — 현재 페이지 본문 (웹 서퍼 화면 읽기 권한)
+        if (accessPermissions.web && activeTabs.includes('web') && webUrl && !webUrl.startsWith('workspace://')) {
             const pageText = (webPageText || '').trim();
             if (pageText) {
                 const t = pageText.length > 80_000 ? pageText.slice(0, 80_000) + '\n...(본문 일부 생략)' : pageText;
@@ -159,8 +169,8 @@ const AiPanel: React.FC = () => {
             }
         }
 
-        // ③ PDF 편집 — 열린 파일의 전체 텍스트
-        if (pdfOriginalData && currentFileName) {
+        // ③ PDF 편집 — 열린 파일의 전체 텍스트 (파일 내용 읽기 권한)
+        if (accessPermissions.file && pdfOriginalData && currentFileName) {
             const cacheKey = `${currentFileName}:${pdfOriginalData.byteLength}`;
             const pdfText = await pdfTextService.extractDocumentText(pdfOriginalData, cacheKey);
             if (pdfText.trim()) {
@@ -192,7 +202,8 @@ const AiPanel: React.FC = () => {
 - 열린 파일: ${currentFileName || '없음'}
 - 웹 서퍼 주소: ${webUrl}
 - 코드 에디터 언어: ${codeLanguage}
-한국어로 친절하고 간결하게 답변해 주세요.`;
+- 파일 액세스 권한: 파일내용 ${accessPermissions.file ? '허용' : '거부'} / 웹서퍼 ${accessPermissions.web ? '허용' : '거부'} / 코드에디터 ${accessPermissions.code ? '허용' : '거부'}
+한국어로 친절하고 간결하게 답변해 주세요. 권한이 '허용'으로 표시된 소스의 내용이 아래 컨텍스트로 첨부되며, 그 파일/화면을 읽고 요약·분석해도 되는 권한이 사용자에게 부여된 것입니다. '파일을 읽으려는데 권한이 제한된다'며 거부하지 말고 첨부된 내용을 적극 활용해 주세요.`;
 
         // 현재 화면(코드·웹)과 열린 파일(PDF 전체 텍스트)의 실제 내용을 컨텍스트로 첨부합니다.
         let finalSystemPrompt = systemPrompt;
@@ -201,9 +212,9 @@ const AiPanel: React.FC = () => {
                 const ctxText = await buildContext();
                 if (ctxText) {
                     finalSystemPrompt += `\n\n[현재 작업 컨텍스트]
-아래는 사용자가 편집 중인 실제 화면과 열린 파일의 전체 내용입니다.
+아래는 사용자가 파일 액세스 권한을 허용한 실제 화면과 열린 파일의 전체 내용입니다.
 파일 요약, 코드 검토, 내용 분석 등에 참고하여 답변해 주세요.
-
+ 
 ${ctxText}
 [/현재 작업 컨텍스트]`;
                 }
@@ -399,22 +410,52 @@ ${ctxText}
                             );
                         })}
 
-                        <label className="flex items-start gap-2 text-[11px] theme-text-muted cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={includeContext}
-                                onChange={(e) => {
-                                    const v = e.target.checked;
-                                    setIncludeContext(v);
-                                    localStorage.setItem('aiIncludeContext', String(v));
-                                }}
-                                className="mt-0.5 accent-indigo-600"
-                            />
-                            <span>
-                                현재 화면·열린 파일 내용을 AI에 공유
-                                <span className="block text-[10px] opacity-70">코드 전체 · 웹 페이지 본문 · PDF 전체 텍스트를 요약/분석에 사용합니다.</span>
-                            </span>
-                        </label>
+                        {/* ── 파일 액세스 권한 ── */}
+                        <div className="rounded-xl border theme-border theme-bg-glass p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold theme-text-main">파일 액세스 권한</span>
+                                <label className="flex items-center gap-1.5 text-[10px] theme-text-muted cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={includeContext}
+                                        onChange={(e) => {
+                                            const v = e.target.checked;
+                                            setIncludeContext(v);
+                                            localStorage.setItem('aiIncludeContext', String(v));
+                                        }}
+                                        className="accent-indigo-600"
+                                    />
+                                    전체 공유
+                                </label>
+                            </div>
+                            <p className="text-[10px] theme-text-muted leading-relaxed">
+                                AI가 '파일을 읽으려는데 권한이 제한된다'처럼 접근이 거부될 수 있으므로,
+                                아래 권한이 켜진 소스의 실제 내용만 컨텍스트로 전달됩니다.
+                            </p>
+                            {([
+                                { key: 'file' as const, label: '열린 파일 내용', desc: 'PDF 전체 텍스트 · Office 문서 내용' },
+                                { key: 'web' as const, label: '웹 서퍼 화면', desc: '현재 주소 · 페이지 본문' },
+                                { key: 'code' as const, label: '코드 에디터 화면', desc: 'HTML / CSS / JavaScript 전체 소스' },
+                            ]).map(item => (
+                                <label key={item.key} className="flex items-start gap-2 text-[10px] theme-text-muted cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={accessPermissions[item.key]}
+                                        onChange={(e) => {
+                                            const v = e.target.checked;
+                                            const next = { ...accessPermissions, [item.key]: v };
+                                            setAccessPermissions(next);
+                                            localStorage.setItem('aiAccessPermissions', JSON.stringify(next));
+                                        }}
+                                        className="mt-0.5 accent-indigo-600"
+                                    />
+                                    <span>
+                                        {item.label}
+                                        <span className="block text-[10px] opacity-70">{item.desc}</span>
+                                    </span>
+                                </label>
+                            ))}
+                        </div>
 
                         <button
                             onClick={handleSaveKeys}
