@@ -15,6 +15,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // AI
   aiRequest: (request) => ipcRenderer.invoke('ai:request', request),
   
+  // 터미널 (시스템 셸)
+  terminal: {
+    exec: (command) => ipcRenderer.invoke('terminal:exec', command),
+    interrupt: () => ipcRenderer.invoke('terminal:kill'),
+    onData: (callback) => {
+      const sub = (_event, payload) => callback(payload);
+      ipcRenderer.on('terminal:data', sub);
+      return () => ipcRenderer.removeListener('terminal:data', sub);
+    },
+    onDone: (callback) => {
+      const sub = (_event, payload) => callback(payload);
+      ipcRenderer.on('terminal:done', sub);
+      return () => ipcRenderer.removeListener('terminal:done', sub);
+    },
+  },
+  
   // 앱 정보
   getAppInfo: () => ipcRenderer.invoke('app:getInfo'),
   getConfig: () => ipcRenderer.invoke('app:getConfig'),

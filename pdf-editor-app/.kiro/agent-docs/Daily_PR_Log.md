@@ -249,6 +249,19 @@
 - **파일**: `src/layouts/MainLayout.tsx`, `README.md`
 - **검증**: `npx vite build` 성공
 
+#### 터미널 플러그인 추가
+
+- 사용자 요청: "다음 터미널 기능도 추가하는데, 플러그인 기능으로 따로 분리해서 추가" — 시스템 셸 터미널을 별도 빌트인 플러그인(`terminal`)로 분리 구현
+- **아키텍처**: 플러그인 목록에서 활성화·실행 → 플러그인 실행 뷰에 `TerminalPanel`(react renderer) 렌더링
+  - `electron/main.js`: `terminal:exec`(한 줄 명령), `terminal:kill`(중단) IPC 추가 — 파이프 기반 대화형 셸은 Windows에서 UTF-8 입력이 깨지는 문제("More?")가 확인되어 **명령어 단위 `cmd /d /s /c` / `sh -c` 방식**으로 채택
+  - `electron/preload.js`: `window.terminal`(`exec`/`interrupt`/`onData`/`onDone`) 노출
+  - 출력은 시스템 코드페이지 자동 감지(`chcp` 조회 → `TextDecoder('windows-949')` 등)로 디코딩해 **한글 출력 정상**
+  - `cd`는 main 프로세스가 세션 cwd를 유지·전환, `cls`/`clear`는 화면 초기화 신호 처리
+  - `Ctrl+C`/중단 버튼: `taskkill /pid X /t /f`(Windows)로 자식 프로세스까지 함께 종료
+- **UI** (`src/components/TerminalPanel.tsx`): 다크 터미널 스타일, 실시간 출력 스트리밍(runId 버퍼링으로 유실 방지), 명령 히스토리(↑/↓), 출력 복사·지우기, 현재 디렉터리 표시, 실행 상태 배지(RUNNING/READY), 브라우저(비 Electron) 폴백 안내
+- **파일**: `electron/main.js`, `electron/preload.js`, `src/plugins/builtin/terminal.ts`, `src/components/TerminalPanel.tsx`, `src/components/PluginManagerPanel.tsx`, `src/types/terminal.d.ts`, `README.md`
+- **검증**: `npx vite build` 성공, 셸 실행 로직 Node 스모크 테스트(한글 출력 CP949 디코딩·stderr·오류 메시지 확인)
+
 ---
 
 ## 2026-09-11
