@@ -392,6 +392,7 @@ graph TD
 
 ### 2026-09-11
 - **AI 코파일럿 파일 액세스 권한 추가**: AI가 '파일을 읽으려는데 권한이 제한된다'며 거부하던 상황을 해소 — 설정에 **항목별 액세스 권한**(열린 파일 내용 / 웹 서퍼 화면 / 코드 에디터 화면)을 개별 토글하고 `localStorage('aiAccessPermissions')`에 영속화. 권한이 켜진 소스의 실제 내용만 컨텍스트로 첨부되며, 시스템 프롬프트에 부여된 권한 상태를 명시해 첨부 내용을 적극 요약·분석하도록 지시
+- **FactChat(금오공대 AI) 제공자 추가**: AI 코파일럿에 넷째 제공자로 **FactChat(금오공대 학교 AI 게이트웨이, OpenAI 호환)** 추가 — `callFactChat`이 `https://kumohai.factchat.bot/v1/gateway/chat/completions/`로 호출(Bearer 인증, 조직 범위 키), 설정 패널에서 API 키 입력 가능(`apiKey_factchat` localStorage 저장), 모델은 게이트웨이 문서 기준 Claude Sonnet 5(기본)·Opus 5·GPT-5.2·GPT-5.4 Mini·Gemini 2.5 Pro·Grok 4, 플러그인 버전 2.2.0·단축키 안내 문구 갱신
 - **요소 클립보드 복사/잘라내기/붙여넣기**: 선택 도구로 도형·펜·텍스트·화살표를 선택 후 `Ctrl+C` / `Ctrl+X` / `Ctrl+V` 지원 — `usePdfEditorStore.clipboard`(비영속)에 딥 클론 보관, 붙여넣기 시 새 id + 단계별 오프셋으로 배치(연속 붙여넣기 간격 유지), 기존 요소 삭제+병합 추가를 `CompositeCommand`로 묶어 Undo/Redo 하나의 단위로 처리
 - **형광펜 겹침 병합**: 새로 그린 형광펜이 기존 형광펜과 겹치면(걸친 영역 포함) 사각형 병합과 동일한 유니온(`rectParts` + `outlineSegments`) 구조로 하나의 요소로 병합 — `mergeOverlappingRectangles`를 `rect`/`highlight` 공용으로 일반화, 병합 형광펜은 `CanvasRenderVisitor`에서 각 사각형을 하나의 패스(nonzero 윈도잉)로 채워 바운딩 박스 누수·심 없이 유니온 윤곽만 렌더링
 - **Office 재오픈 시 디스크 파일 우선**: PT/PPTX를 다시 열 때 `originals-office`의 미편집 원본 대신 **사용자가 연 디스크의 현재 파일**을 변환 기준으로 사용(디스크 파일이 미편집 원본과 다르면 변환·표시는 디스크 그대로, `projectData`의 기존 요소는 이미 셰이프로 베이크된 것으로 보고 오버레이하지 않음) — `originals-office`는 최초 원본 백업·clean 저장 재구성용 보조 데이터로만 사용
