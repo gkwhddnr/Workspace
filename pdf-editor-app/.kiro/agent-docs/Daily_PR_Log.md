@@ -238,13 +238,13 @@
 #### FactChat(금오공대 AI) 제공자 추가
 
 - 사용자가 금오공대 AI 대시보드(`kumohai.kumoh.ac.kr/dashboard/developers`)에서 발급한 API 키용 **넷째 AI 제공자** 추가 — 앱(렌더러)의 AI 코파일럿 설정에서 바로 사용 가능
-- **규격 확인**: 금오공대 테넌트는 `kumohai.factchat.bot`(팩트챗 다자간 테넌트, ID `f66a7db0-9f6f-4287-b666-c223c2faa3ad`) — OpenAI 호환 API Gateway 방식이므로 기존 GPT 호출과 동일한 Chat Completions 스키마 사용
-- **Base URL**: `https://kumohai.factchat.bot/v1/gateway/chat/completions/`, 인증 `Authorization: Bearer <key>`, 키는 **조직 범위**라 다른 테넌트/공용 게이트웨이(`factchat-cloud.mindlogic.ai`)에는 사용 불가(401 실측 확인)
-- **실측 한계**: 외부 네트워크에서 금오공대 게이트웨이로 TLS 핸드셰이크가 막혀(포트 443은 개방) 실제 모델 목록/호출까지는 검증 불가 — 대시보드 'API 키' 화면의 **Endpoint** 값이 다르면 `callFactChat`의 URL만 교체하면 됨
-- **모델 목록**: 게이트웨이 공식 문서 기준 `claude-sonnet-5`(기본)·`claude-opus-5`·`gpt-5.2`·`gpt-5.4-mini`·`gemini-2.5-pro`·`grok-4`
+- **규격 확인**: 팩트챗 공식 문서(`docs.factchat.kr`) 기준 OpenAI 호환 API Gateway — 기존 GPT 호출과 동일한 Chat Completions 스키마 사용
+- **Base URL**: `https://factchat.mindlogic-kr-api.com/v1/gateway/chat/completions/`(테넌트 공용 게이트웨이), 인증 `Authorization: Bearer <key>`, 키는 **조직 범위**(동일 키로 `GET .../models/` 호출 시 HTTP 200 실측 확인)
+- **수정 사유**: 최초엔 쿠모 테넌트 UI 호스트(`kumohai.factchat.bot`)를 추정해 사용했으나 앱에서 `net::ERR_CONNECTION_CLOSED` 발생 — 대시보드 UI 호스트와 API 게이트웨이는 별개이며, 공식 문서의 `factchat.mindlogic-kr-api.com`으로 교체해 해결
+- **모델 목록**: `GET /v1/gateway/models/` 실측(HTTP 200) 기준 챗 모델 중 선택 항목 — `claude-sonnet-5`(기본)·`claude-opus-5`·`claude-fable-5`·`gpt-6-astra`·`gpt-5.6-sol`·`gemini-3.8-flash`·`gemini-3.1-pro-preview`·`grok-4.6` (게이트웨이는 이 밖에도 gemma·muse-spark·sonar·solar-pro4 등 추가 모델 노출)
 - **적용**: `AiService.ts`(`AiProvider` + `callFactChat` + `callAi` 분기 + 오류 매핑), `aiProviders.ts`·`AiPanel.tsx`(PROVIDERS·키/모델 초기 상태), `useAppStore.ts`·`useAiStore.ts`(`apiKeys.factchat`, `apiKey_factchat` localStorage), 플러그인 버전 2.2.0·단축키 안내 문구 갱신
 - **API 키 처리**: 제공된 키를 소스에 하드코딩하지 않음(시크릿 커밋 방지) — 앱 설정 패널에서 **FactChat(금오공대)** 키 입력란에 붙여넣어 localStorage(`apiKey_factchat`)에 저장
-- **검증**: `npx vite build` 성공
+- **검증**: `npx vite build` 성공, 실측 베어러 호출로 `GET /models/`·`POST /chat/completions/` 모두 HTTP 200 확인(Claude Sonnet 5 응답 정상)
 
 ---
 
