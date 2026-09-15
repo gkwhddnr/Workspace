@@ -97,8 +97,14 @@ export async function callClaude(
 
 // ─── FactChat (금오공대 학교 AI 게이트웨이, OpenAI 호환) ────────────────────────
 // 팩트챗 API Gateway는 OpenAI 호환 Chat Completions로 모델을 라우팅합니다.
-// Base URL은 금오공대 테넌트(kumohai) 전용 게이트웨이이며, 키는 조직 범위로
-// 발급되어 다른 테넌트/공용 게이트웨이에는 사용할 수 없습니다.
+// 2026-09 공식 문서(docs.factchat.kr) 기준 실제 API 호스트는
+// factchat.mindlogic-kr-api.com (테넌트와 무관한 공용 게이트웨이이며,
+// API 키가 조직 범위로 발급되어 자격 검증은 키로만 이뤄집니다).
+// kumohai.factchat.bot은 웹 대시보드 UI 호스트라 API 호출이 연결 거부됨.
+export function factChatBaseUrl(): string {
+    return 'https://factchat.mindlogic-kr-api.com/v1/gateway/chat/completions/';
+}
+
 export async function callFactChat(
     apiKey: string,
     messages: AiMessage[],
@@ -106,7 +112,7 @@ export async function callFactChat(
     model = 'claude-sonnet-5'
 ): Promise<string> {
     const response = await axios.post(
-        'https://kumohai.factchat.bot/v1/gateway/chat/completions/',
+        factChatBaseUrl(),
         {
             model,
             messages: [
