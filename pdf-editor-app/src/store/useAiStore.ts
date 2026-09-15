@@ -39,9 +39,10 @@ export const useAiStore = create<AiState>((set) => ({
     setAiPanelSize: (size) => set({ aiPanelSize: size }),
 
     apiKeys: {
-        gemini:  localStorage.getItem('apiKey_gemini')  || '',
-        chatgpt: localStorage.getItem('apiKey_chatgpt') || '',
-        claude:  localStorage.getItem('apiKey_claude')  || '',
+        gemini:   localStorage.getItem('apiKey_gemini')   || '',
+        chatgpt:  localStorage.getItem('apiKey_chatgpt')  || '',
+        claude:   localStorage.getItem('apiKey_claude')   || '',
+        factchat: localStorage.getItem('apiKey_factchat') || '',
     },
     setApiKey: (provider, key) => {
         localStorage.setItem(`apiKey_${provider}`, key);

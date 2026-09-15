@@ -23,7 +23,7 @@ const CONTENT = `
   버전       v${APP_VERSION}
   플랫폼     Electron + React (Vite)
   렌더러     PDF.js (v3.11) + Canvas 2D API
-  AI 엔진    Gemini · ChatGPT · Claude (Live)
+  AI 엔진    Gemini · ChatGPT · Claude · FactChat (Live)
   저장 형식  PDF (원본 보존 / 플래튼 내보내기)
 
 

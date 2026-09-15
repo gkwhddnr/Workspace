@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-export type AiProvider = 'gemini' | 'chatgpt' | 'claude';
+export type AiProvider = 'gemini' | 'chatgpt' | 'claude' | 'factchat';
 
 export interface AiMessage {
     role: 'user' | 'assistant';
@@ -95,6 +95,35 @@ export async function callClaude(
     return response.data.content[0].text as string;
 }
 
+// ─── FactChat (금오공대 학교 AI 게이트웨이, OpenAI 호환) ────────────────────────
+// 팩트챗 API Gateway는 OpenAI 호환 Chat Completions로 모델을 라우팅합니다.
+// Base URL은 금오공대 테넌트(kumohai) 전용 게이트웨이이며, 키는 조직 범위로
+// 발급되어 다른 테넌트/공용 게이트웨이에는 사용할 수 없습니다.
+export async function callFactChat(
+    apiKey: string,
+    messages: AiMessage[],
+    systemPrompt: string,
+    model = 'claude-sonnet-5'
+): Promise<string> {
+    const response = await axios.post(
+        'https://kumohai.factchat.bot/v1/gateway/chat/completions/',
+        {
+            model,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                ...messages.map(m => ({ role: m.role, content: m.content }))
+            ]
+        },
+        {
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            }
+        }
+    );
+    return response.data.choices[0].message.content as string;
+}
+
 // ─── 통합 호출 ────────────────────────────────────────────────────────────────
 export async function callAi(
     provider: AiProvider,
@@ -107,10 +136,11 @@ export async function callAi(
         throw new Error(`${provider.toUpperCase()} API 키가 설정되지 않았습니다.`);
     }
     switch (provider) {
-        case 'gemini':  return callGemini(apiKey, messages, systemPrompt, model);
-        case 'chatgpt': return callChatGPT(apiKey, messages, systemPrompt, model);
-        case 'claude':  return callClaude(apiKey, messages, systemPrompt, model);
-        default:        throw new Error(`지원하지 않는 AI 제공자입니다: ${provider}`);
+        case 'gemini':   return callGemini(apiKey, messages, systemPrompt, model);
+        case 'chatgpt':  return callChatGPT(apiKey, messages, systemPrompt, model);
+        case 'claude':   return callClaude(apiKey, messages, systemPrompt, model);
+        case 'factchat': return callFactChat(apiKey, messages, systemPrompt, model);
+        default:         throw new Error(`지원하지 않는 AI 제공자입니다: ${provider}`);
     }
 }
 
@@ -124,6 +154,12 @@ export function refineError(provider: AiProvider, raw: string): string {
     }
     if (provider === 'claude' && raw.includes('credit')) {
         return 'Anthropic 크레딧이 부족합니다. 계정을 확인해 주세요.';
+    }
+    if (provider === 'factchat' && (raw.includes('credit') || raw.toLowerCase().includes('크레딧'))) {
+        return 'FactChat 크레딧이 부족합니다. 대학 AI 대시보드에서 크레딧을 확인해 주세요.';
+    }
+    if (provider === 'factchat' && (raw.includes('organization') || raw.includes('scope'))) {
+        return '발급된 키의 조직 범위가 아닙니다. 금오공대 AI 대시보드의 키를 사용해 주세요.';
     }
     if (provider === 'gemini' && (raw.includes('503') || raw.toLowerCase().includes('overloaded'))) {
         return 'Gemini 서버가 일시적으로 과부하 상태입니다(503). 잠시 후 다시 시도해 주세요.';

@@ -234,8 +234,8 @@ interface AppState {
     deleteAiThread: (id: string) => void;
 
     // AI API Keys (localStorage persistent)
-    apiKeys: { gemini: string; chatgpt: string; claude: string };
-    setApiKey: (provider: 'gemini' | 'chatgpt' | 'claude', key: string) => void;
+    apiKeys: { gemini: string; chatgpt: string; claude: string; factchat: string };
+    setApiKey: (provider: 'gemini' | 'chatgpt' | 'claude' | 'factchat', key: string) => void;
 
     // PDF Text Metadata
     textBlocks: { text: string; rect: [number, number, number, number] }[];
@@ -546,9 +546,10 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
 
     // AI API Keys — localStorage에서 복원
     apiKeys: {
-        gemini:  localStorage.getItem('apiKey_gemini')  || '',
-        chatgpt: localStorage.getItem('apiKey_chatgpt') || '',
-        claude:  localStorage.getItem('apiKey_claude')  || '',
+        gemini:   localStorage.getItem('apiKey_gemini')   || '',
+        chatgpt:  localStorage.getItem('apiKey_chatgpt')  || '',
+        claude:   localStorage.getItem('apiKey_claude')   || '',
+        factchat: localStorage.getItem('apiKey_factchat') || '',
     },
     setApiKey: (provider, key) => {
         localStorage.setItem(`apiKey_${provider}`, key);

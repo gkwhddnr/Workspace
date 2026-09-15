@@ -60,4 +60,22 @@ export const AI_PROVIDERS: {
         keyPrefix: 'sk-ant-',
         docUrl: 'https://console.anthropic.com/settings/keys',
     },
+    {
+        id: 'factchat',
+        label: 'FactChat (금오공대)',
+        color: 'from-rose-500 to-pink-400',
+        badge: 'bg-rose-100 text-rose-700',
+        placeholder: 'API 키를 입력하세요',
+        modelDefault: 'claude-sonnet-5',
+        modelOptions: [
+            { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+            { value: 'claude-opus-5', label: 'Claude Opus 5' },
+            { value: 'gpt-5.2', label: 'GPT-5.2' },
+            { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+            { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+            { value: 'grok-4', label: 'Grok 4' },
+        ],
+        keyPrefix: '',
+        docUrl: 'https://kumohai.kumoh.ac.kr/dashboard/developers',
+    },
 ];
