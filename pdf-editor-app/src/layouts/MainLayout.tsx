@@ -26,6 +26,11 @@ const TABS: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
     { id: 'plugins', label: '플러그인', icon: <Puzzle size={14} /> },
 ];
 
+// 탭 화면 기본 크기 웨이트 — 크게: 웹(3)·코드(3) / 작게: 단축키(1)·플러그인(1)
+// AI 코파일럿 실행 뷰(채팅)는 작게 유지(AI 2)
+const TAB_WEIGHTS: Record<ActiveTab, number> = { pdf: 8, web: 3, code: 3, shortcuts: 1, plugins: 1 };
+const AI_WEIGHT = 2;
+
 const MainLayout: React.FC = () => {
     const {
         themeMode, setThemeMode,
@@ -140,7 +145,26 @@ const MainLayout: React.FC = () => {
     }, [handleToolChange, setToolSettings, toolSettings, isFlattenModalOpen]);
 
 const hasPdf = activeTabs.includes('pdf');
-    const hasOther = activeTabs.some(t => t !== 'pdf');
+    const openOthers = activeTabs.filter((t) => t !== 'pdf');
+    const hasOther = openOthers.length > 0;
+    const otherWeight = openOthers.reduce((s, t) => s + TAB_WEIGHTS[t], 0);
+    const withPluginRun = !!pluginActiveView;
+
+    // 최상위 수평 분할 기본 비율 (PDF / 기타 / 플러그인·AI 실행 뷰)
+    let pdfSize = 100;
+    let otherSize = 100;
+    let aiSize = 0;
+    if (withPluginRun) {
+        const nonPdfTotal = hasPdf ? (hasOther ? 56 : 20) : 100; // PDF 있으면 우선 확보 후 나머지 분배
+        pdfSize = hasPdf ? (hasOther ? 44 : 80) : 0;
+        aiSize = otherWeight > 0 ? (nonPdfTotal * AI_WEIGHT) / (otherWeight + AI_WEIGHT) : nonPdfTotal;
+        otherSize = otherWeight > 0 ? nonPdfTotal - aiSize : 0;
+    } else {
+        pdfSize = !hasOther ? 100 : 55;
+        otherSize = hasPdf ? 45 : 100;
+    }
+    // 기타 그룹 내 탭별 기본 크기 (열린 탭끼리 웨이트 비례)
+    const tabDefault = (t: ActiveTab) => (otherWeight > 0 ? (TAB_WEIGHTS[t] / otherWeight) * 100 : 100);
 
     return (
         <div
@@ -266,9 +290,12 @@ const hasPdf = activeTabs.includes('pdf');
                 최상위 수평 분할 (합계 = 100%):
                 • PDF만:            PDF(100%)
                 • PDF + 기타(AI없): PDF(55%) + Other(45%)
-                • PDF + 기타(AI있): PDF(44%) + Other(28%) + AI(28%)
+                • PDF + AI(기타없): PDF(80%) + AI(20%)
+                • PDF + 기타 + AI:  PDF(44%) + [Other : AI 실행 뷰 = 웨이트합 : 2]
                 • 기타만(AI없):     Other(100%)
-                • 기타만(AI있):     Other(72%) + AI(28%)
+                • 기타 + AI:        [Other : AI 실행 뷰 = 웨이트합 : 2]
+                탭 웨이트 — 크게: 웹(3)·코드(3) / 작게: 단축키(1)·플러그인(1) / AI(2)
+                기타 그룹 내부: 열린 탭끼리 웨이트 비례 (예: 웹·코드 2개 = 1:1)
             */}
             <div className="flex-1 overflow-hidden">
                 <Group orientation="horizontal" className="h-full">
@@ -277,10 +304,7 @@ const hasPdf = activeTabs.includes('pdf');
                     {hasPdf && (
                         <>
                             <Panel
-                                defaultSize={
-                                    !hasOther ? 100
-                                        : 55
-                                }
+                                defaultSize={pdfSize}
                                 minSize={25}
                                 className="flex flex-col min-w-0"
                             >
@@ -334,17 +358,13 @@ const hasPdf = activeTabs.includes('pdf');
                     {/* ② 웹/코드/단축키 */}
                     {hasOther && (
                         <Panel
-                            defaultSize={
-                                hasPdf
-                                    ? 45
-                                    : 100
-                            }
+                            defaultSize={otherSize}
                             minSize={15}
                             className="flex flex-col min-w-0"
                         >
                             <Group orientation="horizontal" className="h-full">
                                 {activeTabs.includes('web') && (
-                                    <Panel id="pane-web" minSize={20} className="flex flex-col min-w-0 h-full">
+                                    <Panel id="pane-web" defaultSize={tabDefault('web')} minSize={20} className="flex flex-col min-w-0 h-full">
                                         <WebViewer />
                                     </Panel>
                                 )}
@@ -352,7 +372,7 @@ const hasPdf = activeTabs.includes('pdf');
                                     <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
                                 )}
                                 {activeTabs.includes('code') && (
-                                    <Panel id="pane-code" minSize={20} className="flex flex-col min-w-0 h-full">
+                                    <Panel id="pane-code" defaultSize={tabDefault('code')} minSize={20} className="flex flex-col min-w-0 h-full">
                                         <CodeViewer />
                                     </Panel>
                                 )}
@@ -360,7 +380,7 @@ const hasPdf = activeTabs.includes('pdf');
                                     <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
                                 )}
                                 {activeTabs.includes('shortcuts') && (
-                                    <Panel id="pane-shortcuts" minSize={20} className="flex flex-col min-w-0 h-full">
+                                    <Panel id="pane-shortcuts" defaultSize={tabDefault('shortcuts')} minSize={20} className="flex flex-col min-w-0 h-full">
                                         <ShortcutsViewer />
                                     </Panel>
                                 )}
@@ -368,7 +388,7 @@ const hasPdf = activeTabs.includes('pdf');
                                     <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
                                 )}
                                 {activeTabs.includes('plugins') && (
-                                    <Panel id="pane-plugins" minSize={20} className="flex flex-col min-w-0 h-full overflow-auto">
+                                    <Panel id="pane-plugins" defaultSize={tabDefault('plugins')} minSize={20} className="flex flex-col min-w-0 h-full overflow-auto">
                                         <PluginManagerPanel />
                                     </Panel>
                                 )}
@@ -384,7 +404,7 @@ const hasPdf = activeTabs.includes('pdf');
                         return (
                             <>
                                 <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
-                                <Panel id="pane-plugin-run" defaultSize={26} minSize={15} className="flex flex-col min-w-0">
+                                <Panel id="pane-plugin-run" defaultSize={aiSize} minSize={15} className="flex flex-col min-w-0">
                                     {render.kind === 'html' && (
                                         <PluginOutputPanel html={render.html} onClose={stopPluginView} />
                                     )}
