@@ -109,6 +109,11 @@ export const useEditorShortcuts = ({
 
             // Copy / Cut / Paste (요소 클립보드)
             const lowerKey = e.key.toLowerCase();
+            // 드래그로 DOM 텍스트가 선택된 경우(채팅 등) 시스템 복사/붙여넣기를 우선 — PDF 요소 복사는 DOM 선택이 없을 때만
+            if (isCtrl && (lowerKey === 'c' || lowerKey === 'x')) {
+                const sel = window.getSelection();
+                if (sel && sel.toString().length > 0) return;
+            }
             if (isCtrl && lowerKey === 'c') {
                 e.preventDefault();
                 handleCopy();

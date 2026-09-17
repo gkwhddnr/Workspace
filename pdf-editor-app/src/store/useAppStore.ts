@@ -53,6 +53,12 @@ const makeAiThread = (title: string, greeting = AI_DEFAULT_GREETING): AiThread =
     messages: [{ role: 'assistant', content: greeting }],
 });
 
+// 아직 제목이 정해지지 않은(기본 제목인) 스레드인지 판별.
+// 첫 대화가 끝나면 대화 내용으로 제목을 자동 결정하므로,
+// 사용자가 별도로 이름을 바꾸지 않은 스레드만 네이밍 대상으로 본다.
+export const isAiThreadTitleDefault = (title: string): boolean =>
+    title === '새 대화' || title === '기본 대화';
+
 const loadAiThreads = (): AiThread[] => {
     try {
         const raw = localStorage.getItem(AI_THREADS_KEY);
@@ -232,6 +238,7 @@ interface AppState {
     createAiThread: () => void;
     selectAiThread: (id: string) => void;
     deleteAiThread: (id: string) => void;
+    setAiThreadTitle: (threadId: string, title: string) => void;
 
     // AI API Keys (localStorage persistent)
     apiKeys: { gemini: string; chatgpt: string; claude: string; factchat: string };
@@ -477,9 +484,6 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
                     t.id === s.activeThreadId
                         ? {
                             ...t,
-                            title: (t.title === '새 대화' && role === 'user')
-                                ? content.slice(0, 24)
-                                : t.title,
                             updatedAt: Date.now(),
                             messages: [...t.messages, msg],
                         }
@@ -542,6 +546,16 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
                 console.warn('[AppStore] AI 스레드 백엔드 삭제 실패:', err)
             );
             return { aiThreads: threads, activeThreadId: activeId, aiMessages: messages };
+        }),
+    setAiThreadTitle: (threadId, title) =>
+        set((s) => {
+            const threads = s.aiThreads.map(t =>
+                t.id === threadId ? { ...t, title } : t
+            );
+            persistAiThreads(threads, s.activeThreadId);
+            const activeThread = threads.find(t => t.id === threadId);
+            if (activeThread) scheduleAiThreadBackup(activeThread);
+            return { aiThreads: threads };
         }),
 
     // AI API Keys — localStorage에서 복원
