@@ -20,7 +20,7 @@ const iconByType = (t: string) => {
 const PluginManagerPanel: React.FC = () => {
     const {
         entries, runningPluginId,
-        toggleActive, removeEntry, runPlugin,
+        toggleActive, runPlugin,
         notifications, dismissNotification, clearNotifications,
     } = usePluginStore();
 
@@ -94,7 +94,6 @@ const PluginManagerPanel: React.FC = () => {
                                     onReload={reload}
                                     onToggle={toggleActive}
                                     onRun={runPlugin}
-                                    onRemove={removeEntry}
                                 />
                             ))}
                         </div>

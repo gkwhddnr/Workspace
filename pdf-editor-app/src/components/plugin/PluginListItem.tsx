@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PluginRegistryEntry } from '../../plugins/types';
-import { Puzzle, RefreshCw, Power, Play, Trash2 } from 'lucide-react';
+import { Puzzle, RefreshCw, Power, Play } from 'lucide-react';
 import { sourceLabel } from './sourceLabel';
 
 interface PluginListItemProps {
@@ -10,7 +10,6 @@ interface PluginListItemProps {
     onReload: (id: string) => void;
     onToggle: (id: string) => void;
     onRun: (id: string) => void;
-    onRemove: (id: string) => void;
 }
 
 // ─── 설치된 플러그인 목록 카드 ────────────────────────────────────────────────
@@ -21,7 +20,6 @@ export const PluginListItem: React.FC<PluginListItemProps> = ({
     onReload,
     onToggle,
     onRun,
-    onRemove,
 }) => {
     const id = entry.definition.id;
     const isRunning = runningPluginId === id;
@@ -85,13 +83,6 @@ export const PluginListItem: React.FC<PluginListItemProps> = ({
                         {isRunning
                             ? <RefreshCw size={14} className="animate-spin" />
                             : <Play size={14} />}
-                    </button>
-                    <button
-                        onClick={() => onRemove(id)}
-                        title="제거"
-                        className="p-1.5 theme-tool-hover rounded-lg theme-text-muted hover:text-red-500"
-                    >
-                        <Trash2 size={14} />
                     </button>
                 </div>
             </div>

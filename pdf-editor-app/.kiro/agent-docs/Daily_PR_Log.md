@@ -273,6 +273,14 @@
 - **파일**: `src/layouts/MainLayout.tsx`, `src/components/TerminalPanel.tsx`, `README.md`
 - **검증**: `npx vite build` 성공
 
+#### 플러그인 제거 버튼 제거
+
+- 사용자 요청: "플러그인에 제거기능은 왜 넣어놨어. 그거는 없애줘." — 플러그인 목록 카드의 **제거(`Trash2`) 버튼 삭제**
+- AI 코파일럿·터미널 등 빌트인 플러그인은 제거될 수 없는 앱 내장 기능이므로 제거 버튼이 오해를 일으킴
+- `PluginListItem`에서 `onRemove` prop·제거 버튼·`Trash2` import 제거, `PluginManagerPanel`에서 `removeEntry` 연결 제거 (store의 `removeEntry` API는 유지)
+- **파일**: `src/components/plugin/PluginListItem.tsx`, `src/components/PluginManagerPanel.tsx`, `README.md`
+- **검증**: `npx vite build` 성공
+
 ---
 
 ## 2026-09-11
