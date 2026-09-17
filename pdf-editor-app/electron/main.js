@@ -87,7 +87,10 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (ptyTerminal) ptyTerminal.kill();
+  ptySessions.forEach((s) => {
+    try { s.term.kill(); } catch (e) {}
+  });
+  ptySessions.clear();
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -856,66 +859,87 @@ ipcMain.handle('app:getInfo', async () => {
   };
 });
 
-// ==================== 터미널 플러그인 (PTY 세션) ====================
+// ==================== 터미널 플러그인 (멀티 PTY 세션) ====================
 // cmd/bash를 ConPTY로 상주시켜 xterm.js가 그대로 렌더링한다.
+// "터미널 분할·스레드"를 위해 세션을 sessionId 단위로 여러 개 관리한다.
 // 셸은 "지연 생성" — 터미널을 열거나 입력할 때만 스폰된다. 자세한 로직은 ./term.js 참고.
 
-let termEmitTarget = null;
-function termSend(payload) {
+const ptySessions = new Map(); // sessionId -> { term, cols, rows, sender }
+
+function termSend(sessionId, payload) {
   if (!payload) return;
-  if (termEmitTarget && !termEmitTarget.isDestroyed()) {
-    try {
-      termEmitTarget.send('terminal:' + payload.type, payload);
-    } catch (e) {}
-  }
+  const s = ptySessions.get(String(sessionId));
+  const sender = s && s.sender && !s.sender.isDestroyed() ? s.sender : null;
+  const target = sender || (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null);
+  if (!target) return;
+  try {
+    target.send('terminal:' + payload.type, { sessionId: String(sessionId), ...payload });
+  } catch (e) {}
 }
 
-let ptyTerminal = null;
-let termCols = 100;
-let termRows = 30;
-
-function getPtyTerminal() {
-  if (!ptyTerminal) {
-    ptyTerminal = createTerminal({ send: termSend, cwd: process.cwd() });
+function getPtyTerminal(sessionId) {
+  const id = String(sessionId);
+  let s = ptySessions.get(id);
+  if (!s) {
+    s = {
+      term: createTerminal({ send: (p) => termSend(id, p), cwd: process.cwd() }),
+      cols: 100,
+      rows: 30,
+      sender: null,
+    };
+    ptySessions.set(id, s);
   }
-  return ptyTerminal;
+  return s;
 }
 
-function normalizeSize(size) {
+function normalizeSize(s, size) {
   if (size && Number(size.cols) > 0 && Number(size.rows) > 0) {
-    termCols = Math.floor(Number(size.cols));
-    termRows = Math.floor(Number(size.rows));
+    s.cols = Math.floor(Number(size.cols));
+    s.rows = Math.floor(Number(size.rows));
   }
-  return { cols: termCols, rows: termRows };
+  return { cols: s.cols, rows: s.rows };
 }
 
 // 세션 시작(지연 스폰) — xterm의 초기 크기를 함께 전달
-ipcMain.handle('terminal:start', (event, size) => {
-  termEmitTarget = event.sender;
-  normalizeSize(size);
-  const term = getPtyTerminal();
-  const ok = term.start(termCols, termRows);
-  return { ok, cwd: term.getCwd() };
+ipcMain.handle('terminal:start', (event, sessionId, size) => {
+  const s = getPtyTerminal(sessionId);
+  s.sender = event.sender;
+  const { cols, rows } = normalizeSize(s, size);
+  const ok = s.term.start(cols, rows);
+  return { ok, cwd: s.term.getCwd(), sessionId: String(sessionId) };
 });
 
 // xterm 키 입력(화살표·붙여넣기 등)을 PTY로 그대로 전달
-ipcMain.handle('terminal:input', (event, data) => {
-  termEmitTarget = event.sender;
-  getPtyTerminal().writeRaw(data);
+ipcMain.handle('terminal:input', (event, sessionId, data) => {
+  const s = getPtyTerminal(sessionId);
+  s.sender = event.sender;
+  s.term.writeRaw(data);
   return { ok: true };
 });
 
 // 터미널 크기 변경(cols/rows) 동기화
-ipcMain.handle('terminal:resize', (event, size) => {
-  termEmitTarget = event.sender;
-  normalizeSize(size);
-  if (ptyTerminal) ptyTerminal.resize(termCols, termRows);
+ipcMain.handle('terminal:resize', (event, sessionId, size) => {
+  const s = getPtyTerminal(sessionId);
+  s.sender = event.sender;
+  const { cols, rows } = normalizeSize(s, size);
+  s.term.resize(cols, rows);
   return { ok: true };
 });
 
 // 실행 중인 명령/프로그램 중단 (Ctrl+C)
-ipcMain.handle('terminal:kill', () => {
-  if (ptyTerminal) ptyTerminal.interrupt();
+ipcMain.handle('terminal:kill', (event, sessionId) => {
+  const s = ptySessions.get(String(sessionId));
+  if (s) s.term.interrupt();
+  return { ok: true };
+});
+
+// 세션 파괴 (창/패널이 닫히면 셸 종료)
+ipcMain.handle('terminal:destroy', (event, sessionId) => {
+  const s = ptySessions.get(String(sessionId));
+  if (s) {
+    s.term.kill();
+    ptySessions.delete(String(sessionId));
+  }
   return { ok: true };
 });
 

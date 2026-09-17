@@ -2,19 +2,26 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { Terminal as TerminalIcon, Copy, Square, Trash2, PanelBottomClose } from 'lucide-react';
+import { Terminal as TerminalIcon, Copy, Square, Trash2, X } from 'lucide-react';
 
-interface TerminalPanelProps {
-    onCollapse?: () => void;
+export interface TerminalPaneProps {
+    sessionId: string;
+    title?: string;
+    active?: boolean;
+    showClose?: boolean;
+    onFocus?: () => void;
+    onClose?: (sessionId: string) => void;
 }
 
 /**
- * xterm.js 기반 터미널 패널
- * - PTY(ConPTY)에서 온 raw 바이트를 그대로 렌더링 → codex 등 전체 화면 TUI 정상 표시
- * - 키 입력(화살표·붙여넣기 포함)은 xterm onData로 PTY에 그대로 전달
- * - 셸은 지연 생성: 이 패널이 마운트되어 start()가 호출될 때만 스폰된다
+ * 터미널 파네 — 하나의 PTY 세션(sessionId)을 담당하는 xterm.js 단위
+ * - 터미널 분할·스레드는 이 파네를 여러 개 배치하는 TerminalWorkspace가 관리한다
+ * - PTY raw 바이트 그대로 렌더링 → codex 등 전체 화면 TUI 정상 표시
+ * - 셸은 지연 생성: 마운트되어 start(sessionId)가 호출될 때만 스폰된다
+ * - sessionId는 복제되지 않도록 ref로 유지하고 컴포넌트가 회수해도 세션은 살아있다
+ *   (세션 종료는 TerminalWorkspace가 destroy(sessionId)를 명시적으로 호출한다)
  */
-const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
+const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId, title, active, showClose, onFocus, onClose }) => {
     const api = typeof window !== 'undefined' ? window.terminal : undefined;
 
     const hostRef = useRef<HTMLDivElement>(null);
@@ -26,6 +33,8 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
     const [startMsg, setStartMsg] = useState('');
     const [exited, setExited] = useState(false);
     const [hideCursor, setHideCursor] = useState(false);
+    const idRef = useRef(sessionId);
+    idRef.current = sessionId;
 
     useEffect(() => {
         if (!api) {
@@ -102,7 +111,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
             doFit();
             const sized = term.cols >= 40 && term.rows >= 8;
             if (sized || attempt >= 15) {
-                void api.start({ cols: term.cols, rows: term.rows }).then((res) => {
+                void api.start(idRef.current, { cols: term.cols, rows: term.rows }).then((res) => {
                     if (!res?.ok) term.writeln('\u001b[31m셸을 시작할 수 없습니다.\u001b[0m');
                 });
             } else {
@@ -111,7 +120,6 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
             }
         };
         settleFit(() => tryStart(0));
-        term.focus();
 
         // codex TUI 시작 감지: 사용자가 입력한 명령줄을 얕게 추적해
         // codex(exec 아님) 실행 직후부터 커서를 숨긴다 — codex가 프레임마다
@@ -152,13 +160,16 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
                 // 셸이 종료된 뒤 입력이 들어오면 새 세션을 시작하고 이어서 전달
                 exitedRef.current = false;
                 setExited(false);
-                void api.start({ cols: term.cols, rows: term.rows }).then(() => api.input(data));
+                void api.start(idRef.current, { cols: term.cols, rows: term.rows }).then(() =>
+                    api.input(idRef.current, data)
+                );
                 return;
             }
             feedKey(data);
-            void api.input(data);
+            void api.input(idRef.current, data);
         });
         const offData = api.onData((payload) => {
+            if (payload.sessionId !== idRef.current) return;
             term.write(payload.data);
             // codex TUI 중 프롬프트 복귀(cmd "드라이브경로>") = codex 종료 → 커서 복원
             if (codexRef.current && /[A-Za-z]:\\[^>\r\n]*>/m.test(payload.data)) {
@@ -166,7 +177,8 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
                 setHideCursor(false);
             }
         });
-        const offDone = api.onDone(() => {
+        const offDone = api.onDone((payload) => {
+            if (payload.sessionId !== idRef.current) return;
             codexRef.current = false;
             setHideCursor(false);
             exitedRef.current = true;
@@ -174,7 +186,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
             term.write('\r\n\u001b[90m[셸이 종료되었습니다. 입력하면 새 세션이 시작됩니다]\u001b[0m\r\n');
         });
         const offResize = term.onResize(({ cols, rows }) => {
-            void api.resize({ cols, rows });
+            void api.resize(idRef.current, { cols, rows });
         });
 
         const ro = new ResizeObserver(() => {
@@ -194,32 +206,30 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
             term.dispose();
             termRef.current = null;
         };
-    }, [api]);
+    }, [api, sessionId]);
 
-    const focusTerm = () => termRef.current?.focus();
+    useEffect(() => {
+        if (active) termRef.current?.focus();
+    }, [active]);
 
-    const interrupt = () => {
-        void api?.interrupt();
-        focusTerm();
+    const handle = (fn: () => void) => {
+        fn();
+        termRef.current?.focus();
     };
 
-    const clearView = () => {
-        termRef.current?.clear();
-        focusTerm();
-    };
-
-    const copyAll = async () => {
-        const term = termRef.current;
-        if (!term) return;
-        try {
-            term.selectAll();
-            await navigator.clipboard.writeText(term.getSelection());
-            term.clearSelection();
-        } catch {
-            /* 클립보드 접근 실패 시 무시 */
-        }
-        focusTerm();
-    };
+    const interrupt = () => handle(() => void api?.interrupt(sessionId));
+    const clearView = () => handle(() => termRef.current?.clear());
+    const copyAll = () =>
+        handle(() => {
+            const term = termRef.current;
+            if (!term) return;
+            try {
+                term.selectAll();
+                void navigator.clipboard.writeText(term.getSelection()).finally(() => term.clearSelection());
+            } catch {
+                term.clearSelection();
+            }
+        });
 
     if (!connected) {
         return (
@@ -231,63 +241,71 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
     }
 
     return (
-        <div className="flex-1 flex flex-col min-h-0 bg-[#0d1117] text-[#c9d1d9] overflow-hidden">
-            {/* 툴바 */}
-            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/10 shrink-0 select-none">
-                <span className="flex items-center gap-1.5 text-[#8b949e] text-[10px] font-bold uppercase tracking-wider">
-                    <TerminalIcon size={12} className="text-green-500" />
-                    Terminal
+        <div
+            className={`flex-1 flex flex-col min-h-0 bg-[#0d1117] text-[#c9d1d9] overflow-hidden ${
+                active ? 'ring-2 ring-inset ring-indigo-500/40' : ''
+            }`}
+            onMouseDown={(e) => {
+                if (e.target instanceof HTMLElement && e.target.closest('button')) return;
+                onFocus?.();
+                termRef.current?.focus();
+            }}
+        >
+            {/* 미니 툴바 */}
+            <div className="flex items-center gap-1.5 px-2 py-1 border-b border-white/10 shrink-0 select-none bg-black/40">
+                <span className="flex items-center gap-1.5 text-[#8b949e] text-[10px] font-bold uppercase tracking-wider min-w-0">
+                    <TerminalIcon size={11} className="text-green-500 shrink-0" />
+                    <span className="truncate">{title || `터미널 ${sessionId.slice(0, 4)}`}</span>
                 </span>
                 <span
-                    className={`ml-1 text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
-                        exited ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                        exited ? 'bg-red-500/70' : 'bg-green-500 animate-pulse'
                     }`}
-                >
-                    {exited ? 'EXITED' : 'READY'}
-                </span>
-                <div className="ml-auto flex items-center gap-1">
+                    title={exited ? 'EXITED — 입력하면 새 셸 시작' : 'READY'}
+                />
+                <div className="ml-auto flex items-center gap-0.5">
                     <button
                         onClick={interrupt}
                         title="중단 (Ctrl+C)"
                         className="p-1 rounded hover:bg-white/10 text-[#8b949e] hover:text-amber-400"
                     >
-                        <Square size={12} />
+                        <Square size={11} />
                     </button>
                     <button
                         onClick={copyAll}
                         title="출력 전체 복사"
                         className="p-1 rounded hover:bg-white/10 text-[#8b949e]"
                     >
-                        <Copy size={12} />
+                        <Copy size={11} />
                     </button>
                     <button
                         onClick={clearView}
                         title="화면 지우기"
                         className="p-1 rounded hover:bg-white/10 text-[#8b949e]"
                     >
-                        <Trash2 size={12} />
+                        <Trash2 size={11} />
                     </button>
-                    {onCollapse && (
+                    {showClose && onClose && (
                         <button
-                            onClick={onCollapse}
-                            title="터미널 접기"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onClose(sessionId);
+                            }}
+                            title="스레드(세션) 종료"
                             className="p-1 rounded hover:bg-white/10 text-[#8b949e] hover:text-red-400"
                         >
-                            <PanelBottomClose size={12} />
+                            <X size={11} />
                         </button>
                     )}
                 </div>
             </div>
 
             {/* xterm 렌더 영역 */}
-            <div
-                className="flex-1 min-h-0 px-2 py-1 cursor-text"
-                onMouseDown={focusTerm}
-            >
+            <div className="flex-1 min-h-0 px-2 py-1 cursor-text" onMouseDown={() => termRef.current?.focus()}>
                 <div ref={hostRef} className={`w-full h-full ${hideCursor ? 'cs-hide-cursor' : ''}`} />
             </div>
         </div>
     );
 };
 
-export default TerminalPanel;
+export default TerminalPane;

@@ -4,7 +4,7 @@ import { pluginLoader } from '../services/PluginLoaderService';
 import { PluginInstallSection, PluginListItem } from './plugin';
 import AiPanel from './AiPanel';
 import { registerAiCopilotPlugin } from '../plugins/builtin/aiCopilot';
-import TerminalPanel from './TerminalPanel';
+import TerminalWorkspace from './terminal/TerminalWorkspace';
 import { registerTerminalPlugin } from '../plugins/builtin/terminal';
 import { Puzzle, X, CheckCircle2, AlertTriangle, Info } from 'lucide-react';
 
@@ -110,5 +110,5 @@ export default PluginManagerPanel;
 // 영속화된 스텁(활성 상태 유지)이 이미 있으면 정의만 보강하고, 없으면 새로 등록합니다.
 if (typeof window !== 'undefined') {
     registerAiCopilotPlugin(AiPanel);
-    registerTerminalPlugin(TerminalPanel);
+    registerTerminalPlugin(TerminalWorkspace);
 }

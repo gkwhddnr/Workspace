@@ -289,6 +289,20 @@
 
 ---
 
+#### 터미널 분할·스레드 (멀티 세션) + 도구/터미널 도킹 위치
+
+- 사용자 요청 2건: ①터미널 안에 터미널을 분할하고 스레드(여러 셸)를 두는 기능 ②터미널·도구(Tools) 패널의 위치를 왼쪽/오른쪽/아래로 옮기는 도킹 기능
+- **멀티 세션 PTY** (`electron/main.js`): 단일 전역 `ptyTerminal` → `Map<sessionId, term>`으로 개편. `termSend`가 `{ sessionId, ...payload }`를 붙여 emit하고 모든 IPC(`terminal:start/input/resize/kill`)에 sessionId 인자 추가, 신규 `terminal:destroy`(셸 kill + 세션 제거). 창 전체 종료(`window-all-closed`) 시 소유 세션 일괄 정리. `electron/preload.js`·`src/types/terminal.d.ts`의 `TerminalApi` 시그니처도 세션 단위로 확장
+- **TerminalPane** (`src/components/terminal/TerminalPane.tsx`): 기존 `TerminalPanel`을 세션 1:1 파네로 이전 — xterm 옵션(bar 커서·블링크 off·Consolas+Segoe UI Symbol 폰트 체인), `settleFit`(MIN_ROWS=20 폰트 자동 조절), codex 커서 숨김(`feedKey`→`cs-hide-cursor`) 전부 유지하되 모든 API 호출에 sessionId 전달·`api.onData/onDone`의 payload를 `sessionId`로 필터
+- **TerminalWorkspace** (`src/components/terminal/TerminalWorkspace.tsx`): 상단 바에 **스레드 탭**(라이브 dot·활성 스레드 하이라이트·탭 X=세션 종료(닫힌 슬롯은 다른 스레드로 채움)) + **+ 새 스레드(새 셸)** + **분할 버튼(단일/좌우/상하/4분할)**. 분할 시 부족한 칸은 새 셸을 자동 스폰, 포커스된 파네만 커서를 받고(파네 ring 표시) 클릭으로 포커스 전환. 워크스페이스가 언마운트(터미널 접기·플러그인 뷰 종료)되면 소유한 모든 스레드를 일괄 destroy
+- **도킹 레이아웃** (`MainLayout.tsx`): 도구(Sidebar)와 터미널을 각각 **왼쪽/아래/오른쪽**으로 독립 도킹. 상태는 PDF 패널 로컬 state(`toolDock`/`terminalDock`/크기들) — `useAppStore` 미사용. 방향 전환은 Tools 헤더·터미널 워크스페이스 바의 `DockSwitch`(PanelLeft/Bottom/Right 아이콘, `src/components/terminal/DockSwitch.tsx`). 중앙 PDF 뷰어를 기준으로 터미널이 좌/우면 세로 분할, 아래면 가로 분할로 배치되는 중첩 플렉스 구조. 터미널 닫힘 시 좌/우는 세로 토글 스트립, 아래는 가로 '터미널 열기' 바. 도킹 패널은 공용 드래그 핸들 `startDockDrag`(축/증가 방향 sign 지정)로 폭/높이 리사이즈
+- 플러그인 실행 뷰의 터미널도 `TerminalWorkspace`로 교체(`PluginManagerPanel.tsx`, `src/plugins/builtin/terminal.ts`), 기존 `src/components/TerminalPanel.tsx` 삭제
+- **검증**: `npx vite build` 통과. 헤드리스 멀티 세션 테스트(`dbg19`)— 세션 A·B 명령 출력 상호 격리, A만 destroy 후 B 생존·재명령 동작, 전체 세션 정리 0 — ALL PASS. Electron 부팅 스모크(9초, JS 오류 없음)
+- **파일**: `electron/main.js`, `electron/preload.js`, `src/types/terminal.d.ts`, `src/components/terminal/TerminalPane.tsx`(신규), `src/components/terminal/TerminalWorkspace.tsx`(신규), `src/components/terminal/DockSwitch.tsx`(신규), `src/layouts/MainLayout.tsx`, `src/components/PluginManagerPanel.tsx`, `src/components/TerminalPanel.tsx`(삭제), `src/plugins/builtin/terminal.ts`, `README.md`
+- **주의**: preload·main 변경 → **앱을 완전히 종료 후 `npm run dev` 재실행**해야 반영
+
+---
+
 ### 완료된 작업
 
 #### 탭 화면 기본 분할 비율 재설정

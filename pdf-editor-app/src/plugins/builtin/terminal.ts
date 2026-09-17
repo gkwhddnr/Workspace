@@ -5,7 +5,7 @@ export const TERMINAL_PLUGIN_ID = 'terminal';
 /**
  * 빌트인 플러그인: 터미널
  * 시스템 셸(cmd/sh)을 Electron IPC로 띄워 명령어를 실행하고 출력을 실시간으로 확인합니다.
- * - render: react renderer (TerminalPanel)
+ * - render: react renderer (TerminalWorkspace: 스레드 탭 + 터미널 분할)
  */
 export function registerTerminalPlugin(terminalPanelComponent: unknown) {
     registerPlugin({

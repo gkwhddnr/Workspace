@@ -35,11 +35,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 });
 
 // 터미널 (시스템 셸) — 별도 최상위 API로 노출 (xterm.js 렌더링)
+// 멀티 세션(터미널 분할·스레드) 지원: 모든 호출에 sessionId를 첫 인자로 전달한다.
 contextBridge.exposeInMainWorld('terminal', {
-  start: (size) => ipcRenderer.invoke('terminal:start', size),
-  input: (data) => ipcRenderer.invoke('terminal:input', data),
-  resize: (size) => ipcRenderer.invoke('terminal:resize', size),
-  interrupt: () => ipcRenderer.invoke('terminal:kill'),
+  start: (sessionId, size) => ipcRenderer.invoke('terminal:start', sessionId, size),
+  input: (sessionId, data) => ipcRenderer.invoke('terminal:input', sessionId, data),
+  resize: (sessionId, size) => ipcRenderer.invoke('terminal:resize', sessionId, size),
+  interrupt: (sessionId) => ipcRenderer.invoke('terminal:kill', sessionId),
+  destroy: (sessionId) => ipcRenderer.invoke('terminal:destroy', sessionId),
   onData: (callback) => {
     const sub = (_event, payload) => callback(payload);
     ipcRenderer.on('terminal:data', sub);

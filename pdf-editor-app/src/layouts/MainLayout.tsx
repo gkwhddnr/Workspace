@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { useAppStore, ActiveTab, PRESET_COLORS, DrawingTool } from '../store/useAppStore';
 import Sidebar from '../components/Sidebar';
@@ -10,13 +10,14 @@ import FlattenModal from '../components/FlattenModal';
 import ShortcutsModal from '../components/ShortcutsModal';
 import ShortcutsViewer from '../components/viewers/ShortcutsViewer';
 import PluginManagerPanel from '../components/PluginManagerPanel';
-import TerminalPanel from '../components/TerminalPanel';
+import TerminalWorkspace from '../components/terminal/TerminalWorkspace';
+import DockSwitch, { DockSide } from '../components/terminal/DockSwitch';
 import { usePluginStore } from '../store/usePluginStore';
 import { PluginOutputPanel } from '../components/plugin/PluginOutputPanel';
 import {
     FileText, Globe, Code2, Bot, Keyboard, Puzzle,
     Download, ChevronDown, Image, FileCode, Presentation, FileDown,
-    Terminal as TerminalIcon, PanelBottomClose, PanelBottomOpen
+    Terminal as TerminalIcon, PanelBottomOpen
 } from 'lucide-react';
 import { exportService, ExportFormat } from '../services/ExportService';
 
@@ -37,7 +38,8 @@ const MainLayout: React.FC = () => {
     const {
         themeMode, setThemeMode,
         activeTabs, toggleTab,
-        setActiveTool, toolSettings, setToolSettings
+        setActiveTool, toolSettings, setToolSettings,
+        pdfOriginalData, currentFileName
     } = useAppStore();
 
     const { activeView: pluginActiveView, entries: pluginEntries, stopView: stopPluginView } = usePluginStore();
@@ -52,25 +54,38 @@ const MainLayout: React.FC = () => {
     const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
 
-    // PDF 에디터 내장 터미널 (하단 분할) — 기본은 닫힘, 열 때만 셸이 시작된다
+    // PDF 에디터 내장 터미널 (하단/좌우 분할) — 기본은 닫힘, 열 때만 셸이 시작된다
     const [pdfTerminalOpen, setPdfTerminalOpen] = useState(false);
     const [pdfTerminalHeight, setPdfTerminalHeight] = useState(() =>
         Math.max(200, Math.floor((typeof window !== 'undefined' ? window.innerHeight : 800) * 0.36))
     );
-    const terminalDragRef = useRef<{ y: number; height: number } | null>(null);
 
-    const startTerminalDrag = (e: React.MouseEvent) => {
+    // 도구(Sidebar)·터미널 도킹 위치 — PDF 패널 전용이므로 useAppStore가 아닌 로컬 상태로 관리
+    const [toolDock, setToolDock] = useState<DockSide>('left');
+    const [terminalDock, setTerminalDock] = useState<DockSide>('bottom');
+    const [toolSize, setToolSize] = useState(240); // 좌우 도킹 시 도구 폭
+    const [toolBottomH, setToolBottomH] = useState(180); // 아래 도킹 시 도구 높이
+    const [terminalSideW, setTerminalSideW] = useState(330); // 좌우 도킹 시 터미널 폭
+
+    // 도킹 패널 리사이즈용 공용 드래그 — axis: 'x'|'y', sign: 드래그 방향(증가 방향 +1/-1)
+    const startDockDrag = (e: React.MouseEvent, opts: {
+        axis: 'x' | 'y';
+        value: number;
+        set: (v: number) => void;
+        sign?: 1 | -1;
+        min?: number;
+        max?: number;
+    }) => {
         e.preventDefault();
-        terminalDragRef.current = { y: e.clientY, height: pdfTerminalHeight };
+        const start = opts.axis === 'x' ? e.clientX : e.clientY;
+        const sign = opts.sign ?? 1;
+        const min = opts.min ?? 100;
+        const max = opts.max ?? Math.round((typeof window !== 'undefined' ? window.innerHeight : 800) * 0.7);
         const onMove = (ev: MouseEvent) => {
-            const d = terminalDragRef.current;
-            if (!d) return;
-            const delta = d.y - ev.clientY;
-            const maxH = (typeof window !== 'undefined' ? window.innerHeight : 800) * 0.6;
-            setPdfTerminalHeight(Math.max(120, Math.min(maxH, d.height + delta)));
+            const d = ((opts.axis === 'x' ? ev.clientX : ev.clientY) - start) * sign;
+            opts.set(Math.max(min, Math.min(max, opts.value + d)));
         };
         const onUp = () => {
-            terminalDragRef.current = null;
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
             window.removeEventListener('mouseleave', onUp);
@@ -79,8 +94,6 @@ const MainLayout: React.FC = () => {
         window.addEventListener('mouseup', onUp);
         window.addEventListener('mouseleave', onUp);
     };
-    
-    const { pdfOriginalData, currentFileName } = useAppStore();
 
     const handleExport = async (format: ExportFormat) => {
         if (!pdfOriginalData) {
@@ -199,6 +212,170 @@ const hasPdf = activeTabs.includes('pdf');
     }
     // 기타 그룹 내 탭별 기본 크기 (열린 탭끼리 웨이트 비례)
     const tabDefault = (t: ActiveTab) => (otherWeight > 0 ? (TAB_WEIGHTS[t] / otherWeight) * 100 : 100);
+
+    // ── PDF 패널 도킹 레이아웃 빌더 ──
+    // 도구(Sidebar)·터미널을 왼쪽/오른쪽/아래 어디든 도킹할 수 있다.
+    const dockViewer = (
+        <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
+            <PdfViewer />
+        </div>
+    );
+
+    const dockToolsPanel = (
+        <div className="flex flex-col min-w-0">
+            <div className="h-10 border-b theme-border-subtle flex items-center px-3 shrink-0 bg-black/5 gap-1">
+                <span className="text-[10px] font-black theme-text-muted uppercase tracking-[0.2em] flex-1 min-w-0 truncate">Tools &amp; Filters</span>
+                <DockSwitch value={toolDock} onChange={setToolDock} size={10} />
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0">
+                <Sidebar />
+            </div>
+        </div>
+    );
+
+    // 뷰어 + 도구 배치 (터미널 제외)
+    const contentForTools = (): React.ReactNode => {
+        if (toolDock === 'bottom') {
+            return (
+                <div className="flex-1 min-h-0 flex flex-col min-w-0">
+                    {dockViewer}
+                    <div
+                        className="h-1.5 shrink-0 cursor-row-resize bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors active:bg-indigo-600"
+                        onMouseDown={(e) => startDockDrag(e, { axis: 'y', value: toolBottomH, set: setToolBottomH, sign: -1, min: 120 })}
+                        title="도구 높이 조절"
+                    />
+                    <div className="shrink-0 flex flex-col min-h-0" style={{ height: toolBottomH }}>
+                        {dockToolsPanel}
+                    </div>
+                </div>
+            );
+        }
+        const sep = (
+            <div
+                className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600 self-stretch"
+                onMouseDown={(e) => startDockDrag(e, { axis: 'x', value: toolSize, set: setToolSize, sign: toolDock === 'left' ? 1 : -1, min: 160, max: 560 })}
+                title="도구 폭 조절"
+            />
+        );
+        const tools = (
+            <div className="shrink-0 flex flex-col min-w-0" style={{ width: toolSize }}>
+                {dockToolsPanel}
+            </div>
+        );
+        return (
+            <div className="flex-1 min-h-0 flex flex-row min-w-0">
+                {toolDock === 'left' ? (
+                    <>
+                        {tools}
+                        {sep}
+                        {dockViewer}
+                    </>
+                ) : (
+                    <>
+                        {dockViewer}
+                        {sep}
+                        {tools}
+                    </>
+                )}
+            </div>
+        );
+    };
+
+    const terminalVisible = terminalPluginActive && !terminalViewOpen;
+
+    // 터미널 위젯 (열림) 또는 토글 스트립 (닫힘) — 도킹 방향에 따라 형태가 달라진다
+    const terminalWidget = (() => {
+        const workspace = (
+            <TerminalWorkspace onCollapse={() => setPdfTerminalOpen(false)} dockSide={terminalDock} onDockChange={setTerminalDock} />
+        );
+        if (!pdfTerminalOpen) {
+            if (terminalDock === 'bottom') {
+                return (
+                    <button
+                        onClick={() => setPdfTerminalOpen(true)}
+                        className="h-8 shrink-0 flex items-center justify-center gap-1.5 border-t theme-border-subtle theme-bg-panel text-[10px] font-bold theme-text-muted hover:text-green-500 hover:bg-green-500/5 transition-colors"
+                        title="터미널 열기"
+                    >
+                        <TerminalIcon size={12} />
+                        터미널
+                        <PanelBottomOpen size={12} />
+                    </button>
+                );
+            }
+            return (
+                <div className="flex flex-col shrink-0 items-center justify-center w-8 border-l theme-border-subtle theme-bg-panel">
+                    <button
+                        onClick={() => setPdfTerminalOpen(true)}
+                        className="p-1.5 rounded theme-tool-hover theme-text-muted hover:text-green-500"
+                        title="터미널 열기"
+                    >
+                        <TerminalIcon size={12} />
+                    </button>
+                </div>
+            );
+        }
+        if (terminalDock === 'bottom') {
+            return (
+                <div className="flex flex-col min-h-0 shrink-0" style={{ height: pdfTerminalHeight }}>
+                    <div
+                        className="h-1.5 shrink-0 cursor-row-resize bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors active:bg-indigo-600"
+                        onMouseDown={(e) => startDockDrag(e, { axis: 'y', value: pdfTerminalHeight, set: setPdfTerminalHeight, sign: -1, min: 200 })}
+                        title="터미널 높이 조절"
+                    />
+                    <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                        {workspace}
+                    </div>
+                </div>
+            );
+        }
+        return (
+            <div className="flex flex-col min-w-0 shrink-0" style={{ width: terminalSideW }}>
+                <div className="flex-1 min-h-0 flex flex-row overflow-hidden">
+                    <div
+                        className="w-1.5 shrink-0 cursor-col-resize bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors active:bg-indigo-600"
+                        onMouseDown={(e) => startDockDrag(e, { axis: 'x', value: terminalSideW, set: setTerminalSideW, sign: terminalDock === 'left' ? 1 : -1, min: 240, max: 700 })}
+                        title="터미널 폭 조절"
+                    />
+                    <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+                        {workspace}
+                    </div>
+                </div>
+            </div>
+        );
+    })();
+
+    // PDF 패널 전체 조립 (뷰어+도구를 중심으로 터미널이 도킹 방향에 맞춰 배치)
+    const pdfDockArea = (() => {
+        const content = (
+            <div className="flex-1 min-h-0 flex flex-col min-w-0">
+                {contentForTools()}
+            </div>
+        );
+        if (!terminalVisible) return content;
+        if (terminalDock === 'bottom') {
+            return (
+                <div className="flex-1 min-h-0 flex flex-col min-w-0">
+                    {content}
+                    {terminalWidget}
+                </div>
+            );
+        }
+        return (
+            <div className="flex-1 min-h-0 flex flex-row min-w-0">
+                {terminalDock === 'left' ? (
+                    <>
+                        {terminalWidget}
+                        {content}
+                    </>
+                ) : (
+                    <>
+                        {content}
+                        {terminalWidget}
+                    </>
+                )}
+            </div>
+        );
+    })();
 
     return (
         <div
@@ -344,82 +521,11 @@ const hasPdf = activeTabs.includes('pdf');
                             >
                                 <div className="flex-1 p-6 overflow-hidden animate-slide-up h-full">
                                     <div className="h-full flex flex-col min-h-0 theme-bg-glass rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] border theme-border overflow-hidden relative backdrop-blur-md">
-                                        <Group orientation="horizontal" className="h-full">
-                                            {/* Tool Sidebar */}
-                                            <Panel
-                                                id="sidebar-panel"
-                                                defaultSize={20}
-                                                minSize={15}
-                                                className="theme-bg-panel border-r theme-border overflow-hidden flex flex-col min-w-[90px]"
-                                            >
-                                                <div className="h-12 border-b theme-border-subtle flex items-center px-4 shrink-0 bg-black/5">
-                                                    <span className="text-[10px] font-black theme-text-muted uppercase tracking-[0.2em]">Tools &amp; Filters</span>
-                                                </div>
-                                                <div className="flex-1 overflow-y-auto">
-                                                    <Sidebar />
-                                                </div>
-                                            </Panel>
-                                            <Separator
-                                                onPointerUp={(e) => (e.target as HTMLElement).blur()}
-                                                className="w-4 -mx-1.5 bg-transparent hover:bg-indigo-500/10 transition-all cursor-col-resize active:bg-indigo-500/20 z-20 group relative"
-                                            >
-                                                <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[1px] theme-bg-glass group-hover:bg-indigo-500/50 transition-colors" />
-                                                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-10 theme-bg-panel border theme-border rounded-lg shadow-md flex flex-col items-center justify-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all scale-90 group-hover:scale-100">
-                                                    <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
-                                                    <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
-                                                    <div className="w-0.5 h-0.5 rounded-full theme-bg-glass" />
-                                                </div>
-                                            </Separator>
-                                            <Panel 
-                                                id="pdf-panel" 
-                                                defaultSize={80} 
-                                                minSize={20} 
-                                                className="flex flex-col min-w-0 h-full"
-                                            >
-                                                <div className="flex flex-col min-h-0 h-full">
-                                                    {/* PDF 뷰어 (부모 고정 — 토글 시 리마운트 방지) */}
-                                                    <div className="flex-1 min-h-0 overflow-hidden">
-                                                        <PdfViewer />
-                                                    </div>
-
-                                                    {/* 터미널 (플러그인 활성·플러그인 뷰 미사용 시): 열림/닫힘 토글 (하단 드래그 리사이즈) */}
-                                                    {terminalPluginActive && !terminalViewOpen && (
-                                                        <>
-                                                            {pdfTerminalOpen && (
-                                                                <>
-                                                                    <div
-                                                                        className="h-1.5 shrink-0 cursor-row-resize bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors active:bg-indigo-600"
-                                                                        onMouseDown={startTerminalDrag}
-                                                                        title="터미널 높이 조절"
-                                                                    />
-                                                                    <div
-                                                                        className="flex flex-col min-h-0 shrink-0"
-                                                                        style={{ height: pdfTerminalHeight }}
-                                                                    >
-                                                                        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                                                                            <TerminalPanel onCollapse={() => setPdfTerminalOpen(false)} />
-                                                                        </div>
-                                                                    </div>
-                                                                </>
-                                                            )}
-                                                            {!pdfTerminalOpen && (
-                                                                <button
-                                                                    onClick={() => setPdfTerminalOpen(true)}
-                                                                    className="h-8 shrink-0 flex items-center justify-center gap-1.5 border-t theme-border-subtle theme-bg-panel text-[10px] font-bold theme-text-muted hover:text-green-500 hover:bg-green-500/5 transition-colors"
-                                                                    title="터미널 열기"
-                                                                >
-                                                                    <TerminalIcon size={12} />
-                                                                    터미널
-                                                                    <PanelBottomOpen size={12} />
-                                                                </button>
-                                                            )}
-                                                        </>
-                                                    )}
-                                                </div>
-                                            </Panel>
-                                        </Group>
+                                        <div className="flex-1 min-h-0 flex flex-col min-w-0 h-full">
+                                        {pdfDockArea}
                                     </div>
                                 </div>
+                            </div>
                             </Panel>
 
                             {hasOther && (
