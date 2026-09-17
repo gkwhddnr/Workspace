@@ -63,6 +63,34 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
         };
         doFit();
 
+        // codex 같은 TUI는 전체 화면(최소 20행)을 그리기 때문에, 패널이 짧으면
+        // 박스/입력/상태 줄이 잘려 화면이 오가듯 움직여 보인다.
+        // 패널 높이에 맞춰 폰트를 줄여 항상 MIN_ROWS 이상 표시되게 한다 (최소 9px).
+        const MIN_ROWS = 20;
+        const timers: number[] = [];
+        const settleFit = (cb?: () => void, tries = 0) => {
+            doFit();
+            const cur = term.options.fontSize as number;
+            const shrinking = term.rows < MIN_ROWS && cur > 9;
+            const growing = term.rows > 26 && cur < 14;
+            if (tries >= 8 || (!shrinking && !growing)) {
+                cb?.();
+                return;
+            }
+            if (shrinking) {
+                const next = Math.max(9, Math.min(cur - 1, Math.ceil(cur * (MIN_ROWS / Math.max(1, term.rows)))));
+                if (next >= cur) {
+                    cb?.();
+                    return;
+                }
+                term.options.fontSize = next;
+            } else {
+                term.options.fontSize = cur + 1;
+            }
+            const t = window.setTimeout(() => settleFit(cb, tries + 1), 120);
+            timers.push(t);
+        };
+
         // 레이아웃이 확정된 크기로 셸을 시작한다 — 크기 불안정이면
         // codex 같은 TUI가 리사이즈를 감지해 재배치(움직임)를 반복하기 때문이다.
         let stopped = false;
@@ -75,10 +103,11 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
                     if (!res?.ok) term.writeln('\u001b[31m셸을 시작할 수 없습니다.\u001b[0m');
                 });
             } else {
-                setTimeout(() => tryStart(attempt + 1), 100);
+                const t = window.setTimeout(() => tryStart(attempt + 1), 100);
+                timers.push(t);
             }
         };
-        tryStart(0);
+        settleFit(() => tryStart(0));
         term.focus();
 
         const offInput = term.onData((data) => {
@@ -103,12 +132,16 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
             void api.resize({ cols, rows });
         });
 
-        const ro = new ResizeObserver(() => doFit());
+        const ro = new ResizeObserver(() => {
+            const t = window.setTimeout(() => settleFit(), 80);
+            timers.push(t);
+        });
         ro.observe(host);
 
         return () => {
             stopped = true;
             ro.disconnect();
+            timers.forEach((t) => window.clearTimeout(t));
             offInput.dispose();
             offData();
             offDone();

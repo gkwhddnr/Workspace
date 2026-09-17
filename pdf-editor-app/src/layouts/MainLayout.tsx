@@ -55,7 +55,7 @@ const MainLayout: React.FC = () => {
     // PDF 에디터 내장 터미널 (하단 분할) — 기본은 닫힘, 열 때만 셸이 시작된다
     const [pdfTerminalOpen, setPdfTerminalOpen] = useState(false);
     const [pdfTerminalHeight, setPdfTerminalHeight] = useState(() =>
-        Math.max(160, Math.floor((typeof window !== 'undefined' ? window.innerHeight : 800) * 0.28))
+        Math.max(200, Math.floor((typeof window !== 'undefined' ? window.innerHeight : 800) * 0.36))
     );
     const terminalDragRef = useRef<{ y: number; height: number } | null>(null);
 
