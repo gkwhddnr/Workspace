@@ -20,10 +20,12 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
     const hostRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     const exitedRef = useRef(false);
+    const codexRef = useRef(false);
 
     const [connected, setConnected] = useState(true);
     const [startMsg, setStartMsg] = useState('');
     const [exited, setExited] = useState(false);
+    const [hideCursor, setHideCursor] = useState(false);
 
     useEffect(() => {
         if (!api) {
@@ -111,6 +113,40 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
         settleFit(() => tryStart(0));
         term.focus();
 
+        // codex TUI 시작 감지: 사용자가 입력한 명령줄을 얕게 추적해
+        // codex(exec 아님) 실행 직후부터 커서를 숨긴다 — codex가 프레임마다
+        // 커서를 입력줄/상태줄 등 각기 다른 위치에 놓고 ?25h로 보여서
+        // 블록 커서가 순간이동하는 것을 막는다(입력 피드백은 codex가 직접 침).
+        let line = '';
+        let inEscape = 0;
+        const feedKey = (data: string) => {
+            for (const ch of data) {
+                if (inEscape > 0) {
+                    if (/[A-Za-z@-~]/.test(ch)) inEscape = 0;
+                    else inEscape--;
+                    continue;
+                }
+                if (ch === '\x1b') {
+                    inEscape = 2;
+                    continue;
+                }
+                if (ch === '\r') {
+                    const c = line.trim().toLowerCase();
+                    if (/^codex\b/.test(c) && !/\bexec\b/.test(c) && !codexRef.current) {
+                        codexRef.current = true;
+                        setHideCursor(true);
+                    }
+                    line = '';
+                    continue;
+                }
+                if (ch === '\x7f') {
+                    line = line.slice(0, -1);
+                    continue;
+                }
+                if (ch >= ' ') line += ch;
+            }
+        };
+
         const offInput = term.onData((data) => {
             if (exitedRef.current) {
                 // 셸이 종료된 뒤 입력이 들어오면 새 세션을 시작하고 이어서 전달
@@ -119,12 +155,20 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
                 void api.start({ cols: term.cols, rows: term.rows }).then(() => api.input(data));
                 return;
             }
+            feedKey(data);
             void api.input(data);
         });
         const offData = api.onData((payload) => {
             term.write(payload.data);
+            // codex TUI 중 프롬프트 복귀(cmd "드라이브경로>") = codex 종료 → 커서 복원
+            if (codexRef.current && /[A-Za-z]:\\[^>\r\n]*>/m.test(payload.data)) {
+                codexRef.current = false;
+                setHideCursor(false);
+            }
         });
         const offDone = api.onDone(() => {
+            codexRef.current = false;
+            setHideCursor(false);
             exitedRef.current = true;
             setExited(true);
             term.write('\r\n\u001b[90m[셸이 종료되었습니다. 입력하면 새 세션이 시작됩니다]\u001b[0m\r\n');
@@ -240,7 +284,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
                 className="flex-1 min-h-0 px-2 py-1 cursor-text"
                 onMouseDown={focusTerm}
             >
-                <div ref={hostRef} className="w-full h-full" />
+                <div ref={hostRef} className={`w-full h-full ${hideCursor ? 'cs-hide-cursor' : ''}`} />
             </div>
         </div>
     );
