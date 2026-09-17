@@ -1,10 +1,3 @@
-export interface TerminalExecResult {
-    ok: boolean;
-    runId?: number;
-    cwd?: string;
-    message?: string;
-}
-
 export interface TerminalDataPayload {
     runId: number;
     channel: 'out' | 'err';
@@ -19,10 +12,21 @@ export interface TerminalDonePayload {
     cwd: string;
 }
 
+export interface TerminalSize {
+    cols: number;
+    rows: number;
+}
+
+export interface TerminalStartResult {
+    ok: boolean;
+    cwd?: string;
+}
+
 export interface TerminalApi {
-    exec: (command: string) => Promise<TerminalExecResult>;
-    interrupt: () => Promise<{ ok: boolean }>;
+    start: (size?: TerminalSize) => Promise<TerminalStartResult>;
     input: (data: string) => Promise<{ ok: boolean }>;
+    resize: (size: TerminalSize) => Promise<{ ok: boolean }>;
+    interrupt: () => Promise<{ ok: boolean }>;
     onData: (callback: (payload: TerminalDataPayload) => void) => () => void;
     onDone: (callback: (payload: TerminalDonePayload) => void) => () => void;
 }

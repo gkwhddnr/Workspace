@@ -34,11 +34,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 });
 
-// 터미널 (시스템 셸) — 별도 최상위 API로 노출
+// 터미널 (시스템 셸) — 별도 최상위 API로 노출 (xterm.js 렌더링)
 contextBridge.exposeInMainWorld('terminal', {
-  exec: (command) => ipcRenderer.invoke('terminal:exec', command),
-  interrupt: () => ipcRenderer.invoke('terminal:kill'),
+  start: (size) => ipcRenderer.invoke('terminal:start', size),
   input: (data) => ipcRenderer.invoke('terminal:input', data),
+  resize: (size) => ipcRenderer.invoke('terminal:resize', size),
+  interrupt: () => ipcRenderer.invoke('terminal:kill'),
   onData: (callback) => {
     const sub = (_event, payload) => callback(payload);
     ipcRenderer.on('terminal:data', sub);

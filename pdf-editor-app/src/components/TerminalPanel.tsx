@@ -1,255 +1,132 @@
-import React, { useState, useRef, useEffect } from 'react';
-import type { TerminalDataPayload, TerminalDonePayload } from '../types/terminal';
-import { Terminal as TerminalIcon, Trash2, Copy, Square, PanelBottomClose } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
+import { Terminal as TerminalIcon, Copy, Square, Trash2, PanelBottomClose } from 'lucide-react';
 
 interface TerminalPanelProps {
     onCollapse?: () => void;
 }
 
-interface Line {
-    id: number;
-    text: string;
-    kind: 'out' | 'err' | 'sys' | 'echo' | 'done';
-}
-
-let lineSeq = 0;
-
-// ANSI 이스케이프 시퀀스 간단 제거 (VT100 색상/커서, OSC 타이틀, 벨)
-const ANSI_RE = /\u001b\[[0-9;?]*[a-zA-Z]/g;
-const OSC_RE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
-const MAX_LINES = 2000;
-
-const sanitize = (s: string) =>
-    s.replace(OSC_RE, '').replace(ANSI_RE, '').replace(/[\u0007\u000f\u000e\u001b]/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-
-// 실행 중(대화형 프로그램)에 PTY로 그대로 보낼 특수키 시퀀스
-const BUSY_KEY_SEQ: Record<string, string> = {
-    ArrowUp: '\u001b[A',
-    ArrowDown: '\u001b[B',
-    ArrowRight: '\u001b[C',
-    ArrowLeft: '\u001b[D',
-    Escape: '\u001b',
-    Tab: '\t',
-    Backspace: '\u007f',
-};
-
+/**
+ * xterm.js 기반 터미널 패널
+ * - PTY(ConPTY)에서 온 raw 바이트를 그대로 렌더링 → codex 등 전체 화면 TUI 정상 표시
+ * - 키 입력(화살표·붙여넣기 포함)은 xterm onData로 PTY에 그대로 전달
+ * - 셸은 지연 생성: 이 패널이 마운트되어 start()가 호출될 때만 스폰된다
+ */
 const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
     const api = typeof window !== 'undefined' ? window.terminal : undefined;
 
-    const [lines, setLines] = useState<Line[]>([]);
-    const [input, setInput] = useState('');
+    const hostRef = useRef<HTMLDivElement>(null);
+    const termRef = useRef<Terminal | null>(null);
+    const exitedRef = useRef(false);
+
     const [connected, setConnected] = useState(true);
     const [startMsg, setStartMsg] = useState('');
-    const [busy, setBusy] = useState(false);
-    const [cwd, setCwd] = useState('');
-    const [history, setHistory] = useState<string[]>([]);
-    const [histIdx, setHistIdx] = useState(-1);
+    const [exited, setExited] = useState(false);
 
-    const scrollRef = useRef<HTMLDivElement>(null);
-    const inputRef = useRef<HTMLInputElement>(null);
-    const bufRef = useRef('');
-    const activeRunIdRef = useRef<number | null>(null);
-    const pendingRef = useRef<Map<number, (TerminalDataPayload | TerminalDonePayload)[]>>(new Map());
-    const lastCwdRef = useRef('');
+    useEffect(() => {
+        if (!api) {
+            setConnected(false);
+            setStartMsg('터미널은 Electron 실행 환경에서만 사용할 수 있습니다.');
+            return;
+        }
+        const host = hostRef.current;
+        if (!host) return;
 
-    const push = (text: string, kind: Line['kind'] = 'out') => {
-        if (!text) return;
-        setLines((prev) => {
-            const next = [...prev, { id: ++lineSeq, text, kind }];
-            return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
+        const term = new Terminal({
+            fontFamily: 'Consolas, "Cascadia Mono", "D2Coding", "Malgun Gothic", monospace',
+            fontSize: 12,
+            lineHeight: 1.2,
+            cursorBlink: true,
+            convertEol: false,
+            scrollback: 5000,
+            allowTransparency: false,
+            theme: {
+                background: '#0d1117',
+                foreground: '#c9d1d9',
+                cursor: '#58a6ff',
+                selectionBackground: '#264f78',
+            },
         });
-    };
+        const fit = new FitAddon();
+        term.loadAddon(fit);
+        term.open(host);
+        termRef.current = term;
 
-    const processData = (payload: TerminalDataPayload) => {
-        const kind: Line['kind'] = payload.channel === 'err' ? 'err' : 'out';
-        bufRef.current += sanitize(payload.data);
-        const parts = bufRef.current.split('\n');
-        bufRef.current = parts.pop() ?? '';
-        parts.forEach((p) => push(p.replace(/\r$/, ''), kind));
-    };
-
-    const processDone = (payload: TerminalDonePayload) => {
-        activeRunIdRef.current = null;
-        setBusy(false);
-        if (payload.cwd) {
-            setCwd(payload.cwd);
-            lastCwdRef.current = payload.cwd;
-        }
-        if (payload.clear) {
-            setLines([]);
-            bufRef.current = '';
-            return;
-        }
-        if (payload.code !== 0 && payload.code !== null) {
-            push(`[종료 코드 ${payload.code}]`, 'done');
-        } else if (payload.signal) {
-            push('[명령이 중단되었습니다]', 'done');
-        }
-    };
-
-    const handleEvent = (payload: TerminalDataPayload | TerminalDonePayload) => {
-        const rid = payload.runId;
-        if (rid === 0) {
-            // 세션 백그라운드 출력(프롬프트 등)은 항상 표시
-            if ('channel' in payload) processData(payload);
-            return;
-        }
-        if (rid === activeRunIdRef.current) {
-            if ('channel' in payload) {
-                processData(payload);
-            } else {
-                processDone(payload);
-            }
-            return;
-        }
-        // runId 확정 전에 도착한 이벤트 → 버퍼에 보관 (exec 응답 후 재생)
-        const list = pendingRef.current.get(rid) ?? [];
-        list.push(payload);
-        pendingRef.current.set(rid, list);
-    };
-
-    useEffect(() => {
-        if (api) {
-            const offData = api.onData(handleEvent);
-            const offDone = api.onDone(handleEvent);
-            return () => {
-                offData();
-                offDone();
-            };
-        }
-        setConnected(false);
-        setStartMsg('터미널은 Electron 실행 환경에서만 사용할 수 있습니다.');
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    useEffect(() => {
-        const el = scrollRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
-    }, [lines]);
-
-    useEffect(() => {
-        inputRef.current?.focus();
-    }, [busy]);
-
-    const run = async () => {
-        const cmd = input.trim();
-        if (!cmd) return;
-        const passthrough = busy;
-        push(passthrough ? cmd : `$ ${cmd}`, 'echo');
-        setHistory((h) => [...h, cmd]);
-        setHistIdx(-1);
-        setInput('');
-        if (!api) return;
-
-        if (passthrough) {
-            // 실행 중인 프로그램(대화형 등)에 입력 전달
+        const doFit = () => {
             try {
-                await api.exec(cmd);
-            } catch (e) {
-                /* 소비됨 */
+                fit.fit();
+            } catch {
+                /* 호스트 크기 0 등 — 무시 */
             }
-            return;
-        }
+        };
+        doFit();
 
-        activeRunIdRef.current = null;
-        setBusy(true);
-        try {
-            const res = await api.exec(cmd);
-            if (res.cwd) {
-                setCwd(res.cwd);
-                lastCwdRef.current = res.cwd;
+        void api.start({ cols: term.cols, rows: term.rows }).then((res) => {
+            if (!res?.ok) term.writeln('\u001b[31m셸을 시작할 수 없습니다.\u001b[0m');
+        });
+        term.focus();
+
+        const offInput = term.onData((data) => {
+            if (exitedRef.current) {
+                // 셸이 종료된 뒤 입력이 들어오면 새 세션을 시작하고 이어서 전달
+                exitedRef.current = false;
+                setExited(false);
+                void api.start({ cols: term.cols, rows: term.rows }).then(() => api.input(data));
+                return;
             }
-            if (res.ok && res.runId !== undefined) {
-                activeRunIdRef.current = res.runId;
-                // 대기 중이던 이벤트 재생
-                const buffered = pendingRef.current.get(res.runId) ?? [];
-                pendingRef.current.delete(res.runId);
-                buffered.forEach((p) => handleEvent(p));
-            } else {
-                setBusy(false);
-                if (res.message) push(`[실행 실패] ${res.message}`, 'done');
-            }
-        } catch (e) {
-            activeRunIdRef.current = null;
-            setBusy(false);
-            push(`[실행 실패] ${String(e)}`, 'done');
-        }
-    };
+            void api.input(data);
+        });
+        const offData = api.onData((payload) => {
+            term.write(payload.data);
+        });
+        const offDone = api.onDone(() => {
+            exitedRef.current = true;
+            setExited(true);
+            term.write('\r\n\u001b[90m[셸이 종료되었습니다. 입력하면 새 세션이 시작됩니다]\u001b[0m\r\n');
+        });
+        const offResize = term.onResize(({ cols, rows }) => {
+            void api.resize({ cols, rows });
+        });
+
+        const ro = new ResizeObserver(() => doFit());
+        ro.observe(host);
+
+        return () => {
+            ro.disconnect();
+            offInput.dispose();
+            offData();
+            offDone();
+            offResize.dispose();
+            term.dispose();
+            termRef.current = null;
+        };
+    }, [api]);
+
+    const focusTerm = () => termRef.current?.focus();
 
     const interrupt = () => {
-        if (busy) {
-            push('^C', 'sys');
-            api?.interrupt();
-        }
+        void api?.interrupt();
+        focusTerm();
     };
 
-    const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.ctrlKey && (e.key === 'c' || e.key === 'C')) {
-            e.preventDefault();
-            interrupt();
-            return;
-        }
-        if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
-            e.preventDefault();
-            setLines([]);
-            bufRef.current = '';
-            return;
-        }
-
-        // 실행 중: 특수키를 실행 중인 프로그램으로 그대로 전달 (화살표 메뉴 선택 등)
-        if (busy) {
-            const seq = BUSY_KEY_SEQ[e.key];
-            if (seq) {
-                e.preventDefault();
-                api?.input(seq);
-                return;
-            }
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                if (input.trim()) {
-                    void run();
-                } else {
-                    api?.input('\r');
-                }
-                return;
-            }
-            return;
-        }
-
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            void run();
-            return;
-        }
-        if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            if (history.length === 0) return;
-            const idx = histIdx === -1 ? history.length - 1 : Math.max(0, histIdx - 1);
-            setHistIdx(idx);
-            setInput(history[idx]);
-            return;
-        }
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            if (histIdx === -1) return;
-            const idx = histIdx + 1;
-            if (idx >= history.length) {
-                setHistIdx(-1);
-                setInput('');
-                return;
-            }
-            setHistIdx(idx);
-            setInput(history[idx]);
-            return;
-        }
+    const clearView = () => {
+        termRef.current?.clear();
+        focusTerm();
     };
 
     const copyAll = async () => {
+        const term = termRef.current;
+        if (!term) return;
         try {
-            await navigator.clipboard.writeText(lines.map((l) => l.text).join('\n'));
+            term.selectAll();
+            await navigator.clipboard.writeText(term.getSelection());
+            term.clearSelection();
         } catch {
-            // 클립보드 접근 실패 시 무시
+            /* 클립보드 접근 실패 시 무시 */
         }
+        focusTerm();
     };
 
     if (!connected) {
@@ -262,10 +139,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
     }
 
     return (
-        <div
-            className="flex-1 flex flex-col min-h-0 bg-[#0d1117] text-[#c9d1d9] font-mono text-[12px] overflow-hidden"
-            onClick={() => inputRef.current?.focus()}
-        >
+        <div className="flex-1 flex flex-col min-h-0 bg-[#0d1117] text-[#c9d1d9] overflow-hidden">
             {/* 툴바 */}
             <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/10 shrink-0 select-none">
                 <span className="flex items-center gap-1.5 text-[#8b949e] text-[10px] font-bold uppercase tracking-wider">
@@ -274,22 +148,16 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
                 </span>
                 <span
                     className={`ml-1 text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
-                        busy ? 'bg-amber-500/20 text-amber-400' : 'bg-green-500/20 text-green-400'
+                        exited ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
                     }`}
                 >
-                    {busy ? 'RUNNING' : 'READY'}
+                    {exited ? 'EXITED' : 'READY'}
                 </span>
-                {cwd && <span className="text-[9px] text-slate-500 truncate max-w-[240px]">{cwd}</span>}
                 <div className="ml-auto flex items-center gap-1">
-                    {histIdx >= 0 && (
-                        <span className="text-[9px] text-slate-500">
-                            {histIdx + 1}/{history.length}
-                        </span>
-                    )}
                     <button
                         onClick={interrupt}
-                        title="명령 중단 (Ctrl+C)"
-                        className={`p-1 rounded hover:bg-white/10 ${busy ? 'text-amber-400' : 'text-[#8b949e]'}`}
+                        title="중단 (Ctrl+C)"
+                        className="p-1 rounded hover:bg-white/10 text-[#8b949e] hover:text-amber-400"
                     >
                         <Square size={12} />
                     </button>
@@ -301,11 +169,8 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
                         <Copy size={12} />
                     </button>
                     <button
-                        onClick={() => {
-                            setLines([]);
-                            bufRef.current = '';
-                        }}
-                        title="출력 지우기 (Ctrl+L)"
+                        onClick={clearView}
+                        title="화면 지우기"
                         className="p-1 rounded hover:bg-white/10 text-[#8b949e]"
                     >
                         <Trash2 size={12} />
@@ -322,63 +187,12 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
                 </div>
             </div>
 
-            {/* 출력 영역 */}
+            {/* xterm 렌더 영역 */}
             <div
-                ref={scrollRef}
-                className="flex-1 overflow-y-auto px-3 py-2 leading-relaxed whitespace-pre-wrap break-words cursor-text"
-                onClick={() => inputRef.current?.focus()}
+                className="flex-1 min-h-0 px-2 py-1 cursor-text"
+                onMouseDown={focusTerm}
             >
-                {lines.length === 0 && (
-                    <div className="text-slate-600 text-[11px]">
-                        명령어를 입력해 실행하세요. (예: dir, echo hi, cd ..)<br />
-                        현재 디렉터리: {cwd || '(앱 시작 위치)'}
-                    </div>
-                )}
-                {lines.map((l) => (
-                    <div
-                        key={l.id}
-                        className={
-                            l.kind === 'err'
-                                ? 'text-red-400'
-                                : l.kind === 'sys'
-                                ? 'text-slate-500 italic'
-                                : l.kind === 'echo'
-                                ? 'text-green-400'
-                                : l.kind === 'done'
-                                ? 'text-amber-400/80'
-                                : undefined
-                        }
-                    >
-                        {l.text || '\u00A0'}
-                    </div>
-                ))}
-                {busy && <span className="inline-block w-2 h-3.5 bg-green-500/80 animate-pulse align-middle" />}
-            </div>
-
-            {/* 입력 영역 */}
-            <div className="flex items-center gap-2 px-3 py-2 border-t border-white/10 shrink-0 bg-black/30">
-                <span className="text-green-400 select-none">{busy ? '…' : '>'}</span>
-                <input
-                    ref={inputRef}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={onKeyDown}
-                    spellCheck={false}
-                    autoFocus
-                    className="flex-1 bg-transparent outline-none placeholder:text-slate-600"
-                    placeholder={
-                        busy
-                            ? '실행 중... (특수키·입력 전달, Ctrl+C 중단)'
-                            : '명령어 입력 (↑/↓ 히스토리, Ctrl+L 지우기)'
-                    }
-                />
-                <button
-                    onClick={() => void run()}
-                    disabled={!input.trim()}
-                    className="px-2 py-0.5 rounded bg-green-500/20 text-green-300 text-[10px] font-bold hover:bg-green-500/30 disabled:opacity-40 shrink-0"
-                >
-                    {busy ? '전송' : '실행'}
-                </button>
+                <div ref={hostRef} className="w-full h-full" />
             </div>
         </div>
     );

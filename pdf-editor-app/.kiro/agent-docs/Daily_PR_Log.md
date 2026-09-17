@@ -267,6 +267,21 @@
 
 ---
 
+#### 터미널 렌더러 xterm.js 전환 + 기본 실행 제거
+
+- 사용자 보고 2건: ①`codex` 입력 시 화면에 "모스부호 같은 것"이 출력됨 ②터미널을 플러그인으로 분리했는데 앱 실행 시 터미널이 기본으로 실행됨
+- **원인**:
+  - ① codex는 전체 화면 TUI(브라유 스피너 `⠋⠙⠹`, 커서 이동·리드로우 이스케이프)로 그리는데, 기존 터미널은 `sanitize()`로 이스케이프를 지우는 **라인 기반 텍스트 뷰어**라 잔여 문자가 깨져 보임
+  - ② `MainLayout.tsx`의 `pdfTerminalOpen` 기본값이 `true`이고, `electron/main.js`가 **앱 부팅 시점에 PTY 셸을 생성**하고 있었음
+- **수정**:
+  - **xterm.js 도입** (`@xterm/xterm` + `@xterm/addon-fit`): PTY raw 바이트를 그대로 렌더링 → 색상·커서·전체 화면 TUI 정상. `TerminalPanel.tsx`를 xterm 호스팅으로 재작성하고 별도 입력창·히스토리·busy/passthrough·`sanitize()` 제거
+  - **입출력 경로 정리**: `electron/term.js`에 `resize(cols, rows)`·`start(cols, rows)` 추가, IPC를 `terminal:start`/`terminal:input`/`terminal:resize`/`terminal:kill`로 재구성(`terminal:exec` 제거). xterm `onData`가 키·붙여넣기를 raw로 전달, `onResize`가 cols/rows 동기화
+  - **기본 닫힘 + 지연 스폰**: `pdfTerminalOpen` 기본 `false`, `getPtyTerminal()`로 세션을 `terminal:start` 시점에만 생성(앱 시작 시 셸 없음)
+- **검증(헤드리스 Electron, Node 18 런타임)**: ①`start()` 전 출력 없음(지연 생성) ②`start` 후 프롬프트 수신 ③raw 출력에 이스케이프 유지+한글 ④`resize` 후 `cd ..` 정상 ⑤TUI raw 모드에 ArrowDown `[27,91,66]` 전달 — 5/5 통과. `npx vite build` 통과, 실제 Electron 부팅 스모크(9초 생존) 확인
+- **파일**: `src/components/TerminalPanel.tsx`, `src/layouts/MainLayout.tsx`, `src/types/terminal.d.ts`, `electron/term.js`, `electron/main.js`, `electron/preload.js`, `package.json`, `README.md`
+
+---
+
 ### 완료된 작업
 
 #### 탭 화면 기본 분할 비율 재설정

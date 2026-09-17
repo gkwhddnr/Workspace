@@ -857,8 +857,8 @@ ipcMain.handle('app:getInfo', async () => {
 });
 
 // ==================== 터미널 플러그인 (PTY 세션) ====================
-// cmd/bash를 ConPTY(가짜 터미널)로 상주시켜 interactive TUI(codex 등)와
-// 한글 입력(UTF-8)을 지원한다. 자세한 로직은 ./term.js 참고.
+// cmd/bash를 ConPTY로 상주시켜 xterm.js가 그대로 렌더링한다.
+// 셸은 "지연 생성" — 터미널을 열거나 입력할 때만 스폰된다. 자세한 로직은 ./term.js 참고.
 
 let termEmitTarget = null;
 function termSend(payload) {
@@ -869,24 +869,53 @@ function termSend(payload) {
     } catch (e) {}
   }
 }
-const ptyTerminal = createTerminal({ send: termSend, cwd: process.cwd() });
 
-// 명령/입력 전달. 실행 결과는 terminal:data / terminal:done 이벤트로 스트리밍
-ipcMain.handle('terminal:exec', async (event, input) => {
+let ptyTerminal = null;
+let termCols = 100;
+let termRows = 30;
+
+function getPtyTerminal() {
+  if (!ptyTerminal) {
+    ptyTerminal = createTerminal({ send: termSend, cwd: process.cwd() });
+  }
+  return ptyTerminal;
+}
+
+function normalizeSize(size) {
+  if (size && Number(size.cols) > 0 && Number(size.rows) > 0) {
+    termCols = Math.floor(Number(size.cols));
+    termRows = Math.floor(Number(size.rows));
+  }
+  return { cols: termCols, rows: termRows };
+}
+
+// 세션 시작(지연 스폰) — xterm의 초기 크기를 함께 전달
+ipcMain.handle('terminal:start', (event, size) => {
   termEmitTarget = event.sender;
-  return ptyTerminal.submit(input);
+  normalizeSize(size);
+  const term = getPtyTerminal();
+  const ok = term.start(termCols, termRows);
+  return { ok, cwd: term.getCwd() };
+});
+
+// xterm 키 입력(화살표·붙여넣기 등)을 PTY로 그대로 전달
+ipcMain.handle('terminal:input', (event, data) => {
+  termEmitTarget = event.sender;
+  getPtyTerminal().writeRaw(data);
+  return { ok: true };
+});
+
+// 터미널 크기 변경(cols/rows) 동기화
+ipcMain.handle('terminal:resize', (event, size) => {
+  termEmitTarget = event.sender;
+  normalizeSize(size);
+  if (ptyTerminal) ptyTerminal.resize(termCols, termRows);
+  return { ok: true };
 });
 
 // 실행 중인 명령/프로그램 중단 (Ctrl+C)
 ipcMain.handle('terminal:kill', () => {
-  ptyTerminal.interrupt();
-  return { ok: true };
-});
-
-// 특수키(화살표 등) 원시 입력을 세션으로 전달
-ipcMain.handle('terminal:input', (event, data) => {
-  termEmitTarget = event.sender;
-  ptyTerminal.writeRaw(data);
+  if (ptyTerminal) ptyTerminal.interrupt();
   return { ok: true };
 });
 

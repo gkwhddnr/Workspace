@@ -55,7 +55,7 @@ function createTerminal({ send, cwd, shell: shellFile, shellArgs } = {}) {
     });
   };
 
-  const ensure = () => {
+  const ensure = (cols, rows) => {
     if (session) return true;
     if (!pty) return false;
     initReady = false;
@@ -64,8 +64,8 @@ function createTerminal({ send, cwd, shell: shellFile, shellArgs } = {}) {
     try {
       session = pty.spawn(shell, args, {
         name: 'xterm-256color',
-        cols: 100,
-        rows: 30,
+        cols: cols || 100,
+        rows: rows || 30,
         cwd: termCwd,
         env: Object.assign({}, process.env, { TERM: 'xterm-256color' }),
         handleFlowControl: false
@@ -178,6 +178,14 @@ function createTerminal({ send, cwd, shell: shellFile, shellArgs } = {}) {
     }
   };
 
+  // 터미널 크기(xterm cols/rows) 동기화
+  const resize = (cols, rows) => {
+    if (!session) return;
+    try {
+      if (cols > 0 && rows > 0) session.resize(cols, rows);
+    } catch (e) {}
+  };
+
   const kill = () => {
     try {
       if (session) session.kill();
@@ -187,7 +195,7 @@ function createTerminal({ send, cwd, shell: shellFile, shellArgs } = {}) {
 
   const getCwd = () => termCwd;
 
-  return { submit, interrupt, writeRaw, kill, getCwd };
+  return { start: ensure, submit, interrupt, writeRaw, resize, kill, getCwd };
 }
 
 module.exports = { createTerminal };
