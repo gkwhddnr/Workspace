@@ -883,6 +883,13 @@ ipcMain.handle('terminal:kill', () => {
   return { ok: true };
 });
 
+// 특수키(화살표 등) 원시 입력을 세션으로 전달
+ipcMain.handle('terminal:input', (event, data) => {
+  termEmitTarget = event.sender;
+  ptyTerminal.writeRaw(data);
+  return { ok: true };
+});
+
 // 유틸리티 함수
 function getMimeType(extension) {
   const mimeTypes = {

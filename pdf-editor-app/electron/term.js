@@ -169,6 +169,15 @@ function createTerminal({ send, cwd, shell: shellFile, shellArgs } = {}) {
     }
   };
 
+  // 키 입력 등 원시 바이트를 PTY로 그대로 전달 (화살표 등 특수키)
+  const writeRaw = (data) => {
+    if (session && data) {
+      try {
+        session.write(String(data));
+      } catch (e) {}
+    }
+  };
+
   const kill = () => {
     try {
       if (session) session.kill();
@@ -178,7 +187,7 @@ function createTerminal({ send, cwd, shell: shellFile, shellArgs } = {}) {
 
   const getCwd = () => termCwd;
 
-  return { submit, interrupt, kill, getCwd };
+  return { submit, interrupt, writeRaw, kill, getCwd };
 }
 
 module.exports = { createTerminal };

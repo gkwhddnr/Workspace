@@ -261,7 +261,8 @@
   - `exit`로 셸 종료 후 다음 명령에서 세션 자동 재생성
   - `codex` 대화형(TUI)은 제한적이라 `codex exec "<프롬프트>"` 안내 문구 출력
 - **검증(헤드리스 Electron, Node 18 런타임)**: 8개 항목 전부 통과 — ①`echo 한글` 완료+한글 정상 ②`cd ..` 완료·cwd=`D:\` ③`dir` 완료 ④`cls` clear ⑤`node` 실행 중 busy 유지 ⑥passthrough `1+1`→`2` 출력 ⑦`Ctrl+C` 중단 후 busy 해제 ⑧`exit`→세션 재생성 후 `dir` 완료. 실제 메인 프로세스 부팅 스모크(8초 생존)도 확인
-- **파일**: `electron/term.js`(신설), `electron/main.js`, `src/components/TerminalPanel.tsx`, `package.json`(`asarUnpack` 포함), `README.md`
+- **대화형 특수키 전달(추가)**: 사용자 보고 — `codex` 업데이트 안내(1/2/3 메뉴)에서 화살표 이동이 안 됨. 원인: 화살표가 로컬 입력창 히스토리로 소비되어 PTY로 전달되지 않음. 실행 중(busy)에는 화살표·Esc·Tab·Backspace를 `terminal:input`(→ `term.writeRaw`)로 raw 전달하고, Enter는 입력이 있으면 한 줄 전송·없으면 `\r`만 전송하도록 수정 → `codex` 등 메뉴를 화살표로 선택·Enter 확정 가능. `node` raw 모드(`[27,91,65]`, `[13]`)·Windows `choice /c abc`(`[A,B,C]?B` → done)로 e2e 검증
+- **파일**: `electron/term.js`(신설), `electron/main.js`, `electron/preload.js`, `src/types/terminal.d.ts`, `src/components/TerminalPanel.tsx`, `package.json`(`asarUnpack` 포함), `README.md`
 - **주의**: 네이티브 모듈 도입으로 `npm install` 필요 · 앱 완전 종료 후 `npm run dev` 재실행
 
 ---

@@ -22,6 +22,17 @@ const MAX_LINES = 2000;
 const sanitize = (s: string) =>
     s.replace(OSC_RE, '').replace(ANSI_RE, '').replace(/[\u0007\u000f\u000e\u001b]/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
+// 실행 중(대화형 프로그램)에 PTY로 그대로 보낼 특수키 시퀀스
+const BUSY_KEY_SEQ: Record<string, string> = {
+    ArrowUp: '\u001b[A',
+    ArrowDown: '\u001b[B',
+    ArrowRight: '\u001b[C',
+    ArrowLeft: '\u001b[D',
+    Escape: '\u001b',
+    Tab: '\t',
+    Backspace: '\u007f',
+};
+
 const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
     const api = typeof window !== 'undefined' ? window.terminal : undefined;
 
@@ -173,11 +184,6 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
     };
 
     const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            void run();
-            return;
-        }
         if (e.ctrlKey && (e.key === 'c' || e.key === 'C')) {
             e.preventDefault();
             interrupt();
@@ -189,7 +195,32 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
             bufRef.current = '';
             return;
         }
-        if (busy) return;
+
+        // 실행 중: 특수키를 실행 중인 프로그램으로 그대로 전달 (화살표 메뉴 선택 등)
+        if (busy) {
+            const seq = BUSY_KEY_SEQ[e.key];
+            if (seq) {
+                e.preventDefault();
+                api?.input(seq);
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (input.trim()) {
+                    void run();
+                } else {
+                    api?.input('\r');
+                }
+                return;
+            }
+            return;
+        }
+
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            void run();
+            return;
+        }
         if (e.key === 'ArrowUp') {
             e.preventDefault();
             if (history.length === 0) return;
@@ -337,7 +368,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
                     className="flex-1 bg-transparent outline-none placeholder:text-slate-600"
                     placeholder={
                         busy
-                            ? '실행 중... (Ctrl+C로 중단, 입력은 프로그램으로 전송됨)'
+                            ? '실행 중... (특수키·입력 전달, Ctrl+C 중단)'
                             : '명령어 입력 (↑/↓ 히스토리, Ctrl+L 지우기)'
                     }
                 />

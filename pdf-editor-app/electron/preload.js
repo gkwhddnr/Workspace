@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 contextBridge.exposeInMainWorld('terminal', {
   exec: (command) => ipcRenderer.invoke('terminal:exec', command),
   interrupt: () => ipcRenderer.invoke('terminal:kill'),
+  input: (data) => ipcRenderer.invoke('terminal:input', data),
   onData: (callback) => {
     const sub = (_event, payload) => callback(payload);
     ipcRenderer.on('terminal:data', sub);

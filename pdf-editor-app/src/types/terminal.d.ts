@@ -22,6 +22,7 @@ export interface TerminalDonePayload {
 export interface TerminalApi {
     exec: (command: string) => Promise<TerminalExecResult>;
     interrupt: () => Promise<{ ok: boolean }>;
+    input: (data: string) => Promise<{ ok: boolean }>;
     onData: (callback: (payload: TerminalDataPayload) => void) => () => void;
     onDone: (callback: (payload: TerminalDonePayload) => void) => () => void;
 }
