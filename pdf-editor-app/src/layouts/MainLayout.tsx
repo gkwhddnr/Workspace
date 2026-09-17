@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { useAppStore, ActiveTab, PRESET_COLORS, DrawingTool } from '../store/useAppStore';
 import Sidebar from '../components/Sidebar';
@@ -10,11 +10,13 @@ import FlattenModal from '../components/FlattenModal';
 import ShortcutsModal from '../components/ShortcutsModal';
 import ShortcutsViewer from '../components/viewers/ShortcutsViewer';
 import PluginManagerPanel from '../components/PluginManagerPanel';
+import TerminalPanel from '../components/TerminalPanel';
 import { usePluginStore } from '../store/usePluginStore';
 import { PluginOutputPanel } from '../components/plugin/PluginOutputPanel';
 import {
     FileText, Globe, Code2, Bot, Keyboard, Puzzle,
-    Download, ChevronDown, Image, FileCode, Presentation, FileDown
+    Download, ChevronDown, Image, FileCode, Presentation, FileDown,
+    Terminal as TerminalIcon, PanelBottomClose, PanelBottomOpen
 } from 'lucide-react';
 import { exportService, ExportFormat } from '../services/ExportService';
 
@@ -45,6 +47,34 @@ const MainLayout: React.FC = () => {
     const [isFlattenModalOpen, setIsFlattenModalOpen] = useState(false);
     const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
+
+    // PDF 에디터 내장 터미널 (하단 분할)
+    const [pdfTerminalOpen, setPdfTerminalOpen] = useState(true);
+    const [pdfTerminalHeight, setPdfTerminalHeight] = useState(() =>
+        Math.max(160, Math.floor((typeof window !== 'undefined' ? window.innerHeight : 800) * 0.28))
+    );
+    const terminalDragRef = useRef<{ y: number; height: number } | null>(null);
+
+    const startTerminalDrag = (e: React.MouseEvent) => {
+        e.preventDefault();
+        terminalDragRef.current = { y: e.clientY, height: pdfTerminalHeight };
+        const onMove = (ev: MouseEvent) => {
+            const d = terminalDragRef.current;
+            if (!d) return;
+            const delta = d.y - ev.clientY;
+            const maxH = (typeof window !== 'undefined' ? window.innerHeight : 800) * 0.6;
+            setPdfTerminalHeight(Math.max(120, Math.min(maxH, d.height + delta)));
+        };
+        const onUp = () => {
+            terminalDragRef.current = null;
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            window.removeEventListener('mouseleave', onUp);
+        };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        window.addEventListener('mouseleave', onUp);
+    };
     
     const { pdfOriginalData, currentFileName } = useAppStore();
 
@@ -342,7 +372,42 @@ const hasPdf = activeTabs.includes('pdf');
                                                 minSize={20} 
                                                 className="flex flex-col min-w-0 h-full"
                                             >
-                                                <PdfViewer />
+                                                <div className="flex flex-col min-h-0 h-full">
+                                                    {/* PDF 뷰어 (부모 고정 — 토글 시 리마운트 방지) */}
+                                                    <div className="flex-1 min-h-0 overflow-hidden">
+                                                        <PdfViewer />
+                                                    </div>
+
+                                                    {/* 터미널: 열림/닫힘 토글 (하단 드래그 리사이즈) */}
+                                                    {pdfTerminalOpen && (
+                                                        <>
+                                                            <div
+                                                                className="h-1.5 shrink-0 cursor-row-resize bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors active:bg-indigo-600"
+                                                                onMouseDown={startTerminalDrag}
+                                                                title="터미널 높이 조절"
+                                                            />
+                                                            <div
+                                                                className="flex flex-col min-h-0 shrink-0"
+                                                                style={{ height: pdfTerminalHeight }}
+                                                            >
+                                                                <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                                                                    <TerminalPanel onCollapse={() => setPdfTerminalOpen(false)} />
+                                                                </div>
+                                                            </div>
+                                                        </>
+                                                    )}
+                                                    {!pdfTerminalOpen && (
+                                                        <button
+                                                            onClick={() => setPdfTerminalOpen(true)}
+                                                            className="h-8 shrink-0 flex items-center justify-center gap-1.5 border-t theme-border-subtle theme-bg-panel text-[10px] font-bold theme-text-muted hover:text-green-500 hover:bg-green-500/5 transition-colors"
+                                                            title="터미널 열기"
+                                                        >
+                                                            <TerminalIcon size={12} />
+                                                            터미널
+                                                            <PanelBottomOpen size={12} />
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </Panel>
                                         </Group>
                                     </div>

@@ -262,6 +262,17 @@
 - **파일**: `electron/main.js`, `electron/preload.js`, `src/plugins/builtin/terminal.ts`, `src/components/TerminalPanel.tsx`, `src/components/PluginManagerPanel.tsx`, `src/types/terminal.d.ts`, `README.md`
 - **검증**: `npx vite build` 성공, 셸 실행 로직 Node 스모크 테스트(한글 출력 CP949 디코딩·stderr·오류 메시지 확인)
 
+#### 터미널을 PDF 에디터에 내장
+
+- 사용자 요청: "PDF 에디터 안에 터미널이 보이도록 해줘" — 플러그인 실행 뷰 전용이던 터미널을 **PDF 편집 패널 하단에 상시 표시**
+- **레이아웃** (`MainLayout.tsx` pdf-panel): PDF 뷰어 하단에 드래그 리사이즈 가능한 터미널 영역 추가
+  - `pdfTerminalOpen`(기본 활성), `pdfTerminalHeight`(기본 화면 28%·최소 120px·최대 60%)·포인터 드래그로 높이 조절
+  - 터미널 접기 → 하단에 '터미널 열기' 바(`PanelBottomOpen`) 표시, 재열기 가능
+  - 접힘/펼침 상태 변화에서도 PDF 뷰어 부모 요소를 고정해 **리마운트 방지**(줌·스크롤·선택 상태 유지)
+- **컴포넌트**: `TerminalPanel`에 `onCollapse` prop 추가(헤더에 접기 버튼 표시) — 플러그인 실행 뷰에서는 미전달로 동작 불변
+- **파일**: `src/layouts/MainLayout.tsx`, `src/components/TerminalPanel.tsx`, `README.md`
+- **검증**: `npx vite build` 성공
+
 ---
 
 ## 2026-09-11

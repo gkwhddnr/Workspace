@@ -1,6 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { TerminalDataPayload, TerminalDonePayload } from '../types/terminal';
-import { Terminal as TerminalIcon, Trash2, Copy, Square } from 'lucide-react';
+import { Terminal as TerminalIcon, Trash2, Copy, Square, PanelBottomClose } from 'lucide-react';
+
+interface TerminalPanelProps {
+    onCollapse?: () => void;
+}
 
 interface Line {
     id: number;
@@ -14,7 +18,7 @@ let lineSeq = 0;
 const ANSI_RE = /\u001b\[[0-9;?]*[a-zA-Z]/g;
 const MAX_LINES = 2000;
 
-const TerminalPanel: React.FC = () => {
+const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
     const api = typeof window !== 'undefined' ? window.terminal : undefined;
 
     const [lines, setLines] = useState<Line[]>([]);
@@ -256,6 +260,15 @@ const TerminalPanel: React.FC = () => {
                     >
                         <Trash2 size={12} />
                     </button>
+                    {onCollapse && (
+                        <button
+                            onClick={onCollapse}
+                            title="터미널 접기"
+                            className="p-1 rounded hover:bg-white/10 text-[#8b949e] hover:text-red-400"
+                        >
+                            <PanelBottomClose size={12} />
+                        </button>
+                    )}
                 </div>
             </div>
 
