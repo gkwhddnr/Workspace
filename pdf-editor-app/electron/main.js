@@ -5,6 +5,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const { spawn } = require('child_process');
+const { createTerminal } = require('./term.js');
 
 let mainWindow;
 let forceQuit = false;
@@ -86,7 +87,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  stopTerminalRun();
+  if (ptyTerminal) ptyTerminal.kill();
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -855,141 +856,30 @@ ipcMain.handle('app:getInfo', async () => {
   };
 });
 
-// ==================== 터미널 플러그인 (시스템 셸) ====================
-// 파이프 기반 대화형 셸은 Windows에서 UTF-8 입력이 깨지므로("More?" 문제),
-// 명령어 한 줄씩 `cmd /d /s /c`(또는 sh -c)로 실행하고 출력을 시스템 코드페이지로 디코딩한다.
+// ==================== 터미널 플러그인 (PTY 세션) ====================
+// cmd/bash를 ConPTY(가짜 터미널)로 상주시켜 interactive TUI(codex 등)와
+// 한글 입력(UTF-8)을 지원한다. 자세한 로직은 ./term.js 참고.
 
-let terminalRun = null;   // { proc, runId, decoder }
-let terminalSeq = 0;
-let terminalCwd = process.cwd();
-let terminalCodePage = null;
-
-// 시스템 활성 코드페이지 조회(한 번만) 후 출력 디코더 생성
-async function getTerminalCodePage() {
-  if (terminalCodePage !== null) return terminalCodePage;
-  let cp = '65001';
-  try {
-    const result = await new Promise((resolve) => {
-      const p = spawn('cmd.exe', ['/d', '/c', 'chcp'], { windowsHide: true });
-      let s = '';
-      p.stdout.on('data', (d) => { s += d.toString('latin1'); });
-      p.on('exit', () => resolve(s));
-      setTimeout(() => { p.kill(); resolve(s); }, 2000);
-    });
-    const m = result.match(/(\d{3,5})/);
-    if (m) cp = m[1];
-  } catch (e) { /* 기본값 유지 */ }
-  terminalCodePage = cp;
-  return cp;
-}
-
-function createTerminalDecoder() {
-  const cp = terminalCodePage || '65001';
-  if (cp === '65001' || cp === 'utf8') return new TextDecoder('utf-8', { stream: true });
-  try {
-    return new TextDecoder('windows-' + cp, { stream: true });
-  } catch (e) {
-    return new TextDecoder('utf-8', { stream: true });
-  }
-}
-
-function stopTerminalRun(notify) {
-  if (!terminalRun) return;
-  const { proc, runId } = terminalRun;
-  try {
-    if (process.platform === 'win32' && proc.pid) {
-      // cmd 자식 프로세스까지 함께 종료
-      spawn('taskkill', ['/pid', String(proc.pid), '/t', '/f'], { windowsHide: true });
-    } else {
-      proc.kill('SIGTERM');
-      setTimeout(() => { try { proc.kill('SIGKILL'); } catch (e) {} }, 1500);
-    }
-  } catch (e) {}
-  terminalRun = null;
-}
-
-// 한 줄 명령 실행 (실행 결과는 terminal:data / terminal:done 이벤트로 스트리밍)
-ipcMain.handle('terminal:exec', async (event, input) => {
-  const command = String(input ?? '').trim();
-  if (!command) return { ok: false, message: '명령어가 비어 있습니다.' };
-
-  stopTerminalRun();
-  const sender = event.sender;
-  const runId = ++terminalSeq;
-
-  // cd: cwd를 main 프로세스가 관리
-  if (command === 'cd') {
-    sender.send('terminal:done', { runId, code: 0, signal: null, clear: false, cwd: terminalCwd });
-    return { ok: true, runId, cwd: terminalCwd };
-  }
-  const cdMatch = command.match(/^cd\s+(.+)$/i);
-  if (cdMatch) {
-    const target = cdMatch[1].trim().replace(/^\/d\s+/i, '').replace(/^["']|["']$/g, '');
-    const resolved = path.resolve(terminalCwd, target);
+let termEmitTarget = null;
+function termSend(payload) {
+  if (!payload) return;
+  if (termEmitTarget && !termEmitTarget.isDestroyed()) {
     try {
-      const st = await fs.stat(resolved);
-      if (!st.isDirectory()) throw new Error('NOT_DIR');
-      terminalCwd = resolved;
-    } catch (err) {
-      sender.send('terminal:data', { runId, channel: 'out', data: '시스템이 지정된 경로를 찾을 수 없습니다.\n' });
-      sender.send('terminal:done', { runId, code: 1, signal: null, clear: false, cwd: terminalCwd });
-    }
-    return { ok: true, runId, cwd: terminalCwd };
+      termEmitTarget.send('terminal:' + payload.type, payload);
+    } catch (e) {}
   }
-  if (command === 'cls' || command === 'clear') {
-    sender.send('terminal:done', { runId, code: 0, signal: null, clear: true, cwd: terminalCwd });
-    return { ok: true, runId, cwd: terminalCwd };
-  }
+}
+const ptyTerminal = createTerminal({ send: termSend, cwd: process.cwd() });
 
-  await getTerminalCodePage();
-  const decoder = createTerminalDecoder();
-  let proc;
-  try {
-    proc = process.platform === 'win32'
-      ? spawn('cmd.exe', ['/d', '/s', '/c', command], { cwd: terminalCwd, windowsHide: true })
-      : spawn('/bin/sh', ['-c', command], { cwd: terminalCwd, windowsHide: true });
-  } catch (err) {
-    sender.send('terminal:data', { runId, channel: 'err', data: `셸 실행 실패: ${err.message}\n` });
-    sender.send('terminal:done', { runId, code: -1, signal: null, clear: false, cwd: terminalCwd });
-    return { ok: false, message: err.message };
-  }
-
-  terminalRun = { proc, runId };
-  const sendData = (channel, chunk) => {
-    if (!sender.isDestroyed()) {
-      try { sender.send('terminal:data', { runId, channel, data: decoder.decode(chunk, { stream: true }) }); }
-      catch (e) {}
-    }
-  };
-  proc.stdout.on('data', (chunk) => sendData('out', chunk));
-  proc.stderr.on('data', (chunk) => sendData('err', chunk));
-
-  const finish = (code, signal) => {
-    let tail = '';
-    try { tail = decoder.decode(); } catch (e) {}
-    if (tail && !sender.isDestroyed()) {
-      sender.send('terminal:data', { runId, channel: 'out', data: tail });
-    }
-    if (!sender.isDestroyed()) {
-      sender.send('terminal:done', { runId, code, signal, clear: false, cwd: terminalCwd });
-    }
-    if (terminalRun && terminalRun.runId === runId) terminalRun = null;
-  };
-
-  proc.on('error', (err) => {
-    if (!sender.isDestroyed()) {
-      sender.send('terminal:data', { runId, channel: 'err', data: `[실행 오류] ${err.message}\n` });
-    }
-    finish(-1, null);
-  });
-  proc.on('exit', (code, signal) => finish(code, signal));
-
-  return { ok: true, runId, cwd: terminalCwd };
+// 명령/입력 전달. 실행 결과는 terminal:data / terminal:done 이벤트로 스트리밍
+ipcMain.handle('terminal:exec', async (event, input) => {
+  termEmitTarget = event.sender;
+  return ptyTerminal.submit(input);
 });
 
-// 실행 중인 명령 중단 (Ctrl+C)
+// 실행 중인 명령/프로그램 중단 (Ctrl+C)
 ipcMain.handle('terminal:kill', () => {
-  stopTerminalRun();
+  ptyTerminal.interrupt();
   return { ok: true };
 });
 

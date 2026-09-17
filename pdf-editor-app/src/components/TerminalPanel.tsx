@@ -14,9 +14,13 @@ interface Line {
 
 let lineSeq = 0;
 
-// ANSI 이스케이프 시퀀스 간단 제거 (VT100 색상/커서)
+// ANSI 이스케이프 시퀀스 간단 제거 (VT100 색상/커서, OSC 타이틀, 벨)
 const ANSI_RE = /\u001b\[[0-9;?]*[a-zA-Z]/g;
+const OSC_RE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
 const MAX_LINES = 2000;
+
+const sanitize = (s: string) =>
+    s.replace(OSC_RE, '').replace(ANSI_RE, '').replace(/[\u0007\u000f\u000e\u001b]/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
 const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
     const api = typeof window !== 'undefined' ? window.terminal : undefined;
@@ -47,7 +51,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
 
     const processData = (payload: TerminalDataPayload) => {
         const kind: Line['kind'] = payload.channel === 'err' ? 'err' : 'out';
-        bufRef.current += payload.data.replace(ANSI_RE, '');
+        bufRef.current += sanitize(payload.data);
         const parts = bufRef.current.split('\n');
         bufRef.current = parts.pop() ?? '';
         parts.forEach((p) => push(p.replace(/\r$/, ''), kind));
@@ -74,19 +78,23 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
 
     const handleEvent = (payload: TerminalDataPayload | TerminalDonePayload) => {
         const rid = payload.runId;
-        if (activeRunIdRef.current === null) {
-            // runId 확정 전에 도착한 이벤트 → 버퍼에 보관 (exec 응답 후 재생)
-            const list = pendingRef.current.get(rid) ?? [];
-            list.push(payload);
-            pendingRef.current.set(rid, list);
+        if (rid === 0) {
+            // 세션 백그라운드 출력(프롬프트 등)은 항상 표시
+            if ('channel' in payload) processData(payload);
             return;
         }
-        if (rid !== activeRunIdRef.current) return;
-        if ('channel' in payload) {
-            processData(payload);
-        } else {
-            processDone(payload);
+        if (rid === activeRunIdRef.current) {
+            if ('channel' in payload) {
+                processData(payload);
+            } else {
+                processDone(payload);
+            }
+            return;
         }
+        // runId 확정 전에 도착한 이벤트 → 버퍼에 보관 (exec 응답 후 재생)
+        const list = pendingRef.current.get(rid) ?? [];
+        list.push(payload);
+        pendingRef.current.set(rid, list);
     };
 
     useEffect(() => {
@@ -114,12 +122,23 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
 
     const run = async () => {
         const cmd = input.trim();
-        if (!cmd || busy) return;
-        push(`$ ${cmd}`, 'echo');
+        if (!cmd) return;
+        const passthrough = busy;
+        push(passthrough ? cmd : `$ ${cmd}`, 'echo');
         setHistory((h) => [...h, cmd]);
         setHistIdx(-1);
         setInput('');
         if (!api) return;
+
+        if (passthrough) {
+            // 실행 중인 프로그램(대화형 등)에 입력 전달
+            try {
+                await api.exec(cmd);
+            } catch (e) {
+                /* 소비됨 */
+            }
+            return;
+        }
 
         activeRunIdRef.current = null;
         setBusy(true);
@@ -313,22 +332,21 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={onKeyDown}
-                    disabled={busy}
                     spellCheck={false}
                     autoFocus
-                    className="flex-1 bg-transparent outline-none placeholder:text-slate-600 disabled:opacity-40"
+                    className="flex-1 bg-transparent outline-none placeholder:text-slate-600"
                     placeholder={
                         busy
-                            ? '명령 실행 중... (Ctrl+C로 중단)'
+                            ? '실행 중... (Ctrl+C로 중단, 입력은 프로그램으로 전송됨)'
                             : '명령어 입력 (↑/↓ 히스토리, Ctrl+L 지우기)'
                     }
                 />
                 <button
                     onClick={() => void run()}
-                    disabled={busy || !input.trim()}
+                    disabled={!input.trim()}
                     className="px-2 py-0.5 rounded bg-green-500/20 text-green-300 text-[10px] font-bold hover:bg-green-500/30 disabled:opacity-40 shrink-0"
                 >
-                    실행
+                    {busy ? '전송' : '실행'}
                 </button>
             </div>
         </div>

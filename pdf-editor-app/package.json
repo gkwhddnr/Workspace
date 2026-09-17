@@ -12,6 +12,7 @@
     "package": "npm run build && npm run build:electron"
   },
   "dependencies": {
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",
     "@monaco-editor/react": "^4.6.0",
     "@tanstack/react-query": "^5.17.19",
     "axios": "^1.6.5",
@@ -58,6 +59,9 @@
     "directories": {
       "output": "release"
     },
+    "asarUnpack": [
+      "**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**"
+    ],
     "win": {
       "target": [
         "nsis"

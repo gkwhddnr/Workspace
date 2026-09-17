@@ -392,6 +392,8 @@ graph TD
 
 ### 2026-09-17
 - **터미널 IPC 노출 수정 (Electron에서만 보이던 문제 해결)**: preload에서 터미널 API가 `window.electronAPI.terminal`(중첩 키)로만 노출되어 화면이 `window.terminal`을 찾지 못하던 버그 수정 — `contextBridge.exposeInMainWorld('terminal', { exec, interrupt, onData, onDone })`로 **별도 최상위 API** 노출로 전환(터미널 타입 선언 `src/types/terminal.d.ts`와 일치). 헤드리스 Electron 테스트로 `window.terminal` 노출과 `terminal:exec` → 데이터 스트리밍(`onData`) → 종료(`onDone`, code 0) 및 한글(CP949→UTF-8) 디코딩까지 e2e 검증
+- **터미널을 PTY(ConPTY) 상주 셸로 전환 — `cd` 무한대기·`codex` TTY 오류 해결**: 기존 "명령어 단위 `cmd /d /s /c`" 방식은 ①`cd`가 성공해도 완료 이벤트가 없어 UI가 "실행 중"에서 멈추고(무한대기) ②stdin이 터미널(TTY)이어야 하는 대화형 앱(`codex` 등)이 `Error: stdin is not a terminal`로 실패했습니다. `@homebridge/node-pty-prebuilt-multiarch`(N-API 기반이라 Electron 재빌드 불필요)를 도입해 **ConPTY 상주 세션**(`electron/term.js`)으로 교체 — 세션 시작 시 `chcp 65001`로 한글 입출력 왕복 정상, cmd 프롬프트(`드라이브:\경로>`) 감지로 명령 완료·현재 cwd를 추적(`cd ..` 정상 동작·헤더 cwd 갱신), **실행 중 입력은 실행 중 프로그램으로 전달**(interactive passthrough — `node` REPL·`codex` 등에 타이핑 가능), `Ctrl+C`는 `\x03` 전송으로 중단, `cls`/`clear`는 화면 지우기로 처리. `codex` 대화형(TUI) 모드는 이 터미널에서 제한적이라 `codex exec "<프롬프트>"` 사용을 안내하는 문구를 출력. 패키징 시 네이티브 모듈이 asar 밖에 있도록 `asarUnpack`에 node-pty 경로를 추가
+- **터미널 한글 표시 확인**: PTY 전환 후에도 출력이 UTF-8로 정상 왕복함을 코드포인트(`U+D55C`,`U+AE00`) 기준으로 확인 (콘솔의 `?��?`는 PowerShell 표시 인코딩 문제일 뿐 데이터는 정상)
 
 ### 2026-09-15
 - **플러그인 제거 버튼 제거**: 플러그인 목록의 '제거'(`Trash2`) 버튼 삭제 — AI 코파일럿·터미널 등 앱 내장(builtin) 플러그인은 제거 대상이 아니므로 관련 UI(`PluginListItem`의 `onRemove`, `PluginManagerPanel`의 `removeEntry` 연결)를 정리

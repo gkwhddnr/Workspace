@@ -246,6 +246,26 @@
 
 ---
 
+#### 터미널을 PTY(ConPTY) 상주 셸로 전환 (이슈 — `cd` 무한대기·`codex` TTY 오류 해결)
+
+- 사용자 보고 2건: ①`cd ..` 입력 시 "실행 중(무한대기)"에서 멈춤 ②`codex` 입력 시 `Error: stdin is not a terminal`
+- **원인 진단**:
+  - `cd ..`: main의 `cd` 처리 성공 경로에서 `terminal:done` 이벤트를 보내지 않아(실패 경로에서만 전송) 렌더러 busy가 풀리지 않음 — 무한대기
+  - `codex`: 기존 구조가 `cmd /d /s /c` + 파이프(stdout/stderr)라 stdin이 TTY가 아님 → TTY를 요구하는 대화형 CLI가 즉시 실패
+- **수정**: `@homebridge/node-pty-prebuilt-multiarch`를 도입해 **ConPTY 기반 상주 셸**로 전환 (`electron/term.js` 신설)
+  - **N-API(node-addon-api) 기반**이라 Electron ABI(28.3.3 / Node 18.18.2, ABI 108)용 재빌드 없이 Electron 런타임에서 그대로 로드됨(검증)
+  - 세션 시작 시 `@chcp 65001>nul`로 UTF-8 전환 → 한글 입출력 왕복 정상(코드포인트 `U+D55C`,`U+AE00` 확인; 콘솔의 `?��?`는 PowerShell 표시 인코딩 문제)
+  - **프롬프트 감지**: cmd가 출력 뒤 `\r\n` 없이 커서이동 코드로 `드라이브:\경로>`를 찍는 특성 때문에 `[\r\n]` 선행 조건을 제거하고 "버퍼 끝 `드라이브경로>`" 패턴으로 완료·cwd 추적 → `cd ..` 정상(헤더 cwd도 갱신)
+  - **대화형 입력 전달(passthrough)**: 실행 중(busy) 입력은 실행 중 프로그램으로 전송 — 렌더러 입력창이 busy에도 활성화되고 "전송" 버튼으로 동작
+  - `Ctrl+C`는 `\x03` 전송(프로그램 중단, 셸 유지), `cls`/`clear`는 화면 지우기로 처리
+  - `exit`로 셸 종료 후 다음 명령에서 세션 자동 재생성
+  - `codex` 대화형(TUI)은 제한적이라 `codex exec "<프롬프트>"` 안내 문구 출력
+- **검증(헤드리스 Electron, Node 18 런타임)**: 8개 항목 전부 통과 — ①`echo 한글` 완료+한글 정상 ②`cd ..` 완료·cwd=`D:\` ③`dir` 완료 ④`cls` clear ⑤`node` 실행 중 busy 유지 ⑥passthrough `1+1`→`2` 출력 ⑦`Ctrl+C` 중단 후 busy 해제 ⑧`exit`→세션 재생성 후 `dir` 완료. 실제 메인 프로세스 부팅 스모크(8초 생존)도 확인
+- **파일**: `electron/term.js`(신설), `electron/main.js`, `src/components/TerminalPanel.tsx`, `package.json`(`asarUnpack` 포함), `README.md`
+- **주의**: 네이티브 모듈 도입으로 `npm install` 필요 · 앱 완전 종료 후 `npm run dev` 재실행
+
+---
+
 ### 완료된 작업
 
 #### 탭 화면 기본 분할 비율 재설정
