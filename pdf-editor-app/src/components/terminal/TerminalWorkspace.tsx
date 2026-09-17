@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, X, Columns, Rows, LayoutGrid, Square, PanelBottomClose } from 'lucide-react';
+import { Plus, X, Columns, Rows, LayoutGrid, Square, PanelBottomClose, Pencil } from 'lucide-react';
 import TerminalPane from './TerminalPane';
 import DockSwitch, { DockSide } from './DockSwitch';
 
@@ -43,6 +43,29 @@ const TerminalWorkspace: React.FC<TerminalWorkspaceProps> = ({ onCollapse, dockS
 
     const threadsRef = useRef(threads);
     threadsRef.current = threads;
+
+    // 터미널(스레드) 이름 인라인 편집 상태
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [editingTitle, setEditingTitle] = useState('');
+
+    const renameThread = useCallback((id: string, title: string) => {
+        setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, title } : t)));
+    }, []);
+
+    const startEdit = (id: string, title: string) => {
+        setEditingId(id);
+        setEditingTitle(title);
+    };
+
+    const commitEdit = () => {
+        if (editingId) {
+            const title = editingTitle.trim();
+            renameThread(editingId, title || threadsRef.current.find((t) => t.id === editingId)?.title || editingId);
+        }
+        setEditingId(null);
+    };
+
+    const cancelEdit = () => setEditingId(null);
 
     const paneCount = useMemo(() => LAYOUTS.find((l) => l.id === layout)!.panes, [layout]);
     const paneCountRef = useRef(paneCount);
@@ -147,6 +170,7 @@ const TerminalWorkspace: React.FC<TerminalWorkspaceProps> = ({ onCollapse, dockS
                     {threads.map((t) => {
                         const shown = cells.includes(t.id);
                         const isFocused = focused === t.id;
+                        const isEditing = editingId === t.id;
                         return (
                             <div
                                 key={t.id}
@@ -161,7 +185,45 @@ const TerminalWorkspace: React.FC<TerminalWorkspaceProps> = ({ onCollapse, dockS
                                 }`}
                             >
                                 <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
-                                <span className="truncate max-w-[120px]">{t.title}</span>
+                                {isEditing ? (
+                                    <input
+                                        autoFocus
+                                        value={editingTitle}
+                                        onChange={(e) => setEditingTitle(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') commitEdit();
+                                            if (e.key === 'Escape') cancelEdit();
+                                        }}
+                                        onBlur={commitEdit}
+                                        onClick={(e) => e.stopPropagation()}
+                                        placeholder="터미널 이름"
+                                        maxLength={40}
+                                        className="w-24 text-[11px] px-1.5 py-0.5 rounded-md bg-white/10 text-white border border-indigo-500/50 outline-none"
+                                    />
+                                ) : (
+                                    <>
+                                        <span
+                                            className="truncate max-w-[120px] cursor-text"
+                                            onDoubleClick={(e) => {
+                                                e.stopPropagation();
+                                                startEdit(t.id, t.title);
+                                            }}
+                                            title="더블클릭하여 이름 변경"
+                                        >
+                                            {t.title}
+                                        </span>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                startEdit(t.id, t.title);
+                                            }}
+                                            title="이름 변경"
+                                            className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 text-[#8b949e] hover:text-white"
+                                        >
+                                            <Pencil size={9} />
+                                        </button>
+                                    </>
+                                )}
                                 <button
                                     onClick={(e) => {
                                         e.stopPropagation();
