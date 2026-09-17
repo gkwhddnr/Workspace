@@ -1,7 +1,7 @@
 {
   "name": "pdf-editor-app",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.5.0",
   "scripts": {
     "dev": "cross-env NODE_OPTIONS=--no-deprecation VITE_CJS_IGNORE_WARNING=1 concurrently \"vite\" \"wait-on http://localhost:5173 && electron ./electron/main.js\"",
     "dev:vite": "vite",

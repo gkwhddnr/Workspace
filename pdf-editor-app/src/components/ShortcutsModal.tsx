@@ -6,8 +6,8 @@ interface ShortcutsModalProps {
     onClose: () => void;
 }
 
-const APP_VERSION = '1.0.0';
-const BUILD_DATE = '2026-04';
+const APP_VERSION = '1.5.0';
+const BUILD_DATE = '2026-09';
 
 const CONTENT = `
 ╔══════════════════════════════════════════════════════════════╗
