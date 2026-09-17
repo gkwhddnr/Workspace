@@ -281,6 +281,7 @@
 - **파일**: `src/components/TerminalPanel.tsx`, `src/layouts/MainLayout.tsx`, `src/types/terminal.d.ts`, `electron/term.js`, `electron/main.js`, `electron/preload.js`, `package.json`, `README.md`
 - **후속 수정 (동일 이슈 2건)**:
   - 사용자 보고: ①플러그인 비활성 상태인데 하단 터미널이 그대로 활성됨 → `MainLayout`에서 하단 터미널(닫힘 상태 '터미널 열기' 바 포함)을 `terminalPluginActive`(플러그인 `active`)로 게이팅해 비활성 시 완전히 숨김 ②`codex` 실행 시 커서는 움직이는데 로딩 스피너가 안 보임 → 무해성 캡처로 **Braille(U+2800–U+28FF) 스피너 49프레임** 확인, 원인은 Consolas/Cascadia Mono에 브라유 글리프 부재 → xterm 폰트 체인에 `"Segoe UI Symbol"` 폴백 추가
+- **후속 수정 (codex TUI '움직임' 2건)**: 사용자 보고 — codex 진입 시 TUI가 '채팅창'과 '터미널창' 사이를 계속 오가듯 움직임. 원인/수정: ①PTY 스폰 시 크기(cols/rows)가 레이아웃 확정 전에 전달되어 라이즈 동기화(리사이즈)가 반복되면 crossterm TUI가 전체 프레임을 재배치 → `TerminalPanel`이 `fit()`이 확정된 크기(cols≥40, rows≥8)로 시작하도록 지연 시작(15회×100ms 재시도) 구현 ②PTY 세션이 하나인데 하단 임베드 + 플러그인 뷰 터미널이 동시에 마운트되면 같은 출력이 두 패널에 이중 렌더링 → `MainLayout`에서 `terminalViewOpen`(플러그인 뷰 터미널 실행 중)이면 하단 임베드 숨김. codex 스트림(2026 동기화 출력, `[?2004h`, 0x2800 브라유)이 정상임을 헤드리스로 확인한 뒤 적용
 
 ---
 

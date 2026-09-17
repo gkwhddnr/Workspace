@@ -63,9 +63,22 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
         };
         doFit();
 
-        void api.start({ cols: term.cols, rows: term.rows }).then((res) => {
-            if (!res?.ok) term.writeln('\u001b[31m셸을 시작할 수 없습니다.\u001b[0m');
-        });
+        // 레이아웃이 확정된 크기로 셸을 시작한다 — 크기 불안정이면
+        // codex 같은 TUI가 리사이즈를 감지해 재배치(움직임)를 반복하기 때문이다.
+        let stopped = false;
+        const tryStart = (attempt: number) => {
+            if (stopped) return;
+            doFit();
+            const sized = term.cols >= 40 && term.rows >= 8;
+            if (sized || attempt >= 15) {
+                void api.start({ cols: term.cols, rows: term.rows }).then((res) => {
+                    if (!res?.ok) term.writeln('\u001b[31m셸을 시작할 수 없습니다.\u001b[0m');
+                });
+            } else {
+                setTimeout(() => tryStart(attempt + 1), 100);
+            }
+        };
+        tryStart(0);
         term.focus();
 
         const offInput = term.onData((data) => {
@@ -94,6 +107,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
         ro.observe(host);
 
         return () => {
+            stopped = true;
             ro.disconnect();
             offInput.dispose();
             offData();

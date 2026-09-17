@@ -44,6 +44,8 @@ const MainLayout: React.FC = () => {
     const aiCopilotActive = pluginEntries.find(e => e.definition.id === 'ai-copilot')?.active ?? false;
     // 터미널은 플러그인이 활성화된 경우에만 하단에 노출된다 (비활성화 시 완전히 숨김)
     const terminalPluginActive = pluginEntries.find(e => e.definition.id === 'terminal')?.active ?? false;
+    // 플러그인 실행 뷰에서 터미널이 떠 있으면 하단 임베드는 중복 렌더링을 막기 위해 숨긴다 (PTY 세션은 하나)
+    const terminalViewOpen = pluginActiveView?.pluginId === 'terminal';
 
     const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
     const [isFlattenModalOpen, setIsFlattenModalOpen] = useState(false);
@@ -380,8 +382,8 @@ const hasPdf = activeTabs.includes('pdf');
                                                         <PdfViewer />
                                                     </div>
 
-                                                    {/* 터미널 (플러그인 활성 시에만): 열림/닫힘 토글 (하단 드래그 리사이즈) */}
-                                                    {terminalPluginActive && (
+                                                    {/* 터미널 (플러그인 활성·플러그인 뷰 미사용 시): 열림/닫힘 토글 (하단 드래그 리사이즈) */}
+                                                    {terminalPluginActive && !terminalViewOpen && (
                                                         <>
                                                             {pdfTerminalOpen && (
                                                                 <>
