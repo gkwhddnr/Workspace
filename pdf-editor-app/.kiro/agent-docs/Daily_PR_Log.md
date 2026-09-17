@@ -279,6 +279,8 @@
   - **기본 닫힘 + 지연 스폰**: `pdfTerminalOpen` 기본 `false`, `getPtyTerminal()`로 세션을 `terminal:start` 시점에만 생성(앱 시작 시 셸 없음)
 - **검증(헤드리스 Electron, Node 18 런타임)**: ①`start()` 전 출력 없음(지연 생성) ②`start` 후 프롬프트 수신 ③raw 출력에 이스케이프 유지+한글 ④`resize` 후 `cd ..` 정상 ⑤TUI raw 모드에 ArrowDown `[27,91,66]` 전달 — 5/5 통과. `npx vite build` 통과, 실제 Electron 부팅 스모크(9초 생존) 확인
 - **파일**: `src/components/TerminalPanel.tsx`, `src/layouts/MainLayout.tsx`, `src/types/terminal.d.ts`, `electron/term.js`, `electron/main.js`, `electron/preload.js`, `package.json`, `README.md`
+- **후속 수정 (동일 이슈 2건)**:
+  - 사용자 보고: ①플러그인 비활성 상태인데 하단 터미널이 그대로 활성됨 → `MainLayout`에서 하단 터미널(닫힘 상태 '터미널 열기' 바 포함)을 `terminalPluginActive`(플러그인 `active`)로 게이팅해 비활성 시 완전히 숨김 ②`codex` 실행 시 커서는 움직이는데 로딩 스피너가 안 보임 → 무해성 캡처로 **Braille(U+2800–U+28FF) 스피너 49프레임** 확인, 원인은 Consolas/Cascadia Mono에 브라유 글리프 부재 → xterm 폰트 체인에 `"Segoe UI Symbol"` 폴백 추가
 
 ---
 

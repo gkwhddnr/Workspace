@@ -42,6 +42,8 @@ const MainLayout: React.FC = () => {
 
     const { activeView: pluginActiveView, entries: pluginEntries, stopView: stopPluginView } = usePluginStore();
     const aiCopilotActive = pluginEntries.find(e => e.definition.id === 'ai-copilot')?.active ?? false;
+    // 터미널은 플러그인이 활성화된 경우에만 하단에 노출된다 (비활성화 시 완전히 숨김)
+    const terminalPluginActive = pluginEntries.find(e => e.definition.id === 'terminal')?.active ?? false;
 
     const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
     const [isFlattenModalOpen, setIsFlattenModalOpen] = useState(false);
@@ -378,34 +380,38 @@ const hasPdf = activeTabs.includes('pdf');
                                                         <PdfViewer />
                                                     </div>
 
-                                                    {/* 터미널: 열림/닫힘 토글 (하단 드래그 리사이즈) */}
-                                                    {pdfTerminalOpen && (
+                                                    {/* 터미널 (플러그인 활성 시에만): 열림/닫힘 토글 (하단 드래그 리사이즈) */}
+                                                    {terminalPluginActive && (
                                                         <>
-                                                            <div
-                                                                className="h-1.5 shrink-0 cursor-row-resize bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors active:bg-indigo-600"
-                                                                onMouseDown={startTerminalDrag}
-                                                                title="터미널 높이 조절"
-                                                            />
-                                                            <div
-                                                                className="flex flex-col min-h-0 shrink-0"
-                                                                style={{ height: pdfTerminalHeight }}
-                                                            >
-                                                                <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                                                                    <TerminalPanel onCollapse={() => setPdfTerminalOpen(false)} />
-                                                                </div>
-                                                            </div>
+                                                            {pdfTerminalOpen && (
+                                                                <>
+                                                                    <div
+                                                                        className="h-1.5 shrink-0 cursor-row-resize bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors active:bg-indigo-600"
+                                                                        onMouseDown={startTerminalDrag}
+                                                                        title="터미널 높이 조절"
+                                                                    />
+                                                                    <div
+                                                                        className="flex flex-col min-h-0 shrink-0"
+                                                                        style={{ height: pdfTerminalHeight }}
+                                                                    >
+                                                                        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                                                                            <TerminalPanel onCollapse={() => setPdfTerminalOpen(false)} />
+                                                                        </div>
+                                                                    </div>
+                                                                </>
+                                                            )}
+                                                            {!pdfTerminalOpen && (
+                                                                <button
+                                                                    onClick={() => setPdfTerminalOpen(true)}
+                                                                    className="h-8 shrink-0 flex items-center justify-center gap-1.5 border-t theme-border-subtle theme-bg-panel text-[10px] font-bold theme-text-muted hover:text-green-500 hover:bg-green-500/5 transition-colors"
+                                                                    title="터미널 열기"
+                                                                >
+                                                                    <TerminalIcon size={12} />
+                                                                    터미널
+                                                                    <PanelBottomOpen size={12} />
+                                                                </button>
+                                                            )}
                                                         </>
-                                                    )}
-                                                    {!pdfTerminalOpen && (
-                                                        <button
-                                                            onClick={() => setPdfTerminalOpen(true)}
-                                                            className="h-8 shrink-0 flex items-center justify-center gap-1.5 border-t theme-border-subtle theme-bg-panel text-[10px] font-bold theme-text-muted hover:text-green-500 hover:bg-green-500/5 transition-colors"
-                                                            title="터미널 열기"
-                                                        >
-                                                            <TerminalIcon size={12} />
-                                                            터미널
-                                                            <PanelBottomOpen size={12} />
-                                                        </button>
                                                     )}
                                                 </div>
                                             </Panel>

@@ -35,7 +35,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ onCollapse }) => {
         if (!host) return;
 
         const term = new Terminal({
-            fontFamily: 'Consolas, "Cascadia Mono", "D2Coding", "Malgun Gothic", monospace',
+            fontFamily: 'Consolas, "Cascadia Mono", "Segoe UI Symbol", "D2Coding", "Malgun Gothic", monospace',
             fontSize: 12,
             lineHeight: 1.2,
             cursorBlink: true,
