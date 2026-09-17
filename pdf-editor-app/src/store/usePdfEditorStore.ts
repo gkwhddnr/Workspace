@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 import { RenderElement } from '../models/RenderElement';
 import { ToolSettings } from '../tools/DrawingToolStrategy';
+import { CommandHistory } from '../commands/CommandHistory';
 
 export interface PdfEditorState {
     // 1. 도큐먼트 상태
@@ -29,6 +30,12 @@ export interface PdfEditorState {
     // 4. 리비전/Undo 내역
     historyRevision: number;
     lastSavedRevision: number;
+
+    // 페이지별 공용 CommandHistory — PdfViewer와 AI 도구 실행기가 한 스택을 공유해
+    // 양쪽에서 추가한 요소가 같은 Undo/Redo 흐름에 들어간다.
+    histories: Record<number, CommandHistory>;
+    getCommandHistory: (page: number) => CommandHistory;
+    resetHistories: () => void;
 
     // Action Methods
     setDocType: (type: 'pdf' | 'image' | null) => void;
@@ -85,6 +92,16 @@ export const usePdfEditorStore = create<PdfEditorState>((set, get) => ({
     
     historyRevision: 0,
     lastSavedRevision: 0,
+
+    // 페이지별 Undo 히스토리 (지연 생성)
+    histories: {},
+    getCommandHistory: (page) => {
+        if (!get().histories[page]) {
+            set((s) => ({ histories: { ...s.histories, [page]: new CommandHistory() } }));
+        }
+        return get().histories[page];
+    },
+    resetHistories: () => set({ histories: {} }),
 
     setDocType: (type) => set({ docType: type }),
     setCurrentPage: (updater) => set((state) => ({
