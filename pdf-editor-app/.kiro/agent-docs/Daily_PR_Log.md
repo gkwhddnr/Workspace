@@ -231,7 +231,20 @@
 
 ---
 
-## 2026-09-15
+## 2026-09-17
+
+### 완료된 작업
+
+#### 터미널 IPC 노출 수정 (이슈 — Electron에서 터미널 안 보이던 문제 해결)
+
+- 사용자 보고: `npm run dev`(Electron)로 실행했는데도 터미널에 "터미널은 Electron 실행 환경에서만 사용할 수 있습니다" 표시
+- **원인 진단**: 실행 중 전자 프로세스는 오늘 11:22 시작된 최신 프로세스였으나, 헤드리스 BrowserWindow로 실제 preload 검증 결과 `window.electronAPI`는 `object`인데 `window.terminal`은 `undefined` 확인 — preload가 터미널 API를 `electronAPI` 객체의 **중첩 키(`electronAPI.terminal`)**로만 노출하고 있었고, 렌더러(TerminalPanel)는 `window.terminal`(최상위)을 호출해 폴백 문구가 표시됨
+- **수정** (`electron/preload.js`): `contextBridge.exposeInMainWorld('terminal', { exec, interrupt, onData, onDone })`로 전용 최상위 API 노출로 전환 (`src/types/terminal.d.ts`와 일치)
+- **검증**: 헤드리스 Electron e2e 확인 — `window.terminal` keys = `exec/interrupt/onData/onDone`, `terminal:exec('echo 한글테스트 OK')` → `{ok:true,runId:1,cwd}` → 스트리밍 데이터 한글 정상(텍스트에 U+D55C '한' 포함) → `done {code:0}` → 재실행 runId 2 정상
+- **파일**: `electron/preload.js`, `README.md`
+- **주의**: preload는 앱 시작 시 1회 로드 — **앱(Electron)을 완전히 종료 후 `npm run dev` 재실행**해야 반영
+
+---
 
 ### 완료된 작업
 

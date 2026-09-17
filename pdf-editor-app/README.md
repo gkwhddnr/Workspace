@@ -390,6 +390,9 @@ graph TD
 
 ## 📋 업데이트 이력
 
+### 2026-09-17
+- **터미널 IPC 노출 수정 (Electron에서만 보이던 문제 해결)**: preload에서 터미널 API가 `window.electronAPI.terminal`(중첩 키)로만 노출되어 화면이 `window.terminal`을 찾지 못하던 버그 수정 — `contextBridge.exposeInMainWorld('terminal', { exec, interrupt, onData, onDone })`로 **별도 최상위 API** 노출로 전환(터미널 타입 선언 `src/types/terminal.d.ts`와 일치). 헤드리스 Electron 테스트로 `window.terminal` 노출과 `terminal:exec` → 데이터 스트리밍(`onData`) → 종료(`onDone`, code 0) 및 한글(CP949→UTF-8) 디코딩까지 e2e 검증
+
 ### 2026-09-15
 - **플러그인 제거 버튼 제거**: 플러그인 목록의 '제거'(`Trash2`) 버튼 삭제 — AI 코파일럿·터미널 등 앱 내장(builtin) 플러그인은 제거 대상이 아니므로 관련 UI(`PluginListItem`의 `onRemove`, `PluginManagerPanel`의 `removeEntry` 연결)를 정리
 - **터미널을 PDF 에디터에 내장**: 터미널이 플러그인 실행 뷰에만 있지 않고 **PDF 편집 패널 하단에 바로 표시** — PDF 편집 중 위쪽에 있던 플러그인 라우팅 없이 즉시 사용 가능. 하단 드래그 리사이즈 바(높이 조절, 최소 120px·최대 화면 60%), 터미널 헤더의 접기 버튼/닫힘 상태 시 하단 '터미널 열기' 바(`PanelBottomOpen`)로 다시 열기, PDF 뷰어는 리마운트되지 않도록 부모를 고정해 토글 시 편집 상태(줌·스크롤) 유지, 열림 상태는 기본값으로 활성
