@@ -152,7 +152,7 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
         .join('');
 }
 
-const PdfViewer: React.FC = () => {
+const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false }) => {
 
     const {
         currentFileName, currentFilePath, setCurrentFile, textBlocks, setTextBlocks, activeTabs,
@@ -173,6 +173,16 @@ const PdfViewer: React.FC = () => {
     const imageCache = useRef<Record<string, HTMLImageElement>>({});
     const lastMousePos = useRef<{ x: number, y: number } | null>(null);
     const renderTaskRef = useRef<any>(null);
+    // 렌더 요청 직렬화/중복 방지용 상태
+    //  - renderReqIdRef: 요청 카운터, 최신 요청만 실제로 그린다(latest-wins).
+    //  - renderRunKeyRef: 현재 진행 중인 렌더의 키(문서+페이지+scale).
+    //  - lastRenderedKeyRef: 마지막으로 완료된 렌더의 키.
+    // StrictMode 마운트 중복 호출이나 setRenderTick 커밋이 같은 키로 두 번
+    // render() 하면 pdf.js가 'Cannot use the same canvas during multiple
+    // render() operations'을 던져 화면이 멈추므로, 동일 키는 스킵한다.
+    const renderReqIdRef = useRef(0);
+    const renderRunKeyRef = useRef<string | null>(null);
+    const lastRenderedKeyRef = useRef<string | null>(null);
     // 문서 세대(gen) 카운터 — 문서 전환 시 이전 문서의 렌더 완료 콜백이
     // 새 문서 화면을 덮어쓰거나 revision을 올리지 못하게 막는다.
     const docGenRef = useRef(0);
@@ -239,7 +249,6 @@ const PdfViewer: React.FC = () => {
     // Managers and Services (initialized via refs or memo)
     const toolManager = useMemo(() => new ToolManager(usePdfEditorStore), []);
     const pdfProxies = useRef<Record<number, PdfPageProxy>>({});
-    const commandHistories = useRef<Record<number, CommandHistory>>({});
     // Flag: suppress blur handler when a file dialog is open (to prevent false freeze-release)
     const isFileDialogOpenRef = useRef(false);
 
@@ -281,11 +290,9 @@ const PdfViewer: React.FC = () => {
         };
     }, [toolManager, elements, currentPage, scale]);
 
+    // 페이지/문서 공용 CommandHistory — 스토어에서 공유한다 (AI 도구 실행기도 같은 스택 사용).
     const getCommandHistory = useCallback((page: number) => {
-        if (!commandHistories.current[page]) {
-            commandHistories.current[page] = new CommandHistory();
-        }
-        return commandHistories.current[page];
+        return usePdfEditorStore.getState().getCommandHistory(page);
     }, []);
 
     // Stable ref so toolManager can access getCommandHistory without closure/ordering issues
@@ -337,6 +344,8 @@ const PdfViewer: React.FC = () => {
 
     const [isDraggingOver, setIsDraggingOver] = useState(false);
     const [canvasRevision, setCanvasRevision] = useState(0);
+    // PPT/PPTX 변환 진행 중 오버레이 (변환 동안 화면이 그대로 보이는 걸 피드백으로 보완)
+    const [officeConverting, setOfficeConverting] = useState(false);
     const [isDrawing, setIsDrawing] = useState(false);
     const lastPageRef = useRef<number>(1);
 
@@ -746,7 +755,7 @@ const PdfViewer: React.FC = () => {
         }
         setTextBlocks([]);
         // Reset all per-page command histories and page proxies
-        commandHistories.current = {};
+        usePdfEditorStore.getState().resetHistories();
         // Destroy and clear all cached page proxies
         Object.values(pdfProxies.current).forEach(p => p.destroy());
         pdfProxies.current = {};
@@ -754,9 +763,19 @@ const PdfViewer: React.FC = () => {
 
 
     const renderPage = useCallback(
-        async (page: pdfjsLib.PDFPageProxy, s: number) => {
+        async (page: pdfjsLib.PDFPageProxy, s: number, key: string) => {
             const canvas = canvasRef.current;
             if (!canvas) return;
+
+            // 같은 (문서, 페이지, scale) 렌더가 이미 진행 중이거나 직전에
+            // 완료됐다면 중복 실행하지 않는다. 같은 canvas를 동시에 render()
+            // 하면 pdf.js가 거부하므로 이 스킵으로 동시 렌더 충돌을 막는다.
+            if (renderRunKeyRef.current === key || lastRenderedKeyRef.current === key) {
+                return;
+            }
+
+            // 이번 요청의 id를 기록해 더 최신 요청이 들어왔으면 나중에 포기한다.
+            const requestId = ++renderReqIdRef.current;
 
             const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true })!;
             const dpr = window.devicePixelRatio || 1;
@@ -778,15 +797,25 @@ const PdfViewer: React.FC = () => {
                 overlay.getContext('2d')!.setTransform(dpr * qualityMultiplier, 0, 0, dpr * qualityMultiplier, 0, 0);
             }
 
-            // Cancel any in-progress render before starting a new one
+            // 진행 중인 이전 렌더가 있으면 취소하고 canvas를 내려놓을 때까지
+            // 기다린다. 이 대기 없이 바로 render() 하면 같은 canvas 다중
+            // 사용 오류가 난다.
             if (renderTaskRef.current) {
                 try {
                     renderTaskRef.current.cancel();
                     await renderTaskRef.current.promise.catch(() => { });
                 } catch (_) { }
                 renderTaskRef.current = null;
+                renderRunKeyRef.current = null;
             }
 
+            // 취소를 기다리는 사이 더 새로운 렌더 요청이 들어왔다면
+            // 마지막 요청만 그리도록 이번 요청은 포기한다.
+            if (renderReqIdRef.current !== requestId) {
+                return;
+            }
+
+            renderRunKeyRef.current = key;
             const renderContext = {
                 canvasContext: ctx,
                 viewport,
@@ -803,6 +832,7 @@ const PdfViewer: React.FC = () => {
                 // 이전 문서의 렌더가 뒤늦게 끝나도 revision을 올리지 않는다
                 // (오래된 캔버스가 새 문서 위에 그려지는 것 방지).
                 if (docGenRef.current === gen) {
+                    lastRenderedKeyRef.current = key;
                     setCanvasRevision(prev => prev + 1);
                 }
             } catch (err: any) {
@@ -812,6 +842,7 @@ const PdfViewer: React.FC = () => {
             } finally {
                 if (renderTaskRef.current === renderTask) {
                     renderTaskRef.current = null;
+                    renderRunKeyRef.current = null;
                 }
             }
         },
@@ -825,39 +856,54 @@ const PdfViewer: React.FC = () => {
             // Guard: skip invalid page numbers
             if (!doc || pageNum < 1 || pageNum > doc.numPages) return;
 
-            // If cached proxy belongs to a different doc, invalidate it
-            if (pdfProxies.current[pageNum] && (pdfProxies.current[pageNum] as any)._doc !== doc) {
-                pdfProxies.current[pageNum].destroy();
-                delete pdfProxies.current[pageNum];
+            try {
+                // If cached proxy belongs to a different doc, invalidate it
+                if (pdfProxies.current[pageNum] && (pdfProxies.current[pageNum] as any)._doc !== doc) {
+                    pdfProxies.current[pageNum].destroy();
+                    delete pdfProxies.current[pageNum];
+                }
+
+                if (!pdfProxies.current[pageNum]) {
+                    pdfProxies.current[pageNum] = new PdfPageProxy(doc, pageNum);
+                    // 문서 소유 표시: 같은 문서면 캐시 재사용, 다른 문서면 폐기
+                    (pdfProxies.current[pageNum] as any)._doc = doc;
+                }
+
+                const proxy = pdfProxies.current[pageNum];
+                const page = await proxy.load();
+                if (!page) {
+                    throw new Error('page proxy returned null (concurrent load failed)');
+                }
+
+                // 렌더 중복 방지 키: 같은 문서·페이지·scale이면 동시에 두 번
+                // render() 하지 않는다(같은 canvas 다중 render 금지).
+                const renderKey = `${String((doc as any).fingerprints?.[0] ?? '?').slice(0, 12)}:${pageNum}:${s}`;
+                await renderPage(page, s, renderKey);
+
+                // Extract text content for snapping
+                const textContent = await page.getTextContent();
+                const viewport = page.getViewport({ scale: s });
+
+                const blocks = textContent.items.map((item: any) => {
+                    const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+                    return {
+                        text: item.str,
+                        rect: [tx[4], tx[5] - item.height * s, item.width * s, item.height * s] as [number, number, number, number]
+                    };
+                }).filter(b => b.text.trim().length > 0);
+
+                setTextBlocks(blocks);
+
+                // Note: We don't release immediately to keep the snapshot logic working for snapping/rendering
+                // Release would happen when current page changes or document closes.
+            } catch (err) {
+                // 페이지 로드/렌더 실패를 조용히 삼키면 캔버스가 이전 문서 화면에
+                // 남아 "화면만 안 바뀌는" 증상으로 보인다. 원인을 반드시 드러낸다.
+                console.error(
+                    `[PdfViewer] loadPage failed (page ${pageNum}/${doc.numPages}, doc=${String((doc as any).fingerprints?.[0] ?? '?').slice(0, 12)})`,
+                    err
+                );
             }
-
-            if (!pdfProxies.current[pageNum]) {
-                pdfProxies.current[pageNum] = new PdfPageProxy(doc, pageNum);
-                // 문서 소유 표시: 같은 문서면 캐시 재사용, 다른 문서면 폐기
-                (pdfProxies.current[pageNum] as any)._doc = doc;
-            }
-
-            const proxy = pdfProxies.current[pageNum];
-            const page = await proxy.load();
-
-            await renderPage(page, s);
-
-            // Extract text content for snapping
-            const textContent = await page.getTextContent();
-            const viewport = page.getViewport({ scale: s });
-
-            const blocks = textContent.items.map((item: any) => {
-                const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
-                return {
-                    text: item.str,
-                    rect: [tx[4], tx[5] - item.height * s, item.width * s, item.height * s] as [number, number, number, number]
-                };
-            }).filter(b => b.text.trim().length > 0);
-
-            setTextBlocks(blocks);
-
-            // Note: We don't release immediately to keep the snapshot logic working for snapping/rendering
-            // Release would happen when current page changes or document closes.
         },
         [renderPage, setTextBlocks]
     );
@@ -875,6 +921,11 @@ const PdfViewer: React.FC = () => {
                 try { renderTaskRef.current.cancel(); } catch (_) { }
                 renderTaskRef.current = null;
             }
+            // 렌더 중복 방지 상태를 초기화: 같은 파일을 같은 페이지로 다시 열어도
+            // (키가 같아도) 이전 렌더가 취소됐다면 반드시 다시 그려야 한다.
+            renderRunKeyRef.current = null;
+            lastRenderedKeyRef.current = null;
+            renderReqIdRef.current += 1;
             // 새 문서 세대 시작 — 이후 렌더들은 이 세대의 캔버스만 유효하다.
             docGenRef.current += 1;
 
@@ -1142,6 +1193,7 @@ const PdfViewer: React.FC = () => {
     };
 
     const loadOfficeDocument = async (file: File, isRestore: boolean = false) => {
+        setOfficeConverting(true);
         try {
             const rawPath = (file as any)._filePath || (file as any).path || file.name;
             const baseName = rawPath.replace(/\\/g, '/').split('/').pop() || file.name;
@@ -1286,6 +1338,8 @@ const PdfViewer: React.FC = () => {
                 }
             } catch { /* keep default message */ }
             alert(`PPT/PPTX를 PDF로 변환하는 중 오류가 발생했습니다:\n${msg}`);
+        } finally {
+            setOfficeConverting(false);
         }
     };
 
@@ -2623,7 +2677,7 @@ const PdfViewer: React.FC = () => {
     if (!hasDocument) {
         return (
             <div
-                className={`flex-1 flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed transition-colors ${isDraggingOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white'}`}
+                className={`h-full w-full flex flex-col items-center gap-4 rounded-lg border-2 border-dashed transition-colors ${isDraggingOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white'} ${bottomDocked ? 'justify-center' : 'justify-start pt-[60.8vh]'}`}
                 onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
                 onDragEnter={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
                 onDragLeave={() => setIsDraggingOver(false)}
@@ -3044,6 +3098,18 @@ const PdfViewer: React.FC = () => {
                                 취소 (계속 편집하기)
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* PPT/PPTX → PDF 변환 진행 오버레이 — 그동안 화면이 이전 문서로 고정돼 있어
+                진행 피드백이 없으면 '화면이 안 바뀐다'고 보이므로 스피너로 알린다 */}
+            {officeConverting && (
+                <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl shadow-2xl px-8 py-6 flex flex-col items-center gap-3 border border-slate-200 animate-in zoom-in-95 duration-200">
+                        <div className="w-10 h-10 rounded-full border-4 border-blue-200 border-t-blue-600 animate-spin" />
+                        <div className="text-sm font-bold text-slate-900">PPT/PPTX → PDF 변환 중...</div>
+                        <div className="text-xs text-slate-500">잠시만 기다려 주세요</div>
                     </div>
                 </div>
             )}

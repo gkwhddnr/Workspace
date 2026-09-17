@@ -24,7 +24,7 @@ const tools: { id: DrawingTool; label: string; shortcut: string; icon: React.Rea
 
 
 
-const Sidebar: React.FC = () => {
+const Sidebar: React.FC<{ horizontal?: boolean }> = ({ horizontal = false }) => {
     const { 
         activeTool, setActiveTool, toolSettings, setToolSettings, 
         customColors, isColorPickerActive, setColorPickerActive,
@@ -44,20 +44,23 @@ const Sidebar: React.FC = () => {
     const isCustomColor = customColors.includes(sanitizedCurrentColor);
 
     return (
-        <div className="h-full flex flex-col gap-6 px-5 py-6 overflow-y-auto theme-bg-panel">
+        <div className={`h-full flex theme-bg-panel ${horizontal
+            ? 'flex-row items-center gap-6 px-5 py-3 overflow-x-auto'
+            : 'flex-col gap-6 px-5 py-6 overflow-y-auto'
+        }`}>
             {/* ── Tools Section ── */}
-            <section>
+            <section className={horizontal ? 'shrink-0' : ''}>
                 <div className="flex items-center gap-2 mb-3">
                     <div className="w-1 h-4 bg-blue-500 rounded-full" />
                     <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] theme-text-muted">브러시 & 도구</p>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className={horizontal ? 'flex flex-row gap-2' : 'grid grid-cols-2 gap-2'}>
                     {tools.map((tool) => (
                         <div key={tool.id} className={`relative ${activeTool === tool.id ? 'z-50' : 'z-0'}`}>
                         <button
                             id={`tool-${tool.id}`}
                             onClick={() => setActiveTool(tool.id)}
-                            className={`relative flex flex-col items-center gap-1.5 py-3 px-1 rounded-2xl text-[10px] font-bold transition-all duration-300 w-full ${activeTool === tool.id
+                            className={`relative flex flex-col items-center gap-1.5 py-3 px-1 rounded-2xl text-[10px] font-bold transition-all duration-300 ${horizontal ? 'w-[72px]' : 'w-full'} ${activeTool === tool.id
                                 ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-[1.02]'
                                 : 'theme-text-main theme-tool-hover'
                                 }`}
@@ -94,10 +97,10 @@ const Sidebar: React.FC = () => {
                 </div>
             </section>
 
-            <div className="h-px bg-slate-200/50" />
+            <div className={horizontal ? 'w-px self-stretch bg-slate-200/50' : 'h-px bg-slate-200/50'} />
 
             {/* Color Picker */}
-            <div id="color-palette-section">
+            <div id="color-palette-section" className={horizontal ? 'shrink-0' : ''}>
                 <div className="flex justify-between items-center mb-3 px-1">
                     <p className="text-[10px] font-bold uppercase tracking-widest theme-text-muted">색상</p>
                     <div className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-100 theme-bg-sub border theme-border rounded-full" title="Alt + Shift + 방향키로 색상 탐색">
@@ -110,8 +113,8 @@ const Sidebar: React.FC = () => {
                          </div>
                     </div>
                 </div>
-                <div className="grid grid-cols-4 gap-1.5 mb-2">
-                    {PRESET_COLORS.map((color) => (
+<div className={horizontal ? 'flex flex-row gap-1.5 mb-2' : 'grid grid-cols-4 gap-1.5 mb-2'}>
+            {PRESET_COLORS.map((color) => (
                         <button
                             key={color}
                             ref={(el) => { if (el) el.style.setProperty('--bg-color', color); }}
@@ -202,10 +205,10 @@ const Sidebar: React.FC = () => {
                 )}
             </div>
 
-            <div className="h-px bg-slate-200/50" />
+            <div className={horizontal ? 'w-px self-stretch bg-slate-200/50' : 'h-px bg-slate-200/50'} />
 
             {/* Stroke Width */}
-            <div>
+            <div className={horizontal ? 'shrink-0' : ''}>
                 <div className="flex justify-between items-center mb-2 px-1">
                     <p className="text-[10px] font-semibold uppercase tracking-widest theme-text-muted">두께</p>
                     <p className="text-[8px] font-mono text-slate-400 border border-slate-200 rounded px-1">[ &nbsp; ]</p>
@@ -236,10 +239,10 @@ const Sidebar: React.FC = () => {
             </div>
 
 
-            <div className="h-px bg-slate-200/50" />
+            <div className={horizontal ? 'w-px self-stretch bg-slate-200/50' : 'h-px bg-slate-200/50'} />
 
             {/* Typography & Background settings */}
-            <div className="flex flex-col gap-4">
+            <div className={horizontal ? 'flex flex-col gap-4 shrink-0' : 'flex flex-col gap-4'}>
                 <div className="flex flex-col gap-2">
                     <div className="flex justify-between items-center px-1">
                         <p className="text-[10px] font-bold uppercase tracking-widest theme-text-muted">글꼴 & 크기</p>

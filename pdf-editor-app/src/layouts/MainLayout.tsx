@@ -217,18 +217,18 @@ const hasPdf = activeTabs.includes('pdf');
     // 도구(Sidebar)·터미널을 왼쪽/오른쪽/아래 어디든 도킹할 수 있다.
     const dockViewer = (
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
-            <PdfViewer />
+            <PdfViewer bottomDocked={toolDock === 'bottom' || terminalDock === 'bottom'} />
         </div>
     );
 
     const dockToolsPanel = (
-        <div className="flex flex-col min-w-0">
+        <div className="flex flex-col min-w-0 h-full">
             <div className="h-10 border-b theme-border-subtle flex items-center px-3 shrink-0 bg-black/5 gap-1">
                 <span className="text-[10px] font-black theme-text-muted uppercase tracking-[0.2em] flex-1 min-w-0 truncate">Tools &amp; Filters</span>
                 <DockSwitch value={toolDock} onChange={setToolDock} size={10} />
             </div>
             <div className="flex-1 overflow-y-auto min-h-0">
-                <Sidebar />
+                <Sidebar horizontal={toolDock === 'bottom'} />
             </div>
         </div>
     );
