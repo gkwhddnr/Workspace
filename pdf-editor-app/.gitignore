@@ -61,3 +61,6 @@ Thumbs.db
 # User document originals (keep local, never commit)
 backend/data/originals/
 backend/data/originals-office/
+
+# Local work history (keep locally, do not push)
+logs/
