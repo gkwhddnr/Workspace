@@ -49,7 +49,7 @@ abstract class AbstractFileStorageService(
     }
 
     private fun copyFile(file: MultipartFile, target: Path) {
-        Files.copy(file.inputStream, target, StandardCopyOption.REPLACE_EXISTING)
+        file.inputStream.use { input -> Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING) }
     }
 
     private fun saveToDatabase(
@@ -160,7 +160,7 @@ class FileStorageService(
         println("[FileStorageService] saveOriginalPdf: saving to ${path.toAbsolutePath()}")
         val parent = path.parent
         if (!Files.exists(parent)) Files.createDirectories(parent)
-        Files.copy(file.inputStream, path, StandardCopyOption.REPLACE_EXISTING)
+        file.inputStream.use { input -> Files.copy(input, path, StandardCopyOption.REPLACE_EXISTING) }
     }
 
     fun getOriginalPdf(filename: String): Path? {
@@ -198,7 +198,7 @@ class FileStorageService(
             println("[FileStorageService] saveOriginalOffice: already exists at ${path.toAbsolutePath()}, skipping.")
             return
         }
-        Files.copy(file.inputStream, path, StandardCopyOption.REPLACE_EXISTING)
+        file.inputStream.use { input -> Files.copy(input, path, StandardCopyOption.REPLACE_EXISTING) }
         println("[FileStorageService] saveOriginalOffice: saved to ${path.toAbsolutePath()}")
     }
 

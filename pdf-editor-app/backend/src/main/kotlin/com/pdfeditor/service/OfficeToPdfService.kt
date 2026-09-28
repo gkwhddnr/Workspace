@@ -4,6 +4,9 @@ import org.springframework.stereotype.Service
 import org.springframework.web.multipart.MultipartFile
 import jakarta.annotation.PostConstruct
 import java.io.ByteArrayOutputStream
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import java.util.zip.ZipEntry
 import java.nio.charset.Charset
 import java.nio.file.Files
 import java.nio.file.Path
@@ -177,31 +180,28 @@ class OfficeToPdfService {
     }
 
     /** Convert via Microsoft PowerPoint COM (PowerShell). Returns null if unavailable or on failure. */
+    @Synchronized
     private fun convertWithPowerPoint(inputPath: Path, outDir: Path): Path? {
+        val (conversionInput, fontPaths) = prepareStaticKoreanFonts(inputPath)
         val outPath = outDir.resolve("input.pdf").apply { Files.deleteIfExists(this) }
 
         val script = buildString {
-            appendLine("\$ErrorActionPreference = 'Continue'")
-            // 다른 프로그램이 PowerPoint를 이미 실행 중이라면 COM이 그 인스턴스에 붙는다.
-            // 이때 finally의 Quit()가 사용자가 열어둔 프레젠테이션까지 닫아버리므로,
-            // 우리가 새로 띄운 경우에만 Quit() 하도록 실행 전 존재 여부를 기록한다.
+            appendLine("\$ErrorActionPreference = 'Stop'")
             appendLine("\$wasRunning = [System.Diagnostics.Process]::GetProcessesByName('POWERPNT').Count -gt 0")
-            appendLine("\$ppt = New-Object -ComObject PowerPoint.Application")
+            appendLine("\$ppt = \$null; \$pres = \$null; \$ok = \$false")
+            appendLine("Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class ConversionFonts { [DllImport(\"gdi32.dll\", CharSet=CharSet.Unicode)] public static extern int AddFontResourceW(string path); [DllImport(\"gdi32.dll\", CharSet=CharSet.Unicode)] public static extern bool RemoveFontResourceW(string path); }'")
             appendLine("try {")
-            appendLine("  try {")
-            appendLine("    \$pres = \$ppt.Presentations.Open('${psQuote(inputPath.toString())}', \$true, \$false, \$false)")
-            appendLine("    \$pres.SaveAs('${psQuote(outPath.toString())}', 32)") // 32 = ppSaveAsPDF
-            appendLine("    \$pres.Close()")
-            appendLine("    Write-Output 'PPT2PDF_OK'")
-            appendLine("  } catch {")
-            appendLine("    Write-Output \"PPT2PDF_ERR: \$_\"")
-            appendLine("  }")
-            appendLine("} finally {")
-            appendLine("  if (-not \$wasRunning) {")
-            appendLine("    try { \$ppt.Quit() } catch { }")
-            appendLine("  }")
+            for (font in fontPaths) appendLine("  if ([ConversionFonts]::AddFontResourceW('${psQuote(font.toString())}') -eq 0) { throw 'Font registration failed' }")
+            appendLine("  \$ppt = New-Object -ComObject PowerPoint.Application")
+            appendLine("  \$pres = \$ppt.Presentations.Open('${psQuote(conversionInput.toString())}', \$true, \$false, \$false)")
+            appendLine("  \$pres.SaveAs('${psQuote(outPath.toString())}', 32)")
+            appendLine("  \$ok = \$true; Write-Output 'PPT2PDF_OK'")
+            appendLine("} catch { Write-Output \"PPT2PDF_ERR: \$_\" } finally {")
+            appendLine("  if (\$pres) { try { \$pres.Close() } catch { }; [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject(\$pres) }")
+            appendLine("  if (\$ppt) { if (-not \$wasRunning) { try { \$ppt.Quit() } catch { } }; [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject(\$ppt) }")
+            for (font in fontPaths) appendLine("  [void][ConversionFonts]::RemoveFontResourceW('${psQuote(font.toString())}')")
             appendLine("}")
-            appendLine("exit 0")
+            appendLine("if (\$ok) { exit 0 } else { exit 1 }")
         }
 
         val scriptFile = Files.createTempFile("ppt2pdf-", ".ps1")
@@ -251,6 +251,39 @@ class OfficeToPdfService {
         } finally {
             runCatching { Files.deleteIfExists(scriptFile) }
         }
+    }
+
+    /** Fix variable-font export using static instances in a disposable copy only. */
+    internal fun prepareStaticKoreanFonts(input: Path): Pair<Path, List<Path>> {
+        if (input.extension.lowercase() != "pptx") return input to emptyList()
+        val entries = linkedMapOf<String, ByteArray>()
+        var changed = false
+        ZipInputStream(Files.newInputStream(input)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                val bytes = zip.readBytes()
+                if (entry.name.startsWith("ppt/") && entry.name.endsWith(".xml")) {
+                    val xml = bytes.toString(Charsets.UTF_8)
+                    val rewritten = xml.replace("typeface=\"Noto Sans KR\"", "typeface=\"Workspace Noto Sans KR\"")
+                    changed = changed || rewritten != xml
+                    entries[entry.name] = rewritten.toByteArray(Charsets.UTF_8)
+                } else entries[entry.name] = bytes
+            }
+        }
+        if (!changed) return input to emptyList()
+        val fonts = listOf("Regular", "Bold").map { weight ->
+            val name = "WorkspaceNotoSansKR-$weight.ttf"
+            val path = input.parent.resolve(name)
+            requireNotNull(javaClass.getResourceAsStream("/fonts/$name")).use {
+                Files.copy(it, path, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }
+            path
+        }
+        val output = input.parent.resolve("static-fonts.pptx")
+        ZipOutputStream(Files.newOutputStream(output)).use { zip ->
+            entries.forEach { (name, bytes) -> zip.putNextEntry(ZipEntry(name)); zip.write(bytes); zip.closeEntry() }
+        }
+        return output to fonts
     }
 
     private fun locateGeneratedPdf(outDir: Path): Path? =
@@ -325,10 +358,11 @@ class OfficeToPdfService {
 
     private fun deleteRecursively(root: Path) {
         if (!Files.exists(root)) return
-        Files.walk(root)
+        Files.walk(root).use { paths -> paths
             .sorted(Comparator.reverseOrder())
             .forEach { p ->
                 runCatching { p.deleteIfExists() }
             }
+        }
     }
 }

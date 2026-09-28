@@ -77,7 +77,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
         when (type) {
             "path" -> insertPng(
                 slide,
-                renderPathPng(item.path("points"), color, strokeWidth, opacity),
+                renderPathPng(item.path("points"), color, strokeWidth, opacity, style.path("rasterScale").asDouble(2.0)),
                 item,
                 sx,
                 sy,
@@ -124,22 +124,27 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
         val h = item.path("height").asDouble(item.path("fontSize").asDouble(12.0) * 1.4)
         val fontSize = item.path("fontSize").asDouble(12.0)
         val fontFamily = item.path("fontFamily").asText("Outfit, sans-serif")
-        val fontWeight = item.path("fontWeight").asText("normal")
         val textColor = safeColor(item.path("style").path("color").asText("#111827"))
 
         val tb = slide.createTextBox()
         tb.anchor = Rectangle2D.Double(x * sx, y * sy, max(1.0, w * sx), max(1.0, h * sy))
         tb.wordWrap = true
 
-        val paragraphs = text.split('\n')
-        paragraphs.forEachIndexed { i, line ->
-            val tp = if (i == 0 && tb.textParagraphs.isNotEmpty()) tb.textParagraphs[0] else tb.addNewTextParagraph()
-            val run = if (tp.textRuns.isNotEmpty()) tp.textRuns[0] else tp.addNewTextRun()
-            run.setText(line)
-            run.fontSize = fontSize * sy
-            run.fontFamily = fontFamily
-            run.setFontColor(textColor)
-            run.isBold = fontWeight == "bold" || fontWeight == "700"
+        tb.clearText()
+        var offset = 0
+        text.split('\n').forEach { line ->
+            val paragraph = tb.addNewTextParagraph()
+            styledRuns(item, line, offset).forEach { part ->
+                val run = paragraph.addNewTextRun()
+                run.setText(part.text)
+                run.fontSize = fontSize * sy
+                run.fontFamily = fontFamily
+                run.setFontColor(textColor)
+                run.isBold = part.bold
+                run.isUnderlined = part.underline
+                run.isStrikethrough = part.strike
+            }
+            offset += line.length + 1
         }
     }
 
@@ -245,7 +250,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
         when (type) {
             "path" -> insertPngHslf(
                 slide,
-                renderPathPng(item.path("points"), color, strokeWidth, opacity),
+                renderPathPng(item.path("points"), color, strokeWidth, opacity, style.path("rasterScale").asDouble(2.0)),
                 pathBbox(item), sx, sy
             )
             "text" -> addTextToHslf(slide, item, sx, sy)
@@ -274,15 +279,49 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
         )
         val fontSize = item.path("fontSize").asDouble(12.0)
         val fontFamily = item.path("fontFamily").asText("Outfit, sans-serif")
-        val fontWeight = item.path("fontWeight").asText("normal")
         val textColor = safeColor(item.path("style").path("color").asText("#111827"))
 
-        val run = tb.textParagraphs[0].textRuns.firstOrNull() ?: return
-        run.setText(text)
-        run.setFontSize(fontSize * sy)
-        run.setFontFamily(fontFamily)
-        run.setFontColor(textColor)
-        run.setBold(fontWeight == "bold" || fontWeight == "700")
+        var offset = 0
+        var first = true
+        text.split('\n').forEachIndexed { lineIndex, line ->
+            styledRuns(item, line, offset).forEachIndexed { partIndex, part ->
+                val run = if (first) tb.setText(part.text)
+                    else tb.appendText(part.text, lineIndex > 0 && partIndex == 0)
+                first = false
+                run.setFontSize(fontSize * sy)
+                run.setFontFamily(fontFamily)
+                run.setFontColor(textColor)
+                run.setBold(part.bold)
+                run.setUnderlined(part.underline)
+                run.setStrikethrough(part.strike)
+            }
+            offset += line.length + 1
+        }
+    }
+
+    private data class StyledRun(val text: String, val bold: Boolean, val underline: Boolean, val strike: Boolean)
+
+    // JS and Kotlin both use UTF-16 offsets; newline offsets must count across paragraphs.
+    private fun styledRuns(item: JsonNode, line: String, offset: Int): List<StyledRun> {
+        val spans = item.path("spans").takeIf { it.isArray }?.toList() ?: emptyList()
+        val boundaries = sortedSetOf(0, line.length)
+        for (span in spans) {
+            boundaries.add((span.path("start").asInt() - offset).coerceIn(0, line.length))
+            boundaries.add((span.path("end").asInt() - offset).coerceIn(0, line.length))
+        }
+        fun part(start: Int, end: Int): StyledRun {
+            var weight = item.path("fontWeight").asText("normal")
+            var decoration = item.path("textDecoration").asText("")
+            for (span in spans) {
+                if (offset + start >= span.path("start").asInt() && offset + start < span.path("end").asInt()) {
+                    if (span.hasNonNull("fontWeight")) weight = span.path("fontWeight").asText()
+                    if (span.hasNonNull("textDecoration")) decoration = span.path("textDecoration").asText()
+                }
+            }
+            return StyledRun(line.substring(start, end), weight == "bold" || weight == "700",
+                decoration.contains("underline"), decoration.contains("line-through"))
+        }
+        return if (line.isEmpty()) listOf(part(0, 0)) else boundaries.toList().zipWithNext { start, end -> part(start, end) }
     }
 
     private fun addShapeToHslf(
@@ -302,7 +341,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
             // HSLF(.ppt)는 셰이프 필의 알파(투명도)를 지원하지 않는다. 불투명한 RECT를
             // 그대로 넣으면 형광펜 영역이 내용을 덮어 가리므로, pptx의 반투명 결과와
             // 동일하게 투명도가 적용된 PNG로 렌더링해 삽입한다.
-            val png = renderRectPng(color, w, h, fill = true, strokeWidth = 0.0, opacity = opacity)
+            val png = renderRectPng(color, w, h, fill = true, strokeWidth = 0.0, opacity = opacity, rasterScale = style.path("rasterScale").asDouble(2.0))
             insertPngHslf(
                 slide, png,
                 floatArrayOf(x.toFloat(), y.toFloat(), w.toFloat(), h.toFloat()),
@@ -411,7 +450,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
     private fun shapeBbox(item: JsonNode): FloatArray =
         floatArrayOf(xOf(item).toFloat(), yOf(item).toFloat(), wOf(item).toFloat(), hOf(item).toFloat())
 
-    private fun renderPathPng(pointsNode: JsonNode, color: Color, strokeWidth: Double, opacity: Double): ByteArray? {
+    private fun renderPathPng(pointsNode: JsonNode, color: Color, strokeWidth: Double, opacity: Double, rasterScale: Double): ByteArray? {
         if (!pointsNode.isArray || pointsNode.isEmpty) return null
         val pts = ArrayList<Pt>(pointsNode.size())
         for (p in pointsNode) {
@@ -420,7 +459,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
         return renderPng(
             strokeWidth, opacity,
             minX = pts.minOf { it.x }, minY = pts.minOf { it.y },
-            maxX = pts.maxOf { it.x }, maxY = pts.maxOf { it.y }
+            maxX = pts.maxOf { it.x }, maxY = pts.maxOf { it.y }, rasterScale = rasterScale
         ) { g2d, pad ->
             val path = Path2D.Double()
             path.moveTo(pts[0].x, pts[0].y)
@@ -432,9 +471,9 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
     }
 
     /** Filled (highlight) or outlined rect as a transparent PNG for HSLF (.ppt). */
-    private fun renderRectPng(color: Color, w: Double, h: Double, fill: Boolean, strokeWidth: Double, opacity: Double): ByteArray? {
+    private fun renderRectPng(color: Color, w: Double, h: Double, fill: Boolean, strokeWidth: Double, opacity: Double, rasterScale: Double = 2.0): ByteArray? {
         return renderPng(
-            if (fill) 0.0 else strokeWidth, opacity, 0.0, 0.0, w, h
+            if (fill) 0.0 else strokeWidth, opacity, 0.0, 0.0, w, h, rasterScale
         ) { g2d, _ ->
             if (fill) {
                 // opacity를 알파 채널에 반영 → 사각형이 내용을 가리지 않고 반투명하게 보인다
@@ -480,7 +519,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
         maxY = maxOf(maxY, arrowTo.y + headLen)
 
         return renderPng(
-            strokeWidth, opacity, minX, minY, maxX, maxY
+            strokeWidth, opacity, minX, minY, maxX, maxY, item.path("style").path("rasterScale").asDouble(2.0)
         ) { g2d, _ ->
             g2d.color = color
             g2d.stroke = BasicStroke(strokeWidth.toFloat(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
@@ -507,6 +546,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
         strokeWidth: Double,
         opacity: Double,
         minX: Double, minY: Double, maxX: Double, maxY: Double,
+        rasterScale: Double = 2.0,
         draw: (Graphics2D, Double) -> Unit
     ): ByteArray? {
         val pad = strokeWidth
@@ -514,7 +554,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
         val h = maxY - minY + pad * 2
         if (w <= 0 || h <= 0) return null
 
-        val scale = 2.0
+        val scale = if (rasterScale.isFinite()) rasterScale.coerceIn(1.0, 3.0) else 2.0
         val imgW = max(1, ceil(w * scale).toInt())
         val imgH = max(1, ceil(h * scale).toInt())
         val img = BufferedImage(imgW, imgH, BufferedImage.TYPE_INT_ARGB)

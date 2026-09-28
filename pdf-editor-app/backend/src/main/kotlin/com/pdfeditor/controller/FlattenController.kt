@@ -35,30 +35,8 @@ class FlattenController(
 
     @GetMapping("/files")
     fun listOriginalsFiles(): ResponseEntity<List<FileInfo>> {
-        return try {
-            val originalsPath = Paths.get("data", "originals")
-            
-            // Return empty list if folder doesn't exist
-            if (!Files.exists(originalsPath) || !Files.isDirectory(originalsPath)) {
-                return ResponseEntity.ok(emptyList())
-            }
-            
-            // List all PDF files in the originals folder
-            val files = Files.list(originalsPath)
-                .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".pdf", ignoreCase = true) }
-                .map { path ->
-                    FileInfo(
-                        filename = path.fileName.toString(),
-                        sizeBytes = Files.size(path)
-                    )
-                }
-                .toList()
-            
-            ResponseEntity.ok(files)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            ResponseEntity.ok(emptyList())
-        }
+        val files = flattenService.listOriginalsFiles().map { FileInfo(it.filename, it.sizeBytes) }
+        return ResponseEntity.ok(files)
     }
 
     @PostMapping("/process")

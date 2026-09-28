@@ -39,7 +39,7 @@ class FlattenService(
             }
             
             // List all PDF files in the originals folder (Requirement 1.1)
-            val files = Files.list(originalsPath)
+            val files = Files.list(originalsPath).use { paths -> paths
                 .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".pdf", ignoreCase = true) }
                 .map { path ->
                     FileInfo(
@@ -48,6 +48,7 @@ class FlattenService(
                     )
                 }
                 .toList()
+            }
             
             // Return file list (Requirement 1.2)
             return files
