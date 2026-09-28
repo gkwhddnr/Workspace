@@ -31,7 +31,8 @@ export function useAppShortcuts({
         const handleKeyDown = (e: KeyboardEvent) => {
             const target = e.target as HTMLElement | null;
             const tagName = target?.tagName.toLowerCase();
-            if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) return;
+            if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); onOpenTheme(); return; }
+            if ((tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) && !(e.altKey && e.shiftKey && e.key.startsWith('Arrow'))) return;
 
             // 모달 열기
             if (e.altKey && e.key.toLowerCase() === 'd') { e.preventDefault(); onOpenTheme(); return; }
@@ -77,6 +78,7 @@ export function useAppShortcuts({
                 }
             }
 
+            if (document.querySelector('[data-settings-dialog]')) return;
             if (!e.ctrlKey && !e.metaKey && !e.altKey) {
                 const key = e.key.toLowerCase();
                 const state = useAppStore.getState();
@@ -107,7 +109,9 @@ export function useAppShortcuts({
                 else if (key === '2') handleToolChange('arrow-l-2');
                 else if (key === 'i') handleToolChange('image');
 
-                // 폰트 크기 조절 (- / =). 스트로크 너비는 useEditorShortcuts에서 처리.
+                // PDF 화면에서는 두께 변경과 표시를 useEditorShortcuts가 함께 처리한다.
+                else if (key === '[' && !state.activeTabs.includes('pdf')) { e.preventDefault(); setToolSettings({ strokeWidth: Math.max(1, (toolSettings.strokeWidth || 1) - 1) }); }
+                else if (key === ']' && !state.activeTabs.includes('pdf')) { e.preventDefault(); setToolSettings({ strokeWidth: Math.min(20, (toolSettings.strokeWidth || 1) + 1) }); }
                 else if (key === '-') { e.preventDefault(); setToolSettings({ fontSize: Math.max(8, (toolSettings.fontSize || 12) - 2) }); }
                 else if (key === '=') { e.preventDefault(); setToolSettings({ fontSize: Math.min(100, (toolSettings.fontSize || 12) + 2) }); }
             }

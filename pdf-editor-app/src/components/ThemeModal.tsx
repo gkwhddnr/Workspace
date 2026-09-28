@@ -1,5 +1,7 @@
+import { useSettingsStore } from '../store/useSettingsStore';
+import { TABS } from '../config/tabs';
 import React, { useEffect, useState, useRef } from 'react';
-import { useAppStore, ThemeMode } from '../store/useAppStore';
+import { useAppStore, ThemeMode, PRESET_COLORS } from '../store/useAppStore';
 import { Palette, X, Moon, Sun, Droplet, Paintbrush } from 'lucide-react';
 
 interface ThemeModalProps {
@@ -9,6 +11,8 @@ interface ThemeModalProps {
 
 const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
     const { themeMode, setThemeMode, customThemeColor, setCustomThemeColor } = useAppStore();
+    const {tabWeights,setTabWeight,rememberPlugins,setRememberPlugins,saveQuality,setSaveQuality} = useSettingsStore();
+    const {toolSettings,setToolSettings,customColors,addCustomColor,removeCustomColor} = useAppStore();
     const [isVisible, setIsVisible] = useState(false);
     const colorPreviewRef = useRef<HTMLDivElement>(null);
 
@@ -60,10 +64,9 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
     return (
         <div 
             className={`fixed inset-0 z-[200] flex items-center justify-center transition-all ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+            data-settings-dialog role="dialog" aria-modal="true" aria-label="설정"
             onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                    onClose();
-                }
+                e.stopPropagation();
                 if (e.key === 'Escape') {
                     onClose();
                 }
@@ -71,17 +74,59 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
         >
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
 
-            <div className={`relative w-[480px] bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden transition-all duration-300 ${isOpen ? 'scale-100 translateY(0)' : 'scale-95 translateY(20px)'}`}>
+            <div className={`relative w-[560px] max-w-[95vw] max-h-[90vh] overflow-y-auto text-slate-700 bg-white rounded-3xl shadow-2xl border border-slate-200 transition-all duration-300 ${isOpen ? 'scale-100 translateY(0)' : 'scale-95 translateY(20px)'}`}>
                 <div className="p-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white flex justify-between items-center">
                     <div className="flex items-center gap-3">
                         <Palette size={24} />
-                        <h2 className="text-xl font-bold">화면 모드 설정 (Alt+D)</h2>
+                        <h2 className="text-xl font-bold">설정 (Ctrl+,)</h2>
                     </div>
                     <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-lg transition-colors" title="닫기">
                         <X size={20} />
                     </button>
                 </div>
 
+                <section className="px-6 pt-5 space-y-3">
+                    <p className="text-xs text-slate-500">변경 사항은 즉시 적용되며 앱을 다시 켜도 유지됩니다. Alt+D로도 열 수 있습니다.</p>
+                    <h3 className="font-bold">탭 공간 크기</h3>
+                    <p className="text-xs text-slate-500">열려 있는 탭끼리 아래 비율로 공간을 나눕니다. 숫자가 클수록 넓어집니다.</p>
+                    {TABS.map(tab => <label key={tab.id} className="flex items-center gap-3 text-sm">
+                        <span className="w-24 shrink-0">{tab.label}</span>
+                        <input type="range" min="1" max="10" step="1" value={tabWeights[tab.id]}
+                            aria-label={tab.label+' 공간 크기'} onChange={e=>setTabWeight(tab.id,Number(e.target.value))} className="flex-1 min-w-0"/>
+                        <output className="w-6 text-right tabular-nums">{tabWeights[tab.id]}</output>
+                    </label>)}
+                </section>
+                <section className="px-6 pt-5 space-y-3">
+                    <h3 className="font-bold">저장 화질</h3>
+                    <label className="flex items-center gap-3 text-sm">
+                        <span>저화질</span><input aria-label="저장 화질" type="range" min="1" max="3" step="0.25" value={saveQuality} onChange={e=>setSaveQuality(Number(e.target.value))} className="flex-1"/><span>고화질</span>
+                        <output>{saveQuality.toFixed(2)}배</output>
+                    </label>
+                    <p className="text-xs text-slate-500">PDF 필기, PPT/PPTX에 추가되는 필기 이미지와 이미지 내보내기의 해상도입니다. 높을수록 선명해지고 용량이 커질 수 있습니다. 원본 텍스트·벡터·기존 이미지의 품질은 유지됩니다.</p>
+                </section>
+                <section className="px-6 pt-5 space-y-2">
+                    <h3 className="font-bold">플러그인 시작 설정</h3>
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={rememberPlugins} onChange={e=>setRememberPlugins(e.target.checked)}/>플러그인 활성화 상태 기억</label>
+                    <p className="text-xs text-slate-500">체크하면 마지막 활성화 상태로 시작합니다. 해제하면 다음 실행부터 모든 플러그인이 꺼진 상태로 시작합니다.</p>
+                </section>
+                <section className="px-6 pt-5 space-y-3">
+                    <h3 className="font-bold">필기 색상</h3>
+                    <p className="text-xs text-slate-500">Alt+Shift+방향키로 아래 팔레트를 이동합니다. 선택한 색상과 추가 색상도 저장됩니다.</p>
+                    <div className="grid grid-cols-4 gap-2">
+                        {[...PRESET_COLORS,...customColors].map((color,i)=><div key={i} className="flex gap-1 items-center">
+                            <button type="button" title={color} aria-label={'필기 색상 '+color} aria-pressed={toolSettings.color.toUpperCase()===color.toUpperCase()}
+                                onClick={()=>setToolSettings({color})} style={{backgroundColor:color}}
+                                className={'h-8 flex-1 rounded border-2 '+(toolSettings.color.toUpperCase()===color.toUpperCase()?'border-indigo-500 ring-2 ring-indigo-300':'border-slate-300')}/>
+                            {i>=PRESET_COLORS.length && <button title={'추가 색상 삭제 '+color} onClick={()=>removeCustomColor(color)} className="text-slate-500">×</button>}
+                        </div>)}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <input type="color" aria-label="사용자 필기 색상" value={toolSettings.color} onChange={e=>setToolSettings({color:e.target.value})}/>
+                        <span>{toolSettings.color.toUpperCase()}</span>
+                        <button onClick={()=>addCustomColor(toolSettings.color)} className="px-3 py-2 rounded bg-indigo-50 text-indigo-700">팔레트에 추가</button>
+                    </div>
+                </section>
+                <h3 className="px-6 pt-5 font-bold">화면 테마</h3>
                 <div className="p-6 grid grid-cols-2 gap-4">
                     {modes.map((mode) => (
                         <button
@@ -89,9 +134,7 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                             title={mode.label}
                             onClick={() => {
                                 setThemeMode(mode.id);
-                                if (mode.id !== 'custom') {
-                                    setTimeout(onClose, 200);
-                                }
+
                             }}
                             className={`flex flex-col items-center gap-3 p-5 rounded-2xl border-2 transition-all duration-200 ${themeMode === mode.id
                                     ? 'border-indigo-600 bg-indigo-50 shadow-md scale-105 relative'
@@ -199,14 +242,9 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                         onClick={onClose}
                         className="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-bold py-3 rounded-2xl shadow-lg shadow-indigo-500/20 transition-all active:scale-95 flex items-center justify-center gap-2"
                     >
-                        적용 및 닫기
+                        닫기 (자동 저장됨)
                     </button>
-                    <button 
-                        onClick={onClose}
-                        className="px-6 py-3 border border-slate-200 text-slate-500 font-bold rounded-2xl hover:bg-slate-50 transition-colors"
-                    >
-                        취소
-                    </button>
+
                 </div>
             </div>
         </div>

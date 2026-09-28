@@ -56,7 +56,10 @@ function createTerminal({ send, cwd, shell: shellFile, shellArgs } = {}) {
   };
 
   const ensure = (cols, rows) => {
-    if (session) return true;
+    if (session) {
+      if (cols > 0 && rows > 0) session.resize(cols, rows);
+      return true;
+    }
     if (!pty) return false;
     initReady = false;
     const shell = shellFile || (process.platform === 'win32' ? 'cmd.exe' : 'bash');
@@ -74,8 +77,9 @@ function createTerminal({ send, cwd, shell: shellFile, shellArgs } = {}) {
       session = null;
       return false;
     }
-    session.onData((data) => onData(data));
-    session.onExit((info) => onExit(info));
+    const spawned = session;
+    session.onData((data) => { if (session === spawned) onData(data); });
+    session.onExit((info) => { if (session === spawned) onExit(info); });
     if (process.platform === 'win32') {
       // UTF-8 입출력으로 전환 (줄 자체는 echo 되지 않도록 @)
       session.write('@chcp 65001>nul\r');
@@ -116,9 +120,7 @@ function createTerminal({ send, cwd, shell: shellFile, shellArgs } = {}) {
     currentRun = null;
     outBuf = '';
     session = null;
-    if (r) {
-      emit({ type: 'done', runId: r.runId, code: -1, signal: 'exit', clear: false, cwd: termCwd });
-    }
+    emit({ type: 'done', runId: r ? r.runId : 0, code, signal: 'exit', clear: false, cwd: termCwd });
     if (!initReady) {
       initReady = true;
       flushInit();
@@ -187,10 +189,9 @@ function createTerminal({ send, cwd, shell: shellFile, shellArgs } = {}) {
   };
 
   const kill = () => {
-    try {
-      if (session) session.kill();
-    } catch (e) {}
+    const oldSession = session;
     session = null;
+    try { oldSession?.kill(); } catch (e) {}
   };
 
   const getCwd = () => termCwd;

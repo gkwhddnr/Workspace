@@ -57,7 +57,7 @@ export interface PdfEditorState {
     
     // 리비전 제어
     incrementRevision: () => void;
-    markSaved: () => void;
+    markSaved: (revision?: number) => void;
     clearElements: () => void;
     getPageHistory: (page: number) => RenderElement[];
 }
@@ -77,10 +77,10 @@ export const usePdfEditorStore = create<PdfEditorState>((set, get) => ({
         strokeWidth: 2,
         fontSize: 20,
         fontFamily: 'Outfit, sans-serif',
+        textBgOpacity: 0.5,
         arrowHeadSize: 12,
         fontWeight: 'normal',
         textDecoration: '',
-        textBgOpacity: 0.5,
     },
     selectedElementIds: [],
     isDragging: false,
@@ -137,7 +137,7 @@ export const usePdfEditorStore = create<PdfEditorState>((set, get) => ({
     toggleExitDialog: (isOpen) => set({ isExitDialogOpen: isOpen }),
 
     incrementRevision: () => set((state) => ({ historyRevision: state.historyRevision + 1 })),
-    markSaved: () => set((state) => ({ lastSavedRevision: state.historyRevision })),
+    markSaved: (revision) => set((state) => ({ lastSavedRevision: revision ?? state.historyRevision })),
     clearElements: () => set({ elements: {} }),
     getPageHistory: (page) => get().elements[page] || [],
 }));

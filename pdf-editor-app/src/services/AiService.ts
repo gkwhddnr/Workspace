@@ -13,7 +13,8 @@ export async function callGemini(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model = 'gemini-3.8-flash'
+    model = 'gemini-3.8-flash',
+    signal?: AbortSignal
 ): Promise<string> {
     // 신규 출시 모델은 출시 초기 서버 과부하(503)가 잦아 자동 재시도합니다.
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
@@ -28,11 +29,12 @@ export async function callGemini(
     const maxAttempts = 3;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
-            const response = await axios.post(url, payload);
+            const response = await axios.post(url, payload, { signal });
             return response.data.candidates[0].content.parts[0].text as string;
         } catch (error: any) {
             const status = error?.response?.status;
             const retriable = status === 503 || status === 502;
+            if (signal?.aborted) throw error;
             if (!retriable || attempt === maxAttempts - 1) throw error;
             await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
         }
@@ -45,7 +47,8 @@ export async function callChatGPT(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model = 'gpt-5.6-sol'
+    model = 'gpt-5.6-sol',
+    signal?: AbortSignal
 ): Promise<string> {
     const response = await axios.post(
         'https://api.openai.com/v1/chat/completions',
@@ -60,7 +63,8 @@ export async function callChatGPT(
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
-            }
+            },
+            signal
         }
     );
     return response.data.choices[0].message.content as string;
@@ -71,7 +75,8 @@ export async function callClaude(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model = 'claude-opus-5'
+    model = 'claude-opus-5',
+    signal?: AbortSignal
 ): Promise<string> {
     const response = await axios.post(
         'https://api.anthropic.com/v1/messages',
@@ -89,7 +94,8 @@ export async function callClaude(
                 // Claude API에서 CORS 요청 허용이 필요합니다.
                 // 실제 프로덕션에서는 백엔드 프록시를 통해 호출하는 것을 권장합니다.
                 'anthropic-dangerous-direct-browser-access': 'true'
-            }
+            },
+            signal
         }
     );
     return response.data.content[0].text as string;
@@ -109,7 +115,8 @@ export async function callFactChat(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model = 'claude-sonnet-5'
+    model = 'claude-sonnet-5',
+    signal?: AbortSignal
 ): Promise<string> {
     const response = await axios.post(
         factChatBaseUrl(),
@@ -124,7 +131,8 @@ export async function callFactChat(
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
-            }
+            },
+            signal
         }
     );
     return response.data.choices[0].message.content as string;
@@ -136,24 +144,28 @@ export async function callAi(
     apiKey: string,
     messages: AiMessage[],
     systemPrompt: string,
-    model?: string
+    model?: string,
+    signal?: AbortSignal
 ): Promise<string> {
     if (!apiKey || apiKey.trim() === '') {
         throw new Error(`${provider.toUpperCase()} API 키가 설정되지 않았습니다.`);
     }
     switch (provider) {
-        case 'gemini':   return callGemini(apiKey, messages, systemPrompt, model);
-        case 'chatgpt':  return callChatGPT(apiKey, messages, systemPrompt, model);
-        case 'claude':   return callClaude(apiKey, messages, systemPrompt, model);
-        case 'factchat': return callFactChat(apiKey, messages, systemPrompt, model);
+        case 'gemini':   return callGemini(apiKey, messages, systemPrompt, model, signal);
+        case 'chatgpt':  return callChatGPT(apiKey, messages, systemPrompt, model, signal);
+        case 'claude':   return callClaude(apiKey, messages, systemPrompt, model, signal);
+        case 'factchat': return callFactChat(apiKey, messages, systemPrompt, model, signal);
         default:         throw new Error(`지원하지 않는 AI 제공자입니다: ${provider}`);
     }
 }
 
 // ─── 오류 메시지 정제 ─────────────────────────────────────────────────────────
+export const OPENAI_BILLING_URL = 'https://platform.openai.com/settings/organization/billing/overview';
+export const OPENAI_BILLING_ERROR = 'OpenAI API 사용 한도 초과 또는 결제 필요';
+
 export function refineError(provider: AiProvider, raw: string): string {
-    if (provider === 'chatgpt' && (raw.includes('quota') || raw.includes('billing'))) {
-        return 'OpenAI API 사용 한도 초과 또는 결제 필요 (최소 $5 충전 필요)';
+    if (provider === 'chatgpt' && /quota|billing|insufficient[ _]credits?|credit balance/i.test(raw)) {
+        return OPENAI_BILLING_ERROR + '. 결제 설정에서 크레딧 잔액과 사용 한도를 확인해 주세요.';
     }
     if (provider === 'gemini' && (raw.includes('quota') || raw.includes('limit'))) {
         return 'Gemini API 사용 한도 초과. 잠시 후 다시 시도해 주세요.';

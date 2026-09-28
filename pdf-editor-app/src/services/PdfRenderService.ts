@@ -2,11 +2,10 @@
 // Facade: encapsulates all PDF.js rendering complexity.
 // PdfViewer delegates to this service instead of calling pdf.js APIs directly.
 
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from './pdfjs';
 import { DrawingAnnotation } from '../tools/DrawingToolStrategy';
 import { ToolFactory } from '../tools/ToolFactory';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = window.location.origin + '/pdf.worker.min.js';
 
 export interface PageRenderResult {
     numPages: number;

@@ -83,6 +83,7 @@ export const useEditorShortcuts = ({
     // 2. Main Keyboard Shortcuts (Undo, Redo, Open, Page navigation, Tool settings)
     useEffect(() => {
         const handleKey = (e: KeyboardEvent) => {
+            if (e.defaultPrevented) return;
             if (!activeTabs.includes('pdf')) return;
 
             const target = e.target as HTMLElement | null;
@@ -166,16 +167,15 @@ export const useEditorShortcuts = ({
                         // User request: Show bubble ONLY for Shift + { , }
                         showToolIndicator?.(next);
                     }
-                } else {
+                } else if (!e.shiftKey) {
                     // Alt + Arrows for Arrow size adjustment
                     if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                        // Only if active tool is an arrow (SAFE CHECK)
-                        if (activeTool === 'arrow' || (activeTool && typeof activeTool === 'string' && activeTool.startsWith('arrow-'))) {
-                            const isIncrease = e.key === 'ArrowUp' || e.key === 'ArrowRight';
-                            const delta = isIncrease ? 1 : -1;
-                            const next = Math.max(5, Math.min(50, (toolSettings.arrowHeadSize || 12) + delta));
-                            setToolSettings({ arrowHeadSize: next });
-                        }
+                        e.preventDefault();
+                        const delta = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? 1 : -1;
+                        const fontSize = Math.max(8, Math.min(100, (toolSettings.fontSize || 20) + delta));
+                        const arrowHeadSize = Math.max(5, Math.min(50, (toolSettings.arrowHeadSize || 12) + delta));
+                        setToolSettings({ fontSize, arrowHeadSize });
+                        showSettingIndicator?.('글꼴 / 화살표 크기', fontSize + ' / ' + arrowHeadSize);
                     }
                 }
             }

@@ -7,7 +7,7 @@ import { registerPlugin } from '../pluginRuntime';
  * - onRun: 실행 버튼을 눌렀을 때도 동일 패널 표시
  */
 export function registerAiCopilotPlugin(aiPanelComponent: unknown) {
-    registerPlugin({
+    return registerPlugin({
         id: 'ai-copilot',
         name: 'AI 코파일럿',
         version: '2.2.0',

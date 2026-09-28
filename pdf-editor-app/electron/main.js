@@ -1,14 +1,28 @@
 // .env 파일 로드
 require('dotenv').config();
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const { spawn } = require('child_process');
-const { createTerminal } = require('./term.js');
+const { registerTerminalIpc } = require('./terminalIpc');
 
 let mainWindow;
+const terminalSessions = registerTerminalIpc({ ipcMain, getWindow: () => mainWindow });
 let forceQuit = false;
+
+ipcMain.handle('backup:openFolder', async () => {
+  const backupPath = path.resolve(__dirname, '..', 'backend', 'data');
+  try {
+    const stat = await fs.stat(backupPath);
+    if (!stat.isDirectory()) throw new Error('백업 경로가 폴더가 아닙니다.');
+    const error = await shell.openPath(backupPath);
+    if (error) throw new Error(error);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: `백업 폴더를 열 수 없습니다 (${backupPath}): ${error.message}` };
+  }
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -39,6 +53,14 @@ function createWindow() {
   }
 
   // F12 키를 누르면 개발자도구(DevTools) 토글 이벤트 설정
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url === 'https://platform.openai.com/settings/organization/billing/overview') {
+      void shell.openExternal(url).catch(error => console.error('OpenAI billing link:', error));
+      return { action: 'deny' };
+    }
+    return { action: 'allow' };
+  });
+
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key === 'F12' && input.type === 'keyDown') {
       mainWindow.webContents.toggleDevTools();
@@ -87,10 +109,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  ptySessions.forEach((s) => {
-    try { s.term.kill(); } catch (e) {}
-  });
-  ptySessions.clear();
+  terminalSessions.dispose();
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -238,6 +257,48 @@ ipcMain.handle('file:write', async (event, { filePath, data }) => {
   } catch (error) {
     throw new Error(`파일 쓰기 실패: ${error.message}`);
   }
+});
+
+// ==================== 터미널 스킬 규칙 명세서 (AGENTS.md) ====================
+// 터미널의 '/skill' 명령으로 추가되는 반영 규칙을 규칙 명세서에 기록하고 재사용한다.
+const RULES_FILE_PATH = path.join(__dirname, '..', 'AGENTS.md');
+
+const rulesFileExists = async () => {
+  try { await fs.access(RULES_FILE_PATH); return true; } catch { return false; }
+};
+
+const countRuleLines = (content) =>
+  (content || '').split(/\r?\n/).filter(l => /^\s*[-*•]\s+/.test(l) || /^\s*\d+[.)]\s/.test(l.trim())).length;
+
+// 규칙 명세서 읽기
+ipcMain.handle('skill:readRules', async () => {
+  try {
+    if (!(await rulesFileExists())) return { ok: true, path: RULES_FILE_PATH, content: '', count: 0 };
+    const content = await fs.readFile(RULES_FILE_PATH, 'utf8');
+    return { ok: true, path: RULES_FILE_PATH, content, count: countRuleLines(content) };
+  } catch (error) {
+    throw new Error(`규칙 명세서 읽기 실패: ${error.message}`);
+  }
+});
+
+// 규칙 추가하기
+ipcMain.handle('skill:appendRule', async (event, text) => {
+  const rule = String(text || '').trim();
+  if (!rule) throw new Error('규칙 내용이 비어 있습니다.');
+  let content;
+  try {
+    content = (await rulesFileExists()) ? await fs.readFile(RULES_FILE_PATH, 'utf8') : '';
+  } catch { content = ''; }
+  if (!content.trim()) {
+    content = '# Workspace Pro — 반영 규칙 (AGENTS.md)\n\n' +
+      '터미널 `/skill` 명령으로 추가되는 반영 규칙을 관리합니다.\n\n' +
+      '## 추가 반영 규칙\n\n';
+  } else if (!content.endsWith('\n')) {
+    content += '\n';
+  }
+  content += `- ${rule}\n`;
+  await writeFileWithRetry(RULES_FILE_PATH, Buffer.from(content, 'utf8'));
+  return { ok: true, path: RULES_FILE_PATH, count: countRuleLines(content) };
 });
 
 // ==================== AI API 설정 ====================
@@ -863,85 +924,6 @@ ipcMain.handle('app:getInfo', async () => {
 // cmd/bash를 ConPTY로 상주시켜 xterm.js가 그대로 렌더링한다.
 // "터미널 분할·스레드"를 위해 세션을 sessionId 단위로 여러 개 관리한다.
 // 셸은 "지연 생성" — 터미널을 열거나 입력할 때만 스폰된다. 자세한 로직은 ./term.js 참고.
-
-const ptySessions = new Map(); // sessionId -> { term, cols, rows, sender }
-
-function termSend(sessionId, payload) {
-  if (!payload) return;
-  const s = ptySessions.get(String(sessionId));
-  const sender = s && s.sender && !s.sender.isDestroyed() ? s.sender : null;
-  const target = sender || (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null);
-  if (!target) return;
-  try {
-    target.send('terminal:' + payload.type, { sessionId: String(sessionId), ...payload });
-  } catch (e) {}
-}
-
-function getPtyTerminal(sessionId) {
-  const id = String(sessionId);
-  let s = ptySessions.get(id);
-  if (!s) {
-    s = {
-      term: createTerminal({ send: (p) => termSend(id, p), cwd: process.cwd() }),
-      cols: 100,
-      rows: 30,
-      sender: null,
-    };
-    ptySessions.set(id, s);
-  }
-  return s;
-}
-
-function normalizeSize(s, size) {
-  if (size && Number(size.cols) > 0 && Number(size.rows) > 0) {
-    s.cols = Math.floor(Number(size.cols));
-    s.rows = Math.floor(Number(size.rows));
-  }
-  return { cols: s.cols, rows: s.rows };
-}
-
-// 세션 시작(지연 스폰) — xterm의 초기 크기를 함께 전달
-ipcMain.handle('terminal:start', (event, sessionId, size) => {
-  const s = getPtyTerminal(sessionId);
-  s.sender = event.sender;
-  const { cols, rows } = normalizeSize(s, size);
-  const ok = s.term.start(cols, rows);
-  return { ok, cwd: s.term.getCwd(), sessionId: String(sessionId) };
-});
-
-// xterm 키 입력(화살표·붙여넣기 등)을 PTY로 그대로 전달
-ipcMain.handle('terminal:input', (event, sessionId, data) => {
-  const s = getPtyTerminal(sessionId);
-  s.sender = event.sender;
-  s.term.writeRaw(data);
-  return { ok: true };
-});
-
-// 터미널 크기 변경(cols/rows) 동기화
-ipcMain.handle('terminal:resize', (event, sessionId, size) => {
-  const s = getPtyTerminal(sessionId);
-  s.sender = event.sender;
-  const { cols, rows } = normalizeSize(s, size);
-  s.term.resize(cols, rows);
-  return { ok: true };
-});
-
-// 실행 중인 명령/프로그램 중단 (Ctrl+C)
-ipcMain.handle('terminal:kill', (event, sessionId) => {
-  const s = ptySessions.get(String(sessionId));
-  if (s) s.term.interrupt();
-  return { ok: true };
-});
-
-// 세션 파괴 (창/패널이 닫히면 셸 종료)
-ipcMain.handle('terminal:destroy', (event, sessionId) => {
-  const s = ptySessions.get(String(sessionId));
-  if (s) {
-    s.term.kill();
-    ptySessions.delete(String(sessionId));
-  }
-  return { ok: true };
-});
 
 // 유틸리티 함수
 function getMimeType(extension) {

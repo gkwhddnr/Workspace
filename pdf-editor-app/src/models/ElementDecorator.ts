@@ -11,6 +11,7 @@ import { GraphicStyle } from './GraphicStyle';
  */
 export abstract class ElementDecorator extends RenderElement {
     protected element: RenderElement;
+    get type(): string { return this.element.type; }
 
     constructor(element: RenderElement) {
         // Inherit ID and style from the decorated element

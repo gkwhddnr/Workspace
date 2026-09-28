@@ -1,3 +1,4 @@
+import type { LucideIcon } from 'lucide-react';
 import React from 'react';
 import { PanelLeft, PanelBottom, PanelRight } from 'lucide-react';
 
@@ -9,7 +10,7 @@ interface DockSwitchProps {
     size?: number;
 }
 
-const OPTS: { v: DockSide; icon: React.ComponentType<{ size?: number }>; title: string }[] = [
+const OPTS: { v: DockSide; icon: LucideIcon; title: string }[] = [
     { v: 'left', icon: PanelLeft, title: '왼쪽에 도킹' },
     { v: 'bottom', icon: PanelBottom, title: '아래에 도킹' },
     { v: 'right', icon: PanelRight, title: '오른쪽에 도킹' },

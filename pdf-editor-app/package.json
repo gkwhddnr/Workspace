@@ -1,7 +1,7 @@
 {
   "name": "pdf-editor-app",
   "private": true,
-  "version": "1.5.0",
+  "version": "1.6.0",
   "scripts": {
     "dev": "cross-env NODE_OPTIONS=--no-deprecation VITE_CJS_IGNORE_WARNING=1 concurrently \"vite\" \"wait-on http://localhost:5173 && electron ./electron/main.js\"",
     "dev:vite": "vite",
@@ -9,7 +9,15 @@
     "build": "vite build",
     "preview": "vite preview",
     "build:electron": "electron-builder",
-    "package": "npm run build && npm run build:electron"
+    "package": "npm run build && npm run build:electron",
+    "typecheck": "tsc --noEmit",
+    "test:core": "node scripts/test-refactor.cjs && node scripts/test-terminal-input.cjs",
+    "test:ui": "electron scripts/test-ui-lifecycle.cjs && electron scripts/test-terminal-clear.cjs",
+    "test:pdfjs": "electron scripts/test-pdfjs-vite.cjs",
+    "test:annotations": "node scripts/test-ai-annotations.cjs",
+    "test:text-selection": "electron scripts/test-text-selection.cjs",
+    "test:cache": "node scripts/test-text-cache.cjs",
+    "verify": "npm run typecheck && npm run test:core && npm run test:cache && npm run test:annotations && npm run test:text-selection && npm run test:pdfjs && npm run test:ui && npm run build"
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",
@@ -48,7 +56,8 @@
     "sharp": "^0.34.5",
     "tailwindcss": "^3.4.1",
     "vite": "^5.0.8",
-    "wait-on": "^7.2.0"
+    "wait-on": "^7.2.0",
+    "typescript": "5.9.3"
   },
   "build": {
     "appId": "com.pdfeditor.app",

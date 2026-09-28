@@ -1,10 +1,9 @@
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from './pdfjs';
 
 // PDF 전체 텍스트 추출 서비스 (AI 코파일럿 컨텍스트 제공용)
 // - 열려 있는 PDF의 모든 페이지 텍스트를 한 번에 추출해 캐시한다.
 // - 큰 문서는 최대 페이지/문자 수로 제한하여 요청 크기 폭증을 방지한다.
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = window.location.origin + '/pdf.worker.min.js';
 
 const MAX_PAGES = 400;
 const MAX_CHARS = 200_000;
@@ -16,6 +15,7 @@ export interface PdfLine {
 }
 
 class PdfTextService {
+    private generation = 0;
     private cache = new Map<string, string>();
     // 재파싱을 피하기 위한 문서 로드 캐시 (cacheKey → Promise<PDFDocumentProxy>)
     private docCache = new Map<string, Promise<any>>();
@@ -27,6 +27,7 @@ class PdfTextService {
         if (p) return p;
         p = pdfjsLib.getDocument({ data: data.slice(), isEvalSupported: false }).promise;
         this.docCache.set(cacheKey, p);
+        void p.catch(() => { if (this.docCache.get(cacheKey) === p) this.docCache.delete(cacheKey); });
         return p;
     }
 
@@ -35,23 +36,37 @@ class PdfTextService {
      * AI 도구가 정규화 좌표(0~1)를 실제 요소 좌표로 변환할 때 사용한다.
      */
     async getPageSizes(data: Uint8Array, cacheKey: string): Promise<{ width: number; height: number }[]> {
+        const generation = this.generation;
         const cached = this.sizeCache.get(cacheKey);
         if (cached) return cached;
         try {
             const doc = await this.getDocument(data, cacheKey);
             const pages = Math.min(doc.numPages, MAX_PAGES);
             const sizes: { width: number; height: number }[] = [];
-            for (let i = 1; i <= pages; i++) {
+            for (let i = 1; i <= pages && generation === this.generation; i++) {
                 const page = await doc.getPage(i);
                 const vp = page.getViewport({ scale: 1 });
                 sizes.push({ width: vp.width, height: vp.height });
                 page.cleanup();
             }
-            this.sizeCache.set(cacheKey, sizes);
+            if (generation === this.generation) this.sizeCache.set(cacheKey, sizes);
             return sizes;
         } catch {
             return [];
         }
+    }
+
+    async getPageTextRuns(data: Uint8Array, cacheKey: string, pageNum: number): Promise<PdfLine[]> {
+        const doc = await this.getDocument(data, cacheKey);
+        const page = await doc.getPage(pageNum);
+        try {
+            const viewport = page.getViewport({ scale: 1 });
+            const content = await page.getTextContent();
+            return content.items.filter((item: any) => typeof item.str === 'string').map((item: any) => {
+                const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+                return { text: item.str, rect: [tx[4], tx[5] - item.height, item.width, item.height] as [number,number,number,number] };
+            });
+        } finally { page.cleanup(); }
     }
 
     /**
@@ -62,6 +77,7 @@ class PdfTextService {
      */
     async getPageLines(data: Uint8Array, cacheKey: string, pageNum: number): Promise<PdfLine[]> {
         const key = `${cacheKey}:lines:${pageNum}`;
+        const generation = this.generation;
         const cached = this.lineCache.get(key);
         if (cached) return cached;
         try {
@@ -108,7 +124,7 @@ class PdfTextService {
             }
             if (current.length) lines.push(mergeLine(current));
 
-            this.lineCache.set(key, lines);
+            if (generation === this.generation) this.lineCache.set(key, lines);
             return lines;
         } catch {
             return [];
@@ -116,6 +132,7 @@ class PdfTextService {
     }
 
     async extractDocumentText(data: Uint8Array, cacheKey: string): Promise<string> {
+        const generation = this.generation;
         const cached = this.cache.get(cacheKey);
         if (cached !== undefined) return cached;
 
@@ -124,7 +141,7 @@ class PdfTextService {
             const pages = Math.min(doc.numPages, MAX_PAGES);
             const parts: string[] = [];
 
-            for (let i = 1; i <= pages; i++) {
+            for (let i = 1; i <= pages && generation === this.generation; i++) {
                 if (parts.join('\n').length >= MAX_CHARS) break;
                 try {
                     const page = await doc.getPage(i);
@@ -140,7 +157,7 @@ class PdfTextService {
             }
 
             const text = parts.join('\n');
-            this.cache.set(cacheKey, text);
+            if (generation === this.generation) this.cache.set(cacheKey, text);
             return text;
         } catch {
             return '';
@@ -148,6 +165,11 @@ class PdfTextService {
     }
 
     clearCache(cacheKey?: string) {
+        this.generation++;
+        const documents = cacheKey ? [this.docCache.get(cacheKey)] : [...this.docCache.values()];
+        for (const document of documents) {
+            void document?.then(doc => doc.destroy()).catch(() => {});
+        }
         if (cacheKey) {
             this.cache.delete(cacheKey);
             this.sizeCache.delete(cacheKey);

@@ -8,7 +8,7 @@ export const TERMINAL_PLUGIN_ID = 'terminal';
  * - render: react renderer (TerminalWorkspace: 스레드 탭 + 터미널 분할)
  */
 export function registerTerminalPlugin(terminalPanelComponent: unknown) {
-    registerPlugin({
+    return registerPlugin({
         id: TERMINAL_PLUGIN_ID,
         name: '터미널',
         version: '1.0.0',

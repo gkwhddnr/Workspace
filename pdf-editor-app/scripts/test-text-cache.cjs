@@ -1,0 +1,25 @@
+const assert=require('node:assert/strict');
+const {buildSync}=require('esbuild');
+const vm=require('node:vm');
+const code=buildSync({stdin:{contents:"export {getPdfTextContent} from './src/services/PdfTextContentCache'; export {restoreProjectElements} from './src/utils/restoreProjectElements'; export {useSettingsStore} from './src/store/useSettingsStore';",resolveDir:require('node:path').resolve(__dirname,'..')},bundle:true,platform:'node',format:'cjs',write:false}).outputFiles[0].text;
+let writes=0;const scope={module:{exports:{}},exports:{},require,console,process,localStorage:{getItem:()=>null,setItem:()=>writes++}};
+vm.runInNewContext(code,scope);
+(async()=>{
+ const {getPdfTextContent:get,useSettingsStore:settings,restoreProjectElements:restore}=scope.module.exports;
+ let calls=0;const doc={getPage:async page=>({getTextContent:async()=>{calls++;return {items:[page]};}})};
+ const [a,b]=await Promise.all([get(doc,1),get(doc,1)]);assert.equal(a,b);assert.equal(calls,1);
+ for(let i=0;i<20;i++)await get(doc,1);assert.equal(calls,1,'zoom reuses extraction');
+ for(let page=2;page<=8;page++)await get(doc,page);
+ await get(doc,1);await get(doc,9);await get(doc,1);assert.equal(calls,9,'recent page remains cached');
+ await get(doc,2);assert.equal(calls,10,'least recent page evicted');
+ await get({getPage:doc.getPage},1);assert.equal(calls,11,'document identity isolates cache');
+ let attempts=0;const failing={getPage:async()=>{if(!attempts++)throw Error('retry');return {getTextContent:async()=>({items:[]})};}};
+ await assert.rejects(get(failing,1));await get(failing,1);assert.equal(attempts,2);
+ let updates=0;settings.subscribe(()=>updates++);
+ const state=settings.getState();state.setSaveQuality(state.saveQuality);state.setTabWeight('pdf',state.tabWeights.pdf);state.setRememberPlugins(state.rememberPlugins);
+ assert.equal(updates,0);assert.equal(writes,0);
+ state.setSaveQuality(3);assert.equal(updates,1);assert.equal(writes,1);
+ const restored=restore(JSON.stringify({elements:{1:[{id:'group',type:'group',children:[{id:'text',type:'text',x:1,y:2,text:'new',fontWeight:'bold'}]}]},pageDrawings:{2:[{id:'rect',type:'rectangle',rect:[1,2,30,40],color:'#112233',opacity:0.4}]},pageTextAnnotations:{2:[{id:'legacy',x:3,y:4,text:'old',fontSize:16,fontWeight:'bold',textDecoration:'underline'}]}}));
+ assert.equal(restored[1][0].getChildren()[0].text,'new');assert.equal(restored[2][0].style.opacity,0.4);assert.equal(restored[2][1].textDecoration,'underline');restored[2][1].move(4,0);assert.equal(restored[2][1].x,7);
+ console.log('PASS: shared PDF extraction, bounded LRU, retry, document isolation, unchanged settings avoid writes');
+})().catch(error=>{console.error(error);process.exitCode=1});

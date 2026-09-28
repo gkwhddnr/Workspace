@@ -1,3 +1,4 @@
+import { buildTextSnapBlocks, computeTextSnapRect, snapToNearestTextBoundary } from '../utils/textSnap';
 // AiActions — AI 코파일럿이 호출하는 도구 실행기
 // - PDF 편집(도구 전환, 도형/형광펜/텍스트/필기/지우기, 페이지 이동, undo/redo)을
 //   프로그램적으로 수행하며, 요소 추가는 PdfViewer와 동일한 Command + 공용 History로
@@ -5,7 +6,7 @@
 // - 코드 작업은 AiTerminalService(전용 PTY 세션)로 실행해 결과를 모델에 돌려준다.
 // - 좌표는 페이지 기준 정규화(0~1) 값을 받아 실제 페이지 좌표로 변환한다.
 
-import { useAppStore } from '../store/useAppStore';
+import { useAppStore, PRESET_COLORS } from '../store/useAppStore';
 import { usePdfEditorStore } from '../store/usePdfEditorStore';
 import { ElementFactory } from '../models/ElementFactory';
 import { ShapeElement } from '../models/ShapeElement';
@@ -49,6 +50,37 @@ function elemRectFromNormal(psize: { width: number; height: number }, r: any) {
     return { x, y, w, h };
 }
 
+// 페이지 본문 텍스트의 대략적인 글자 크기(pt) 추정 — 주석 텍스트/화살표 크기를 실제 본문에 맞춰 확대·축소한다.
+// 라인 상자들의 평균 높이를 사용하며, 텍스트가 없으면 기준값 14pt를 쓴다.
+async function estimatePageTextScale(info: { data: Uint8Array; key: string }, page: number): Promise<number> {
+    try {
+        const lines = await pdfTextService.getPageLines(info.data, info.key, page);
+        let sum = 0, n = 0;
+        for (const ln of lines) {
+            const h = ln.rect[3];
+            if (h > 2 && h <= 200) { sum += h; n++; }
+        }
+        if (n === 0) return 14;
+        return Math.max(8, Math.min(60, sum / n));
+    } catch {
+        return 14;
+    }
+}
+
+async function snapTargets(info: {data: Uint8Array; key: string}, page: number) {
+    const scale = pdfStore().scale;
+    const runs = (await pdfTextService.getPageTextRuns(info.data, info.key, page)).map(run => ({
+        text: run.text, rect: run.rect.map(value => value * scale) as [number,number,number,number],
+    }));
+    const elements = pdfStore().elements[page] || [];
+    return {scale, runs, elements, blocks: buildTextSnapBlocks(runs, elements, scale)};
+}
+async function snapRectToTextLines(info: {data: Uint8Array; key: string}, page: number, r: {x:number;y:number;w:number;h:number}) {
+    const t = await snapTargets(info, page);
+    return computeTextSnapRect(t.blocks, t.runs, {x:r.x,y:r.y}, {x:r.x+r.w,y:r.y+r.h}, t.scale) || r;
+}
+
+
 function makeId(): string {
     return `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -60,6 +92,69 @@ function normalizeColor(c: any, fallback: string): string {
     }
     if (/^#[0-9a-fA-F]{6}$/.test(raw) || /^#[0-9a-fA-F]{8}$/.test(raw)) return raw.toLowerCase();
     return fallback;
+}
+
+// 도구&필터 프리셋 색상만 허용 — 팔레트에 없는 임의 색은 현재 도구 색으로 대체한다.
+const PRESET_HEX = new Set(PRESET_COLORS.map(c => c.toLowerCase()));
+const hexRGB = (hex: string): [number, number, number] => {
+    const h = normalizeColor(hex, '#000000');
+    return [
+        parseInt(h.slice(1, 3), 16) || 0,
+        parseInt(h.slice(3, 5), 16) || 0,
+        parseInt(h.slice(5, 7), 16) || 0,
+    ];
+};
+const hexLuminance = (hex: string): number => {
+    const [r, g, b] = hexRGB(hex);
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+};
+
+// 현재 화면 배경이 어두운지 판별 — 화면 설정(다크/커스텀 색상)에 따라 AI 필기 색이
+// 배경과 대비되어 뚜렷이 구분되어야 한다. (커스텀은 배경 색 밝기로 판단)
+export function isDarkScreen(): boolean {
+    const s = appStore();
+    if (s.themeMode === 'dark') return true;
+    if (s.themeMode === 'custom') {
+        try {
+            return hexLuminance(s.customThemeColor) < 0.45;
+        } catch {
+            return false;
+        }
+    }
+    return false;
+}
+
+// 에이전트 지침에 넣을 화면 테마 설명
+export function describeTheme(): { darkBg: boolean; label: string } {
+    const s = appStore();
+    switch (s.themeMode) {
+        case 'dark':
+            return { darkBg: true, label: '다크 모드' };
+        case 'white':
+            return { darkBg: false, label: '화이트 모드' };
+        case 'custom': {
+            const lum = hexLuminance(s.customThemeColor);
+            return { darkBg: lum < 0.45, label: `커스텀 (배경 밝기 ${Math.round(lum * 100)}%)` };
+        }
+        case 'translucent':
+        default:
+            return { darkBg: false, label: '반투명 모드' };
+    }
+}
+
+function pickToolColor(c: any, fallback: string): string {
+    const norm = normalizeColor(c, fallback);
+    if (!PRESET_HEX.has(norm)) return fallback;
+    const dark = isDarkScreen();
+    if (dark && hexLuminance(norm) < 0.28) {
+        // 어두운 배경 위에 묻히는 검정 계열 → 현재 도구 색으로 대체 (팔레트 유지)
+        return fallback;
+    }
+    if (!dark && hexLuminance(norm) > 0.92) {
+        // 밝은 배경 위에 묻히는 흰색 계열 → 현재 도구 색으로 대체
+        return fallback;
+    }
+    return norm;
 }
 
 function pushElement(page: number, el: RenderElement): void {
@@ -84,7 +179,7 @@ async function setTool(args: any): Promise<string> {
     const st = appStore();
     st.setActiveTool(tool as any);
     const updates: any = {};
-    if (args?.color) updates.color = normalizeColor(args.color, st.toolSettings.color);
+    if (args?.color) updates.color = pickToolColor(args.color, st.toolSettings.color);
     if (args?.strokeWidth) updates.strokeWidth = Math.max(1, Math.min(20, num(args.strokeWidth, 2)));
     if (Object.keys(updates).length) st.setToolSettings(updates);
     return `도구를 "${tool}"로 전환했습니다${Object.keys(updates).length ? ` (${JSON.stringify(updates)})` : ''}.`;
@@ -94,7 +189,7 @@ async function setSettings(args: any): Promise<string> {
     const st = pdfStore();
     const settings = appStore().toolSettings;
     const updates: any = {};
-    if (args?.color) updates.color = normalizeColor(args.color, settings.color);
+    if (args?.color) updates.color = pickToolColor(args.color, settings.color);
     if (args?.strokeWidth) updates.strokeWidth = Math.max(1, Math.min(20, num(args.strokeWidth, settings.strokeWidth)));
     if (args?.fontSize) updates.fontSize = Math.max(8, Math.min(100, num(args.fontSize, settings.fontSize)));
     if (args?.fontFamily) updates.fontFamily = String(args.fontFamily);
@@ -137,7 +232,7 @@ async function readPage(args: any): Promise<string> {
     return head + (list.join('\n') || '(이 페이지에는 추출 가능한 텍스트가 없습니다)');
 }
 
-async function addShape(args: any): Promise<string> {
+async function addShape(args: any, guard: () => void): Promise<string> {
     const info = requirePdf();
     if (!info) return '열린 PDF 파일이 없습니다.';
     const type = String(args?.type ?? '').trim().toLowerCase();
@@ -147,31 +242,43 @@ async function addShape(args: any): Promise<string> {
     const page = Math.max(1, Math.min(sizes.length, Math.round(num(args?.page ?? pdfStore().currentPage, 1))));
     const psize = sizes[page - 1];
     const r = elemRectFromNormal(psize, args);
+    // rect/circle/highlight는 PDF 텍스트 라인 '스냅' — 가장 가까운 라인 가장자리(왼/오/위/아래)에 정렬된다.
+    const rect = (type === 'rect' || type === 'circle' || type === 'highlight')
+        ? await snapRectToTextLines(info, page, r)
+        : r;
     const settings = appStore().toolSettings;
-    const color = normalizeColor(args?.color, settings.color);
+    const color = pickToolColor(args?.color, settings.color);
     const strokeWidth = Math.max(1, Math.min(20, num(args?.strokeWidth, settings.strokeWidth)));
 
     let el: any;
     if (type === 'arrow') {
-        el = ElementFactory.create('arrow-right', makeId(), [r.x, r.y, r.w, r.h], color);
+        el = ElementFactory.create('arrow-right', makeId(), [rect.x, rect.y, rect.w, rect.h], color);
         if (el) {
-            el.points = [{ x: r.x, y: r.y }, { x: r.x + r.w, y: r.y + r.h }];
-            el.style = el.style.copy({ strokeWidth });
+            const t = await snapTargets(info, page);
+            el.points = [{x:rect.x,y:rect.y}, {x:rect.x+rect.w,y:rect.y+rect.h}].map(point => {
+                const snapped = snapToNearestTextBoundary(t.blocks,t.elements,point,t.scale);
+                return snapped ? {x:snapped.x,y:snapped.y} : point;
+            });
+            // 화살표 머리는 페이지 본문 글자 크기에 맞춰 확대/축소한다.
+            const textScale = await estimatePageTextScale(info, page);
+            const arrowHeadSize = Math.max(5, Math.min(50, num(args?.arrowHeadSize, Math.round(textScale * 0.9))));
+            el.style = el.style.copy({ strokeWidth, arrowHeadSize });
         }
     } else {
-        el = ElementFactory.create(type, makeId(), [r.x, r.y, r.w, r.h], color);
+        el = ElementFactory.create(type, makeId(), [rect.x, rect.y, rect.w, rect.h], color);
         if (el) {
             el.style = el.style.copy({ strokeWidth, opacity: type === 'highlight' ? 0.45 : 1 });
         }
     }
     if (!el) return `도형 생성 실패: ${type}`;
 
+    guard();
     pushElement(page, el);
     appStore().setActiveTool('select');
-    return `${type} 도형을 ${page}페이지 (${r.x.toFixed(1)},${r.y.toFixed(1)}), 크기 ${r.w.toFixed(1)}x${r.h.toFixed(1)}에 추가했습니다.`;
+    return `${type} 도형을 ${page}페이지 (${rect.x.toFixed(1)},${rect.y.toFixed(1)}), 크기 ${rect.w.toFixed(1)}x${rect.h.toFixed(1)}에 추가했습니다.`;
 }
 
-async function addText(args: any): Promise<string> {
+async function addText(args: any, guard: () => void): Promise<string> {
     const info = requirePdf();
     if (!info) return '열린 PDF 파일이 없습니다.';
     const sizes = await sizesOf(info);
@@ -181,8 +288,12 @@ async function addText(args: any): Promise<string> {
     const page = Math.max(1, Math.min(sizes.length, Math.round(num(args?.page ?? pdfStore().currentPage, 1))));
     const psize = sizes[page - 1];
     const settings = appStore().toolSettings;
-    const color = normalizeColor(args?.color, settings.color);
-    const fontSize = Math.max(8, Math.min(100, num(args?.fontSize, settings.fontSize)));
+    const color = pickToolColor(args?.color, settings.color);
+    // 글자 크기: 명시하지 않으면 페이지 본문 텍스트 크기에 맞춰 자동 확대/축소한다.
+    const textScale = await estimatePageTextScale(info, page);
+    const fontSize = args?.fontSize != null
+        ? Math.max(8, Math.min(100, num(args.fontSize, 8)))
+        : Math.max(8, Math.max(6, Math.round(textScale)));
 
     const x = clamp01(num(args?.x, 0.5)) * psize.width;
     const y = clamp01(num(args?.y, 0.5)) * psize.height;
@@ -193,12 +304,13 @@ async function addText(args: any): Promise<string> {
     el.width = fontSize * text.length * 0.7;
     el.height = fontSize * 1.3;
 
+    guard();
     pushElement(page, el as RenderElement);
     appStore().setActiveTool('select');
-    return `텍스트 "${text}"를 ${page}페이지 (${x.toFixed(1)},${y.toFixed(1)})에 추가했습니다.`;
+    return `텍스트 "${text}"를 ${page}페이지 (${x.toFixed(1)},${y.toFixed(1)}), 글자 크기 ${fontSize}pt로 추가했습니다.`;
 }
 
-async function drawPath(args: any): Promise<string> {
+async function drawPath(args: any, guard: () => void): Promise<string> {
     const info = requirePdf();
     if (!info) return '열린 PDF 파일이 없습니다.';
     const sizes = await sizesOf(info);
@@ -208,7 +320,7 @@ async function drawPath(args: any): Promise<string> {
     const page = Math.max(1, Math.min(sizes.length, Math.round(num(args?.page ?? pdfStore().currentPage, 1))));
     const psize = sizes[page - 1];
     const settings = appStore().toolSettings;
-    const color = normalizeColor(args?.color, settings.color);
+    const color = pickToolColor(args?.color, settings.color);
     const strokeWidth = Math.max(1, Math.min(20, num(args?.strokeWidth, settings.strokeWidth)));
 
     const points = pts.map(p => ({
@@ -219,12 +331,13 @@ async function drawPath(args: any): Promise<string> {
     el.points = points;
     el.style = el.style.copy({ strokeWidth });
 
+    guard();
     pushElement(page, el);
     appStore().setActiveTool('select');
     return `필기(경로 ${points.length}점)를 ${page}페이지에 추가했습니다.`;
 }
 
-async function highlightText(args: any): Promise<string> {
+async function highlightText(args: any, guard: () => void): Promise<string> {
     const info = requirePdf();
     if (!info) return '열린 PDF 파일이 없습니다.';
     const sizes = await sizesOf(info);
@@ -234,7 +347,7 @@ async function highlightText(args: any): Promise<string> {
     const page = Math.max(1, Math.min(sizes.length, Math.round(num(args?.page ?? pdfStore().currentPage, 1))));
     const psize = sizes[page - 1];
     const settings = appStore().toolSettings;
-    const color = normalizeColor(args?.color, settings.color);
+    const color = pickToolColor(args?.color, settings.color);
 
     const lines = await pdfTextService.getPageLines(info.data, info.key, page);
     const matches: { line: PdfLine; start: number; end: number }[] = [];
@@ -254,8 +367,9 @@ async function highlightText(args: any): Promise<string> {
         return `페이지 ${page}에서 "${args.text}"를 찾지 못했습니다. 아래 라인 중 정확한 문구로 다시 시도하거나, add_shape(highlight)로 직접 영역을 지정해 주세요.\n${preview}`;
     }
 
+    const targets = await snapTargets(info, page);
     let added = 0;
-    for (const m of matches.slice(0, 40)) {
+    for (const m of matches) {
         const ln = m.line.rect;
         const clean = m.line.text.replace(/\s+/g, ' ').trim();
         const charRatio = clean.length > 0 ? (m.end - m.start) / clean.length : 1;
@@ -268,9 +382,11 @@ async function highlightText(args: any): Promise<string> {
         const hy = ln[1] - 1.5;
         const hh = ln[3] + 3;
 
-        const el = ElementFactory.create('highlight', makeId(), [hx, hy, hw, hh], color) as ShapeElement;
+        const snapped = computeTextSnapRect(targets.blocks, targets.runs, {x:hx,y:hy}, {x:hx+hw,y:hy+hh}, targets.scale) || {x:hx,y:hy,w:hw,h:hh};
+        const el = ElementFactory.create('highlight', makeId(), [snapped.x, snapped.y, snapped.w, snapped.h], color) as ShapeElement;
         el.style = el.style.copy({ opacity: 0.45 });
-        pushElement(page, el);
+        guard();
+    pushElement(page, el);
         added++;
     }
     appStore().setActiveTool('select');
@@ -345,17 +461,22 @@ export interface AiToolCall {
 }
 
 // ─── 실행 디스패치 ───────────────────────────────────────────────────────────
-export async function executeAiTool(name: string, args: any): Promise<string> {
+export async function executeAiTool(name: string, args: any, signal?: AbortSignal): Promise<string> {
+    const document = appStore().pdfOriginalData;
+    const guard = () => {
+        signal?.throwIfAborted();
+        if (document !== appStore().pdfOriginalData) throw new Error('작업 중 문서가 변경되어 필기를 중단했습니다.');
+    };
     try {
         switch (name) {
             case 'set_tool': return await setTool(args);
             case 'set_settings': return await setSettings(args);
             case 'goto_page': return await gotoPage(args);
             case 'read_page': return await readPage(args);
-            case 'add_shape': return await addShape(args);
-            case 'add_text': return await addText(args);
-            case 'draw_path': return await drawPath(args);
-            case 'highlight_text': return await highlightText(args);
+            case 'add_shape': return await addShape(args, guard);
+            case 'add_text': return await addText(args, guard);
+            case 'draw_path': return await drawPath(args, guard);
+            case 'highlight_text': return await highlightText(args, guard);
             case 'erase_rect': return await eraseRect(args);
             case 'undo': return await undo();
             case 'redo': return await redo();

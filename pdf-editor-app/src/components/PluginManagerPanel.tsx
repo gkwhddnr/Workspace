@@ -2,10 +2,6 @@ import React, { useState } from 'react';
 import { usePluginStore } from '../store/usePluginStore';
 import { pluginLoader } from '../services/PluginLoaderService';
 import { PluginInstallSection, PluginListItem } from './plugin';
-import AiPanel from './AiPanel';
-import { registerAiCopilotPlugin } from '../plugins/builtin/aiCopilot';
-import TerminalWorkspace from './terminal/TerminalWorkspace';
-import { registerTerminalPlugin } from '../plugins/builtin/terminal';
 import { Puzzle, X, CheckCircle2, AlertTriangle, Info } from 'lucide-react';
 
 const iconByType = (t: string) => {
@@ -20,7 +16,7 @@ const iconByType = (t: string) => {
 const PluginManagerPanel: React.FC = () => {
     const {
         entries, runningPluginId,
-        toggleActive, runPlugin,
+        toggleActive, removeEntry, runPlugin,
         notifications, dismissNotification, clearNotifications,
     } = usePluginStore();
 
@@ -94,6 +90,7 @@ const PluginManagerPanel: React.FC = () => {
                                     onReload={reload}
                                     onToggle={toggleActive}
                                     onRun={runPlugin}
+                                    onRemove={removeEntry}
                                 />
                             ))}
                         </div>
@@ -106,9 +103,3 @@ const PluginManagerPanel: React.FC = () => {
 
 export default PluginManagerPanel;
 
-// AI 코파일럿을 빌트인 플러그인으로 등록 (설치된 플러그인 목록에 표시)
-// 영속화된 스텁(활성 상태 유지)이 이미 있으면 정의만 보강하고, 없으면 새로 등록합니다.
-if (typeof window !== 'undefined') {
-    registerAiCopilotPlugin(AiPanel);
-    registerTerminalPlugin(TerminalWorkspace);
-}

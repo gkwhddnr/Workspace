@@ -1,9 +1,12 @@
+import type { ToolSettings } from '../types/toolSettings';
+export type { ToolSettings } from '../types/toolSettings';
 import { create } from 'zustand';
 import {
     fetchAiThreads,
     saveAiThread,
     deleteAiThreadBackend,
 } from '../services/AiThreadService';
+import type { AiProvider } from '../services/AiService';
 
 export type ActiveTab = 'pdf' | 'web' | 'code' | 'shortcuts' | 'plugins';
 export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2' | 'image';
@@ -15,16 +18,7 @@ export const PRESET_COLORS = [
     '#FFFFFF', '#000000', '#FBBF24', '#10B981',
 ];
 
-interface ToolSettings {
-    color: string;
-    fontSize: number;
-    fontFamily: string;
-    strokeWidth: number;
-    textBgOpacity: number;
-    arrowHeadSize: number;
-    fontWeight?: 'normal' | 'bold';
-    textDecoration?: '' | 'underline' | 'line-through' | 'underline line-through';
-}
+
 
 // ─── AI 코파일럿 대화 스레드 ─────────────────────────────────────────────────
 export interface AiThreadMessage {
@@ -78,18 +72,18 @@ const persistAiThreads = (threads: AiThread[], activeId: string | null) => {
     }
 };
 
-let aiThreadSaveTimer: ReturnType<typeof setTimeout> | null = null;
+const aiThreadSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 // 메시지 입력마다 백엔드를 호출하지 않도록 마지막 갱신을 디바운스해 저장합니다.
 // 백엔드는 대화 내용의 영구 저장소(앱 재시작 후에도 유지)입니다.
 const scheduleAiThreadBackup = (thread: AiThread) => {
-    if (aiThreadSaveTimer) clearTimeout(aiThreadSaveTimer);
-    aiThreadSaveTimer = setTimeout(() => {
-        aiThreadSaveTimer = null;
+    clearTimeout(aiThreadSaveTimers.get(thread.id));
+    aiThreadSaveTimers.set(thread.id, setTimeout(() => {
+        aiThreadSaveTimers.delete(thread.id);
         saveAiThread(thread.id, thread.title, thread.messages).catch(err =>
             console.warn('[AppStore] AI 스레드 백엔드 저장 실패:', err)
         );
-    }, 500);
+    }, 500));
 };
 
 let backendThreadSyncStarted = false;
@@ -155,7 +149,7 @@ const initialThreadState = () => {
     const active = threads.find(t => t.id === activeId)!;
     const aiMessages = active.messages.length > 0
         ? active.messages
-        : [{ role: 'assistant', content: AI_DEFAULT_GREETING }];
+        : [{ role: 'assistant' as const, content: AI_DEFAULT_GREETING }];
     return { aiThreads: threads, activeThreadId: activeId, aiMessages };
 };
 
@@ -226,10 +220,13 @@ interface AppState {
     setSharedCode: (code: { html: string; css: string; javascript: string }) => void;
 
     // AI Copilot
-    aiAgent: 'gemini' | 'chatgpt' | 'claude';
-    setAiAgent: (agent: 'gemini' | 'chatgpt' | 'claude') => void;
+    aiAgent: AiProvider;
+    setAiAgent: (agent: AiProvider) => void;
+    // 제공자별 선택 모델 (localStorage 영속화) — AI 패널 설정과 터미널 /model 스킬이 함께 사용
+    aiModels: Record<AiProvider, string>;
+    setAiModel: (provider: AiProvider, model: string) => void;
     aiMessages: { role: 'user' | 'assistant'; content: string; agent?: string }[];
-    addAiMessage: (role: 'user' | 'assistant', content: string) => void;
+    addAiMessage: (role: 'user' | 'assistant', content: string, threadId?: string | null) => void;
     clearAiMessages: () => void;
 
     // AI 대화 스레드 (localStorage 영속화 — 대화 저장 공간)
@@ -278,6 +275,24 @@ const getStoredCustomColors = (): string[] => {
         }
     } catch (e) { /* ignore */ }
     return [];
+};
+
+const AI_MODELS_KEY = 'aiModels';
+const DEFAULT_AI_MODELS: Record<AiProvider, string> = {
+    gemini: 'gemini-3.8-flash',
+    chatgpt: 'gpt-5.6-sol',
+    claude: 'claude-opus-5',
+    factchat: 'claude-sonnet-5',
+};
+const getStoredAiModels = (): Record<AiProvider, string> => {
+    try {
+        const stored = localStorage.getItem(AI_MODELS_KEY);
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            if (parsed && typeof parsed === 'object') return { ...DEFAULT_AI_MODELS, ...parsed };
+        }
+    } catch (e) { /* ignore */ }
+    return { ...DEFAULT_AI_MODELS };
 };
 
 const calculateLuminance = (hex: string) => {
@@ -378,15 +393,17 @@ export const useAppStore = create<AppState>((set) => ({
     activeTool: 'select',
     setActiveTool: (tool) => set({ activeTool: tool }),
     toolSettings: {
-        color: '#2563EB',
+        color: /^#[0-9a-f]{6}$/i.test(localStorage.getItem('selectedToolColor') || '') ? localStorage.getItem('selectedToolColor')! : '#2563EB',
         fontSize: 12,
         fontFamily: 'Inter, sans-serif',
         strokeWidth: 2,
         textBgOpacity: 0.5,
         arrowHeadSize: 12,
     },
-    setToolSettings: (settings) =>
-        set((s) => ({ toolSettings: { ...s.toolSettings, ...settings } })),
+    setToolSettings: (settings) => {
+        if (settings.color && /^#[0-9a-f]{6}$/i.test(settings.color)) localStorage.setItem('selectedToolColor', settings.color);
+        set((s) => ({ toolSettings: { ...s.toolSettings, ...settings } }));
+    },
 
     customColors: getStoredCustomColors(),
     addCustomColor: (color) => set((s) => {
@@ -471,17 +488,28 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
     // AI Copilot defaults
     aiAgent: 'gemini',
     setAiAgent: (agent) => set({ aiAgent: agent }),
+    aiModels: getStoredAiModels(),
+    setAiModel: (provider, model) =>
+        set((s) => {
+            const next = { ...s.aiModels, [provider]: model };
+            try {
+                localStorage.setItem(AI_MODELS_KEY, JSON.stringify(next));
+            } catch (e) { /* ignore */ }
+            return { aiModels: next };
+        }),
     aiThreads: initialThread.aiThreads,
     activeThreadId: initialThread.activeThreadId,
     aiMessages: initialThread.aiMessages,
-    addAiMessage: (role, content) =>
+    addAiMessage: (role, content, threadId) =>
         set((s) => {
+            const targetId = threadId === undefined ? s.activeThreadId : threadId;
+            if (targetId && !s.aiThreads.some(t => t.id === targetId)) return s;
             const msg: AiThreadMessage = { role, content, agent: s.aiAgent };
-            const messages = [...s.aiMessages, msg];
+            const messages = targetId === s.activeThreadId ? [...s.aiMessages, msg] : s.aiMessages;
             let threads = s.aiThreads;
-            if (s.activeThreadId) {
+            if (targetId) {
                 threads = s.aiThreads.map(t =>
-                    t.id === s.activeThreadId
+                    t.id === targetId
                         ? {
                             ...t,
                             updatedAt: Date.now(),
@@ -491,7 +519,7 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
                 );
             }
             persistAiThreads(threads, s.activeThreadId);
-            const activeThread = threads.find(t => t.id === s.activeThreadId);
+            const activeThread = threads.find(t => t.id === targetId);
             if (activeThread) scheduleAiThreadBackup(activeThread);
             return { aiMessages: messages, aiThreads: threads };
         }),
@@ -524,13 +552,15 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
                 activeThreadId: id,
                 aiMessages: t.messages.length > 0
                     ? t.messages
-                    : [{ role: 'assistant', content: AI_DEFAULT_GREETING }],
+                    : [{ role: 'assistant' as const, content: AI_DEFAULT_GREETING }],
             };
         }),
     deleteAiThread: (id) =>
         set((s) => {
             // 최소 1개의 스레드는 유지
             if (s.aiThreads.length <= 1) return s;
+            clearTimeout(aiThreadSaveTimers.get(id));
+            aiThreadSaveTimers.delete(id);
             const threads = s.aiThreads.filter(t => t.id !== id);
             let activeId = s.activeThreadId;
             let messages = s.aiMessages;
@@ -539,7 +569,7 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
                 const active = threads.find(t => t.id === activeId)!;
                 messages = active.messages.length > 0
                     ? active.messages
-                    : [{ role: 'assistant', content: AI_DEFAULT_GREETING }];
+                    : [{ role: 'assistant' as const, content: AI_DEFAULT_GREETING }];
             }
             persistAiThreads(threads, activeId);
             deleteAiThreadBackend(id).catch(err =>

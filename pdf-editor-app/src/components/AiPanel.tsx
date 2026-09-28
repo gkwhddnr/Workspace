@@ -1,11 +1,16 @@
+import { pdfTextService } from '../services/PdfTextService';
+import { aiTerminal } from '../services/AiTerminalService';
+import { usePluginStore } from '../store/usePluginStore';
 import React, { useState, useRef, useEffect } from 'react';
-import { useAppStore, syncAiThreadsWithBackend, isAiThreadTitleDefault } from '../store/useAppStore';
-import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, ChevronDown, MessagesSquare, Plus, X, Pencil, Wrench, BookOpen, Copy } from 'lucide-react';
-import { callAi, refineError, AiProvider } from '../services/AiService';
+import { createPortal } from 'react-dom';
+import { useAppStore, syncAiThreadsWithBackend, isAiThreadTitleDefault, PRESET_COLORS } from '../store/useAppStore';
+import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, ChevronDown, MessagesSquare, Plus, X, Pencil, Wrench, BookOpen, Copy, Square } from 'lucide-react';
+import { callAi, refineError, AiProvider, OPENAI_BILLING_URL, OPENAI_BILLING_ERROR } from '../services/AiService';
 import type { AgentActionLog } from '../services/AiAgentService';
 import { runAiAgent, buildAgentToolInstructions, hasTerminalForAgent } from '../services/AiAgentService';
 import type { AiAgentContext } from '../services/AiContextService';
 import { buildAiAgentContext } from '../services/AiContextService';
+import { describeTheme } from '../services/AiActions';
 
 // ─── AI 제공자 설정 ─────────────────────────────────────────────────────────────
 const PROVIDERS: {
@@ -142,6 +147,7 @@ const AiPanel: React.FC = () => {
         aiThreads, activeThreadId, createAiThread, selectAiThread, deleteAiThread, setAiThreadTitle,
         activeTabs, currentFileName, webUrl, codeLanguage,
         aiAgent, setAiAgent,
+        aiModels, setAiModel,
         apiKeys, setApiKey,
     } = useAppStore();
 
@@ -154,9 +160,23 @@ const AiPanel: React.FC = () => {
     const [editingTitle, setEditingTitle] = useState('');
     // 메시지 복사 피드백 (복사된 메시지 인덱스)
     const [copiedId, setCopiedId] = useState<number | null>(null);
-    // 패널 폭 추적 — 스레드 드롭다운이 패널에 맞춰 확대/축소되도록
+    // 패널 폭 · 스레드 드롭다운 버튼 추적 — 드롭다운은 body에 포털로 띄워 잘리지 않게 한다
     const panelRef = useRef<HTMLDivElement | null>(null);
-    const [panelW, setPanelW] = useState<number | null>(null);
+    const threadBtnRef = useRef<HTMLButtonElement | null>(null);
+    // 실행 중 중단(Abort)용 컨트롤러 — AI 호출/에이전트 루프를 즉시 취소한다
+    const abortRef = useRef<AbortController | null>(null);
+    const mountedRef = useRef(true);
+    const pluginSignal = usePluginStore(state => state.entries.find(e => e.definition.id === "ai-copilot")?.context?.signal);
+    useEffect(() => {
+        mountedRef.current = true;
+        const stop = () => { abortRef.current?.abort(); void aiTerminal.destroy(); pdfTextService.clearCache(); };
+        pluginSignal?.addEventListener("abort", stop, { once: true });
+        return () => {
+            mountedRef.current = false;
+            pluginSignal?.removeEventListener("abort", stop);
+            stop();
+        };
+    }, [pluginSignal]);
     // 현재 화면 · 열린 파일의 실제 내용을 AI에 공유할지 여부 (localStorage 영속화)
     const [includeContext, setIncludeContext] = useState(() => localStorage.getItem('aiIncludeContext') !== 'false');
     // 항목별 파일 액세스 권한 — AI가 파악/요약할 수 있는 소스를 개별 제어합니다.
@@ -176,12 +196,6 @@ const AiPanel: React.FC = () => {
     const [agentMode, setAgentMode] = useState(() => localStorage.getItem('aiAgentMode') !== 'false');
     // 마지막 에이전트 실행의 도구 활동 로그 (대화 하단에 표시)
     const [agentLog, setAgentLog] = useState<AgentActionLog[] | null>(null);
-    const [selectedModel, setSelectedModel] = useState<Record<AiProvider, string>>({
-        gemini:  'gemini-3.8-flash',
-        chatgpt: 'gpt-5.6-sol',
-        claude:  'claude-opus-5',
-        factchat: 'claude-sonnet-5',
-    });
     const [tempKeys, setTempKeys] = useState<Record<AiProvider, string>>({
         gemini: apiKeys.gemini,
         chatgpt: apiKeys.chatgpt,
@@ -196,17 +210,6 @@ const AiPanel: React.FC = () => {
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [aiMessages]);
-
-    // 패널 폭 추적 — 스레드 드롭다운(이름 편집 박스 포함)이 패널에 맞춰 자동 확대/축소
-    useEffect(() => {
-        const el = panelRef.current;
-        if (!el) return;
-        const update = () => setPanelW(el.clientWidth);
-        update();
-        const ro = new ResizeObserver(update);
-        ro.observe(el);
-        return () => ro.disconnect();
-    }, []);
 
     // 텍스트 클립보드 복사 (불가능 환경은 폴백)
     const copyText = async (text: string, key?: number | string) => {
@@ -245,7 +248,7 @@ const AiPanel: React.FC = () => {
     };
 
     // 첫 대화(질문 + 답변) 내용을 보고 AI가 스레드 제목을 만든다. 실패 시 null.
-    const generateAiThreadTitle = async (question: string, reply: string): Promise<string | null> => {
+    const generateAiThreadTitle = async (question: string, reply: string, signal?: AbortSignal): Promise<string | null> => {
         const currentKey = apiKeys[aiAgent];
         if (!currentKey) return null;
         try {
@@ -254,7 +257,8 @@ const AiPanel: React.FC = () => {
                 aiAgent, currentKey,
                 [{ role: 'user', content }],
                 AI_TITLE_SYSTEM_PROMPT,
-                selectedModel[aiAgent]
+                aiModels[aiAgent],
+                signal
             );
             return sanitizeAiThreadTitle(raw);
         } catch (e) {
@@ -284,7 +288,7 @@ const AiPanel: React.FC = () => {
 
     const sendMessage = async (textOverride?: string) => {
         const text = (textOverride ?? input).trim();
-        if (!text || isLoading) return;
+        if (!text || isLoading || abortRef.current || pluginSignal?.aborted) return;
 
         const currentKey = apiKeys[aiAgent];
         if (!currentKey) {
@@ -303,6 +307,8 @@ const AiPanel: React.FC = () => {
         addAiMessage('user', text);
         setInput('');
         setIsLoading(true);
+        const runAbort = new AbortController();
+        abortRef.current = runAbort;
 
         const systemPrompt = `당신은 ${currentProvider.label} AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다.
 현재 사용자 컨텍스트:
@@ -335,7 +341,7 @@ const AiPanel: React.FC = () => {
 
         if (includeContext) {
             try {
-                ctxText = await buildAiAgentContext({ accessPermissions });
+                ctxText = await buildAiAgentContext({ accessPermissions, signal: runAbort.signal });
                 if (ctxText.text) {
                     finalSystemPrompt += `\n\n[현재 작업 컨텍스트]
 아래는 사용자가 파일 액세스 권한을 허용한 실제 화면과 열린 파일의 전체 내용입니다.
@@ -348,6 +354,8 @@ ${ctxText.text}
                     finalSystemPrompt += '\n\n' + buildAgentToolInstructions({
                         hasPdf: ctxText.hasPdf,
                         hasTerminal: hasTerminalForAgent(),
+                        palette: PRESET_COLORS,
+                        theme: describeTheme(),
                     });
                 }
             } catch (e) {
@@ -355,6 +363,11 @@ ${ctxText.text}
             }
         }
 
+        if (runAbort.signal.aborted || !mountedRef.current) {
+            if (abortRef.current === runAbort) abortRef.current = null;
+            if (mountedRef.current) setIsLoading(false);
+            return;
+        }
         setAgentLog(null);
 
         try {
@@ -368,35 +381,45 @@ ${ctxText.text}
                 const agentRes = await runAiAgent({
                     provider: aiAgent,
                     apiKey: currentKey,
-                    model: selectedModel[aiAgent],
+                    model: aiModels[aiAgent],
                     messages: history,
                     systemPrompt: finalSystemPrompt,
-                    maxRounds: 12,
+                    maxRounds: 24,
+                    signal: runAbort.signal,
                 });
                 reply = agentRes.text;
                 setAgentLog(agentRes.log);
             } else {
-                reply = await callAi(aiAgent, currentKey, history, finalSystemPrompt, selectedModel[aiAgent]);
+                reply = await callAi(aiAgent, currentKey, history, finalSystemPrompt, aiModels[aiAgent], runAbort.signal);
             }
-            addAiMessage('assistant', reply);
+            if (!mountedRef.current || pluginSignal?.aborted) return;
+            runAbort.signal.throwIfAborted();
+            addAiMessage('assistant', reply, firstThreadId);
 
             // 첫 대화가 끝났으니 대화 내용으로 스레드 제목을 자동 결정한다.
             // 먼저 질문 첫머리로 즉시 이름을 붙이고, AI가 정제한 제목이
             // 나오면 그걸로 교체한다.
             if (isFirstExchange && firstThreadId) {
                 setAiThreadTitle(firstThreadId, heuristicThreadTitle(firstQuestion));
-                const refined = await generateAiThreadTitle(firstQuestion, reply);
+                const refined = await generateAiThreadTitle(firstQuestion, reply, runAbort.signal);
                 if (refined) setAiThreadTitle(firstThreadId, refined);
             }
         } catch (error: any) {
-            const raw = error?.response?.data?.error?.message || error.message || '알 수 없는 오류';
-            addAiMessage('assistant', `❌ [${currentProvider.label}] 오류: ${refineError(aiAgent, raw)}`);
+            if (!mountedRef.current || pluginSignal?.aborted) return;
+            if (runAbort.signal.aborted) {
+                addAiMessage('assistant', '⏹ 실행을 중단했습니다. 이어서 원하시는 내용을 말씀해 주세요.', firstThreadId);
+                return;
+            }
+            const apiError = error?.response?.data?.error;
+            const raw = [apiError?.code, apiError?.type, apiError?.message || error.message || '알 수 없는 오류'].filter(Boolean).join(' ');
+            addAiMessage('assistant', `❌ [${currentProvider.label}] 오류: ${refineError(aiAgent, raw)}`, firstThreadId);
             // 첫 대화가 오류로 끝나도 질문 기반으로라도 제목을 붙인다.
             if (isFirstExchange && firstThreadId) {
                 setAiThreadTitle(firstThreadId, heuristicThreadTitle(firstQuestion));
             }
         } finally {
-            setIsLoading(false);
+            if (mountedRef.current) setIsLoading(false);
+            if (abortRef.current === runAbort) abortRef.current = null;
         }
     };
 
@@ -408,20 +431,20 @@ ${ctxText.text}
     };
 
     return (
-        <div ref={panelRef} className="flex-1 flex flex-col min-h-0 bg-transparent">
+        <div ref={panelRef} className="flex-1 flex flex-col min-w-0 min-h-0 bg-transparent">
 
             {/* ── 헤더 ── */}
-            <div className="h-14 border-b theme-border-subtle flex items-center px-4 theme-bg-header shrink-0 shadow-sm z-10 gap-2">
+            <div data-ai-header className="border-b theme-border-subtle flex flex-wrap items-center px-3 py-2 theme-bg-header shrink-0 shadow-sm z-10 gap-2 min-w-0">
                 {/* 아바타 */}
                 <div className={`p-1.5 bg-gradient-to-br ${currentProvider.color} rounded-lg shadow-md shrink-0`}>
                     <Bot size={16} className="text-white" />
                 </div>
 
                 <div className="flex-1 min-w-0">
-                    <h2 className="font-bold theme-text-main text-xs">AI 코파일럿</h2>
+                    <h2 className="font-bold theme-text-main text-xs truncate">AI 코파일럿</h2>
                     <div className="flex items-center gap-1 min-w-0">
                         <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse shrink-0" />
-                        <span className="text-[9px] theme-text-muted font-bold uppercase tracking-wider">
+                        <span className="text-[9px] theme-text-muted font-bold uppercase tracking-wider whitespace-nowrap shrink-0">
                             {isLoading ? 'Thinking...' : 'Online & Ready'}
                         </span>
                         {activeThread && (
@@ -430,68 +453,71 @@ ${ctxText.text}
                     </div>
                 </div>
 
+                <div className="flex w-full min-w-0 flex-wrap items-center gap-1">
                 {/* 대화 스레드 메뉴 */}
+                {isLoading && (
+                    <button
+                        onClick={() => abortRef.current?.abort()}
+                        title="실행 중단 (Stop)"
+                        className="p-2 rounded-xl transition-all text-red-500 bg-red-50 dark:bg-red-500/10 hover:bg-red-100 dark:hover:bg-red-500/20 animate-pulse shrink-0"
+                    >
+                        <Square size={13} className="fill-current" />
+                    </button>
+                )}
                 <div className="relative">
                     <button
+                        ref={threadBtnRef}
                         onClick={() => setThreadsOpen(v => !v)}
                         title="대화 스레드 (저장된 대화)"
                         className={`p-2 rounded-xl transition-all ${threadsOpen ? 'bg-indigo-100 text-indigo-600' : 'theme-tool-hover theme-text-muted hover:text-indigo-600'}`}
                     >
                         <MessagesSquare size={14} />
                     </button>
-                    {threadsOpen && (
-                        <>
-                            <div className="fixed inset-0 z-40" onClick={() => setThreadsOpen(false)} />
-                            <div
-                                style={{ width: Math.max(176, (panelW ?? 300) - 8) }}
-                                className="absolute right-0 top-full mt-2 theme-bg-panel border theme-border rounded-2xl shadow-2xl z-50 p-2 space-y-1 max-h-80 overflow-y-auto animate-in fade-in zoom-in-95 duration-150"
-                            >
-                                <div className="flex items-center justify-between px-2 py-1 border-b theme-border-subtle mb-1">
-                                    <span className="text-[10px] font-black theme-text-muted uppercase tracking-widest">대화 스레드</span>
-                                    <button
-                                        onClick={() => { createAiThread(); setThreadsOpen(false); }}
-                                        className="flex items-center gap-1 text-[10px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
-                                    >
-                                        <Plus size={11} /> 새 스레드
-                                    </button>
-                                </div>
-                                {aiThreads.map(t => (
+                    {threadsOpen && threadBtnRef.current && threadBtnRef.current.isConnected && createPortal(
+                        (() => {
+                            const W = Math.min(320, window.innerWidth - 24);
+                            const btn = threadBtnRef.current!;
+                            const r = btn.getBoundingClientRect();
+                            const left = Math.max(8, Math.min(r.left, window.innerWidth - W - 8));
+                            const top = r.bottom + 8;
+                            const maxH = Math.max(120, window.innerHeight - top - 8);
+                            return (
+                                <>
+                                    <div className="fixed inset-0 z-40" onClick={() => setThreadsOpen(false)} />
                                     <div
-                                        key={t.id}
-                                        onClick={() => {
-                                            if (editingThreadId === t.id) return;
-                                            selectAiThread(t.id);
-                                            setThreadsOpen(false);
-                                        }}
-                                        className={`flex items-center gap-2 rounded-xl px-2 py-1.5 cursor-pointer text-[11px] transition-colors ${t.id === activeThreadId
-                                            ? 'bg-indigo-600 text-white'
-                                            : 'theme-tool-hover theme-text-main'
-                                            }`}
-                                        title={t.title}
+                                        style={{ left, top, width: W, maxHeight: maxH, position: 'fixed' }}
+                                        className="theme-bg-panel border theme-border rounded-2xl shadow-2xl z-50 p-2 space-y-1 overflow-y-auto animate-in fade-in zoom-in-95 duration-150"
                                     >
-                                        <MessagesSquare size={11} className="shrink-0 opacity-60" />
-                                        {t.id === editingThreadId ? (
-                                            <input
-                                                autoFocus
-                                                value={editingTitle}
-                                                onChange={(e) => setEditingTitle(e.target.value)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') commitThreadTitleEdit();
-                                                    if (e.key === 'Escape') cancelThreadTitleEdit();
+                                        <div className="flex items-center justify-between px-2 py-1 border-b theme-border-subtle mb-1">
+                                            <span className="text-[10px] font-black theme-text-muted uppercase tracking-widest">대화 스레드</span>
+                                            <button
+                                                onClick={() => { createAiThread(); setThreadsOpen(false); }}
+                                                className="flex items-center gap-1 text-[10px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
+                                            >
+                                                <Plus size={11} /> 새 스레드
+                                            </button>
+                                        </div>
+                                        {aiThreads.map(t => (
+                                            <div
+                                                key={t.id}
+                                                onClick={() => {
+                                                    if (editingThreadId === t.id) return;
+                                                    selectAiThread(t.id);
+                                                    setThreadsOpen(false);
                                                 }}
-                                                onBlur={commitThreadTitleEdit}
-                                                onClick={(e) => e.stopPropagation()}
-                                                placeholder="스레드 이름"
-                                                maxLength={40}
-                                                className="w-full min-w-0 text-[11px] px-1.5 py-0.5 rounded-md bg-white/80 text-gray-900 border theme-border outline-none focus:ring-1 focus:ring-indigo-500"
-                                            />
-                                        ) : (
-                                            <>
+                                                className={`flex items-center gap-2 rounded-xl px-2 py-1.5 cursor-pointer text-[11px] transition-colors ${t.id === activeThreadId
+                                                    ? 'bg-indigo-600 text-white'
+                                                    : 'theme-tool-hover theme-text-main'
+                                                    }`}
+                                                title={t.title}
+                                            >
+                                                <MessagesSquare size={11} className="shrink-0 opacity-60" />
                                                 <span className="flex-1 truncate">{t.title}</span>
                                                 <span className={`shrink-0 text-[10px] ${t.id === activeThreadId ? 'text-white/70' : 'theme-text-muted'}`}>{t.messages.length}</span>
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
+                                                        setThreadsOpen(false);
                                                         setEditingThreadId(t.id);
                                                         setEditingTitle(t.title);
                                                     }}
@@ -508,22 +534,23 @@ ${ctxText.text}
                                                 >
                                                     <X size={12} />
                                                 </button>
-                                            </>
-                                        )}
+                                            </div>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
-                        </>
+                                </>
+                            );
+                        })(),
+                        document.body
                     )}
                 </div>
 
                 {/* 제공자 선택 드롭다운 */}
-                <div className="relative">
+                <div className="relative flex-1 basis-28 min-w-0 max-w-full">
                     <select
                         title="AI 제공자 선택"
                         value={aiAgent}
                         onChange={(e) => setAiAgent(e.target.value as AiProvider)}
-                        className="text-[11px] font-bold bg-transparent px-2 py-1.5 outline-none appearance-none cursor-pointer theme-text-muted hover:text-indigo-600 transition-colors border theme-border rounded-lg pr-6"
+                        className="w-full min-w-0 text-[11px] font-bold bg-transparent px-2 py-1.5 outline-none appearance-none cursor-pointer theme-text-muted hover:text-indigo-600 transition-colors border theme-border rounded-lg pr-6"
                     >
                         {PROVIDERS.map(p => (
                             <option key={p.id} value={p.id}>{p.label}</option>
@@ -592,6 +619,7 @@ ${ctxText.text}
                 >
                     <Trash2 size={14} />
                 </button>
+                </div>
             </div>
 
             {/* ── API 키 설정 패널 ── */}
@@ -622,6 +650,12 @@ ${ctxText.text}
                                         </a>
                                     </div>
 
+                                    {provider.id === 'chatgpt' && (
+                                        <a href={OPENAI_BILLING_URL} target="_blank" rel="noopener noreferrer"
+                                            className="inline-block text-[11px] text-indigo-500 underline break-words">
+                                            API 결제·크레딧 충전 ↗
+                                        </a>
+                                    )}
                                     {/* API 키 입력 */}
                                     <div className="flex items-center gap-1">
                                         <input
@@ -642,8 +676,8 @@ ${ctxText.text}
                                     {/* 모델 선택 */}
                                     <select
                                         title={`${provider.label} 모델 선택`}
-                                        value={selectedModel[provider.id]}
-                                        onChange={e => setSelectedModel(prev => ({ ...prev, [provider.id]: e.target.value }))}
+                                        value={aiModels[provider.id]}
+                                        onChange={e => setAiModel(provider.id as AiProvider, e.target.value)}
                                         className="w-full text-[11px] px-3 py-1.5 rounded-lg border theme-border theme-bg-glass theme-text-main outline-none cursor-pointer"
                                     >
                                         {provider.modelOptions.map(m => (
@@ -731,7 +765,7 @@ ${ctxText.text}
                             );
                             return (
                                 <span className="text-[10px] text-green-600 bg-green-50 border border-green-200 px-2 py-1 rounded-lg w-full">
-                                    ✅ {currentProvider.label} 연결됨 · {selectedModel[aiAgent]}
+                                    ✅ {currentProvider.label} 연결됨 · {aiModels[aiAgent]}
                                 </span>
                             );
                         })()}
@@ -765,6 +799,12 @@ ${ctxText.text}
                                     : 'theme-bg-panel theme-text-main border theme-border rounded-tl-none font-medium'
                                 }`}>
                                 {msg.content}
+                                {msg.role === 'assistant' && msg.content.startsWith('❌ [ChatGPT] 오류: ') && msg.content.includes(OPENAI_BILLING_ERROR) && (
+                                    <a href={OPENAI_BILLING_URL} target="_blank" rel="noopener noreferrer"
+                                        className="block mt-2 text-indigo-500 underline font-semibold break-words">
+                                        API 결제·크레딧 충전 ↗
+                                    </a>
+                                )}
                             </div>
                             <button
                                 onClick={() => copyText(msg.content, idx)}
@@ -846,6 +886,57 @@ ${ctxText.text}
                 </div>
                 <p className="text-center text-[9px] theme-text-muted mt-1.5">Shift+Enter: 줄바꿈 | Enter: 전송</p>
             </div>
+
+            {/* ── 스레드 이름 편집 팝오버 (body 포털 — 패널에 잘리지 않음) ── */}
+            {editingThreadId && createPortal(
+                <div
+                    className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+                    onClick={cancelThreadTitleEdit}
+                >
+                    <div
+                        className="w-80 theme-bg-panel border theme-border rounded-2xl shadow-2xl p-4 animate-in fade-in zoom-in-95 duration-150"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between mb-3">
+                            <span className="text-[11px] font-black theme-text-muted uppercase tracking-widest">스레드 이름 변경</span>
+                            <button
+                                onClick={cancelThreadTitleEdit}
+                                title="닫기"
+                                className="p-1 rounded theme-tool-hover theme-text-muted hover:text-red-500 transition-colors"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                        <input
+                            autoFocus
+                            value={editingTitle}
+                            onChange={(e) => setEditingTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') commitThreadTitleEdit();
+                                if (e.key === 'Escape') cancelThreadTitleEdit();
+                            }}
+                            placeholder="스레드 이름"
+                            maxLength={40}
+                            className="w-full text-[12px] px-2.5 py-2 rounded-lg bg-white/80 text-gray-900 border theme-border outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                        <div className="flex justify-end gap-2 mt-3">
+                            <button
+                                onClick={cancelThreadTitleEdit}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold theme-tool-hover theme-text-muted hover:text-gray-800 transition-colors"
+                            >
+                                취소
+                            </button>
+                            <button
+                                onClick={commitThreadTitleEdit}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+                            >
+                                저장
+                            </button>
+                        </div>
+                    </div>
+                </div>,
+                document.body
+            )}
         </div>
     );
 };

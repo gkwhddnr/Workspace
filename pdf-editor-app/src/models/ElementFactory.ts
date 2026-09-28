@@ -1,4 +1,5 @@
 // ElementFactory.ts
+import { GroupElement } from './GroupElement';
 import { GraphicStyle } from './GraphicStyle';
 import { PathElement } from './PathElement';
 import { TextElement } from './TextElement';
@@ -14,6 +15,37 @@ import { DrawingAnnotation } from '../tools/DrawingToolStrategy';
  * This handles the mapping from legacy structures to the new class hierarchy.
  */
 export class ElementFactory {
+    /** Restore concrete models, including nested groups, from saved editor JSON. */
+    static fromSaved(data: any): RenderElement | null {
+        if (!data || typeof data.id !== 'string') return null;
+        if (data.type === 'group') {
+            const children = (Array.isArray(data.children) ? data.children : [])
+                .map((child: any) => this.fromSaved(child)).filter((child: RenderElement | null): child is RenderElement => child !== null);
+            return new GroupElement(data.id, children);
+        }
+        const type = data.type === 'rectangle' ? 'rect' : data.type === 'path' ? 'pen' : data.type;
+        const element = this.create(type, data.id, data.rect || [data.x ?? 0,data.y ?? 0,data.width ?? 200,data.height ?? 50], data.style?.color || data.color || '#000000');
+        if (!element) return null;
+        element.style = element.style.copy(data.style || {});
+        if (element instanceof TextElement) {
+            element.text = data.text || '';
+            element.fontSize = data.fontSize || 20;
+            element.fontFamily = data.fontFamily || 'Outfit, sans-serif';
+            element.fontWeight = data.fontWeight || 'normal';
+            element.textDecoration = data.textDecoration || '';
+            element.spans = data.spans;
+        } else if (element instanceof PathElement) {
+            element.points = data.points || [];
+        } else if (element instanceof ImageElement) {
+            element.imageSrc = data.imageSrc || '';
+        } else if (element instanceof ShapeElement) {
+            for (const key of ['points','shapeType','outlineSegments','rectParts','angle']) {
+                if (data[key] !== undefined) (element as any)[key] = data[key];
+            }
+        }
+        return element;
+    }
+
     /**
      * Creates a model from a legacy DrawingAnnotation (Path, Shape, Image).
      */
@@ -38,7 +70,7 @@ export class ElementFactory {
             );
         }
 
-        if (['rect', 'circle', 'highlight', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'arrow-l-1', 'arrow-l-2'].includes(data.type)) {
+        if (['rect', 'circle', 'highlight', 'arrow', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'arrow-l-1', 'arrow-l-2'].includes(data.type)) {
             const [x, y, w, h] = data.rect || [0, 0, 100, 100];
             return new ShapeElement(
                 data.id,
@@ -99,7 +131,7 @@ export class ElementFactory {
     static create(type: string, id: string, rect: number[], color: string): RenderElement | null {
         const style = new GraphicStyle(color, 2, 1.0, false, 12);
         
-        if (['rect', 'circle', 'highlight', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'arrow-l-1', 'arrow-l-2'].includes(type)) {
+        if (['rect', 'circle', 'highlight', 'arrow', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'arrow-l-1', 'arrow-l-2'].includes(type)) {
             return new ShapeElement(
                 id,
                 style,

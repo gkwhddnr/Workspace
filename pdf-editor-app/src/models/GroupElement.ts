@@ -9,6 +9,7 @@ import { GraphicStyle } from './GraphicStyle';
  * Allows treating a collection of elements as a single object.
  */
 export class GroupElement extends RenderElement {
+    public type = 'group';
     private children: RenderElement[];
 
     constructor(id: string, children: RenderElement[] = []) {

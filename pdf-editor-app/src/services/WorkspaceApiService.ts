@@ -122,6 +122,7 @@ export class WorkspaceApiService {
             console.log(`[WorkspaceApiService] saveProjectData success for ${filename}`);
         } catch (e) {
             console.error('[WorkspaceApiService] saveProjectData failed:', e);
+            throw e;
         }
     }
 

@@ -1,3 +1,4 @@
+import type { LucideIcon } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, X, Columns, Rows, LayoutGrid, Square, PanelBottomClose, Pencil } from 'lucide-react';
 import TerminalPane from './TerminalPane';
@@ -19,7 +20,7 @@ interface TerminalWorkspaceProps {
     onDockChange?: (side: DockSide) => void;
 }
 
-const LAYOUTS: { id: TerminalLayout; icon: React.ComponentType<{ size?: number }>; title: string; panes: number }[] = [
+const LAYOUTS: { id: TerminalLayout; icon: LucideIcon; title: string; panes: number }[] = [
     { id: 'single', icon: Square, title: '단일 화면', panes: 1 },
     { id: 'lr', icon: Columns, title: '좌우 분할', panes: 2 },
     { id: 'tb', icon: Rows, title: '상하 분할', panes: 2 },
@@ -133,14 +134,18 @@ const TerminalWorkspace: React.FC<TerminalWorkspaceProps> = ({ onCollapse, dockS
         [api]
     );
 
-    // 언마운트 = 워크스페이스 종료 → 소유한 모든 세션 정리
-    useEffect(
-        () => () => {
-            threadsRef.current.forEach((t) => void api?.destroy?.(t.id));
-        },
-        [api]
-    );
-
+    // StrictMode replays effects; only the final unmount owns session disposal.
+    const lifetimeRef = useRef(0);
+    useEffect(() => {
+        const lifetime = ++lifetimeRef.current;
+        return () => {
+            queueMicrotask(() => {
+                if (lifetimeRef.current === lifetime) {
+                    threadsRef.current.forEach(thread => void api?.destroy?.(thread.id));
+                }
+            });
+        };
+    }, [api]);
     const containerClass =
         layout === 'lr'
             ? 'flex flex-row gap-[2px]'
@@ -174,7 +179,16 @@ const TerminalWorkspace: React.FC<TerminalWorkspaceProps> = ({ onCollapse, dockS
                         return (
                             <div
                                 key={t.id}
-                                onClick={() => setFocused(t.id)}
+                                onClick={() => {
+                                    if (!cells.includes(t.id)) {
+                                        setCells(previous => {
+                                            const next = [...previous];
+                                            next[Math.max(0, next.indexOf(focused))] = t.id;
+                                            return next;
+                                        });
+                                    }
+                                    setFocused(t.id);
+                                }}
                                 title={t.title}
                                 className={`group flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-md cursor-pointer text-[11px] font-semibold whitespace-nowrap shrink-0 ${
                                     isFocused
@@ -286,8 +300,8 @@ const TerminalWorkspace: React.FC<TerminalWorkspaceProps> = ({ onCollapse, dockS
             {/* 분할 영역 */}
             <div className="flex-1 min-h-0 flex flex-col">
                 <div className={`${containerClass} flex-1 min-h-0 min-w-0`}>
-                    {cells.map((id) => (
-                        <div key={id} className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+                    {threads.map(({ id }) => (
+                        <div key={id} style={{ display: cells.includes(id) ? undefined : "none", order: cells.indexOf(id) }} className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
                             {renderPane(id)}
                         </div>
                     ))}

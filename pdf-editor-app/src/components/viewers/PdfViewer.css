@@ -132,3 +132,28 @@
   transition: all 0.2s ease;
   cursor: pointer;
 }
+/* Text is invisible over the PDF canvas; only the browser selection is painted. */
+.pdf-text-selection {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  pointer-events: none;
+  user-select: text;
+}
+.pdf-text-selection span, .pdf-text-selection br {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+  pointer-events: auto;
+}
+.pdf-text-selection[data-bypass="true"] span, .pdf-text-selection[data-bypass="true"] br { pointer-events: none; }
+.pdf-text-selection ::selection { background: transparent; }
+.pdf-text-selection br::selection { background: transparent; }
+
+.pdf-selection-paint { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }

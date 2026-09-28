@@ -1,5 +1,15 @@
+import { restoreProjectElements } from '../../utils/restoreProjectElements';
+import { getPdfTextContent } from '../../services/PdfTextContentCache';
+import { PdfTextSelection } from './PdfTextSelection';
+import { useSettingsStore } from '../../store/useSettingsStore';
+import { buildTextSnapBlocks } from '../../utils/textSnap';
+import { flushSync } from 'react-dom';
+import { useIdleAutoSave } from '../../hooks/useIdleAutoSave';
+import { buildRichHtml, parseRichDom, insertLineBreak } from '../../utils/richText';
+import { getElementRect } from '../../utils/elementRect';
+import { sha256Hex, toArrayBuffer } from '../../utils/bytes';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from '../../services/pdfjs';
 import { useAppStore, DrawingTool } from '../../store/useAppStore';
 import { usePdfEditorStore } from '../../store/usePdfEditorStore';
 import { FileUp, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Save } from 'lucide-react';
@@ -24,9 +34,6 @@ import { CompositeCommand } from '../../commands/CompositeCommand';
 import { CommandHistory } from '../../commands/CommandHistory';
 import './PdfViewer.css';
 
-// pdfjs worker setup
-// pdfjs worker setup - using absolute local path for maximum reliability
-pdfjsLib.GlobalWorkerOptions.workerSrc = window.location.origin + '/pdf.worker.min.js';
 
 // Geometry helpers live in utils/geometry.ts — import from there.
 import { distancePointToSegment } from '../../utils/geometry';
@@ -42,115 +49,6 @@ const getElbowPoint = (startP: { x: number, y: number }, endP: { x: number, y: n
 
 // (Re-definition removed, importing from DrawingToolStrategy instead)
 
-// Helper to safely get rect [x, y, w, h] from any element (legacy or class-based)
-const getElementRect = (el: any): [number, number, number, number] => {
-    if (el.rect && Array.isArray(el.rect) && el.rect.length === 4) return el.rect;
-    if (el.getBoundingBox) {
-        const bbox = el.getBoundingBox();
-        return [bbox.x, bbox.y, bbox.width, bbox.height];
-    }
-    return [el.x || 0, el.y || 0, el.width || 0, el.height || 0];
-};
-
-// ── Rich-text helpers (contentEditable editing) ─────────────────────────────
-// Build an HTML string from plain text + FormatSpans so the editable box shows
-// partial bold / underline / strikethrough on the right characters.
-function buildRichHtml(text: string, spans: FormatSpan[]): string {
-    if (!text) return '<div class="pdf-text-editor-line"></div>';
-    type Fmt = { b: boolean; u: boolean; s: boolean };
-    const eff: Fmt[] = Array.from({ length: text.length }, () => ({ b: false, u: false, s: false }));
-    for (const sp of spans) {
-        const s0 = Math.max(0, sp.start), s1 = Math.min(text.length, sp.end);
-        for (let i = s0; i < s1; i++) {
-            if (sp.fontWeight === 'bold') eff[i].b = true;
-            const deco = sp.textDecoration || '';
-            if (deco.includes('underline')) eff[i].u = true;
-            if (deco.includes('line-through')) eff[i].s = true;
-        }
-    }
-    // Render each line as its own block so line structure is stable under
-    // contentEditable + document.execCommand formatting (which can mangle <br>).
-    const lines = text.split('\n');
-    const html = lines.map(line => {
-        let seg = '';
-        let i = 0;
-        while (i < line.length) {
-            const f = eff[i];
-            const jStart = i;
-            while (i < line.length && eff[i].b === f.b && eff[i].u === f.u && eff[i].s === f.s) i++;
-            let s = line.slice(jStart, i)
-                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            if (f.b) s = `<b>${s}</b>`;
-            if (f.u) s = `<u>${s}</u>`;
-            if (f.s) s = `<s>${s}</s>`;
-            seg += s;
-        }
-        return `<div>${seg}</div>`;
-    }).join('');
-    return html;
-}
-
-// Parse the rendered contentEditable DOM back into { text, spans }.
-function parseRichDom(root: HTMLElement): { text: string; spans: FormatSpan[] } {
-    const spans: FormatSpan[] = [];
-    let text = '';
-    const walk = (node: Node) => {
-        if (node.nodeType === Node.TEXT_NODE) {
-            const t = node.textContent || '';
-            if (!t) return;
-            const start = text.length;
-            const hasBrInside = t.includes('\n');
-            text += t;
-            const end = text.length;
-            const b = ancestors(node).some(n => (n as HTMLElement).tagName === 'B' || (n as HTMLElement).tagName === 'STRONG');
-            const u = ancestors(node).some(n => (n as HTMLElement).tagName === 'U');
-            const s = ancestors(node).some(n => (n as HTMLElement).tagName === 'S' || (n as HTMLElement).tagName === 'STRIKE');
-            if ((b || u || s) && !hasBrInside) {
-                spans.push({
-                    start, end,
-                    ...(b ? { fontWeight: 'bold' as const } : {}),
-                    ...(u || s ? { textDecoration: `${u ? 'underline' : ''}${u && s ? ' ' : ''}${s ? 'line-through' : ''}` as any } : {}),
-                });
-            }
-        } else if (node.nodeType === Node.ELEMENT_NODE) {
-            const tag = (node as HTMLElement).tagName?.toUpperCase();
-            // <br> => newline (kept as a real char so indexing stays in sync with buildRichHtml).
-            if (tag === 'BR') {
-                if (text.length > 0 && !text.endsWith('\n')) text += '\n';
-                return;
-            }
-            const startLen = text.length;
-            for (const child of Array.from((node as HTMLElement).childNodes)) walk(child);
-            // Block-level separators (contentEditable may produce <div>/<p> per line).
-            if ((tag === 'DIV' || tag === 'P') && text.length > startLen && !text.endsWith('\n')) text += '\n';
-        }
-    };
-    const ancestors = (node: Node): Node[] => {
-        const arr: Node[] = [];
-        let p = node.parentNode;
-        while (p) { arr.push(p); p = p.parentNode; }
-        return arr;
-    };
-    walk(root);
-    return { text, spans };
-}
-
-// Insert a hard line break at the current caret inside the block-based editable.
-// Because the editable is always initialized with a <div> block wrapper, native
-// contentEditable Enter (via insertParagraph) splits into block <div>s, which keep
-// the line structure stable under inline formatting (unlike <br> breaks that Chrome
-// merges when bold/underline/strike is applied to a fresh multi-line box).
-function insertLineBreak(_editable: HTMLElement): void {
-    document.execCommand('insertParagraph', false);
-}
-
-/** Hex-formatted sha-256 of a byte array (used for office dirty-detection). */
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
-    return Array.from(new Uint8Array(digest))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-}
 
 const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false }) => {
 
@@ -256,6 +154,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
     const previewElementRef = useRef<RenderElement | null>(null);
     const [previewRevision, setPreviewRevision] = useState(0);
     const isRestoringRef = useRef(false);
+    const documentLoadsRef = useRef(0);
 
     // Selection handle state for rendering
     const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
@@ -304,7 +203,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
     // ────────────────────────────────────────────────────────────────────────
     useEffect(() => {
         // Only run if we have a path but no document loaded and not currently restoring
-        if (currentFilePath && !pdfDoc && !isRestoringRef.current && !isFileDialogOpenRef.current) {
+        if (currentFilePath && !pdfDoc && !imageDoc && !documentLoadsRef.current && !isRestoringRef.current && !isFileDialogOpenRef.current) {
             const anyWindow = window as any;
             const electronAPI = anyWindow?.electronAPI;
 
@@ -313,8 +212,12 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                     try {
                         isRestoringRef.current = true;
                         console.log('[PdfViewer] Auto-restoring PDF:', currentFilePath);
-                        const result = await electronAPI.readFile(currentFilePath);
-                        if (result) {
+                        // 파일 판독 결과 (경로가 없거나 읽기에 실패하면 null)
+                        const result = currentFilePath
+                            ? await electronAPI.readFile(currentFilePath).catch(() => null)
+                            : null;
+                        if (documentLoadsRef.current || useAppStore.getState().currentFilePath !== currentFilePath) return;
+                        if (currentFilePath && result) {
                             const { data, mimeType } = result;
                             const uint8 = new Uint8Array(data);
                             const blob = new Blob([uint8], { type: mimeType || 'application/pdf' });
@@ -325,6 +228,20 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
                             setPdfOriginalData(uint8.slice());
                             await loadAnyDocument(file, true); // isRestore=true preserves elements
+                        } else {
+                            // 파일 시스템에서 읽지 못해도(경로가 상대명이거나 파일 이동 등) 이미
+                            // 메모리에 보존된 원본 바이트가 있으면 그걸로 문서를 재구성한다.
+                            // → 도킹 배치 변경으로 뷰어가 재마운트되어도 작업 상태가 유지된다.
+                            const original = useAppStore.getState().pdfOriginalData;
+                            if (original) {
+                                const uint8 = new Uint8Array(original);
+                                const blob = new Blob([uint8], { type: 'application/pdf' });
+                                const file = new File([blob], currentFileName || 'restored_file', { type: 'application/pdf' });
+                                if (currentFilePath) {
+                                    Object.defineProperty(file, '_filePath', { value: currentFilePath, writable: true, configurable: true, enumerable: false });
+                                }
+                                await loadAnyDocument(file, true);
+                            }
                         }
                     } catch (err) {
                         console.error('[PdfViewer] Auto-restore failed:', err);
@@ -332,13 +249,13 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                         // We keep isRestoringRef true if pdfDoc is successfully being set
                         // to prevent the effect from re-running before the next render.
                         // If pdfDoc is still null after some time or on error, we might reset.
-                        setTimeout(() => { if (!pdfDoc) isRestoringRef.current = false; }, 1000);
+                        isRestoringRef.current = false;
                     }
                 };
                 restoreFile();
             }
         }
-    }, [currentFilePath, !!pdfDoc]); // Trigger only when path changes or document existence changes
+    }, [currentFilePath, !!pdfDoc, !!imageDoc]); // Trigger only when path changes or document existence changes
 
 
 
@@ -360,75 +277,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
     // Memoized Word Blocks for precise snapping
     const wordBlocks = useMemo(() => {
-        const blocks: { text: string; rect: [number, number, number, number] }[] = [];
-
-        // 1. PDF Text Blocks (Per-character width measurement for accurate X positions)
-        const measureCanvas = document.createElement('canvas');
-        const measureCtx = measureCanvas.getContext('2d')!;
-
-        textBlocks.forEach(b => {
-            const parts = b.text.split('');
-            if (!parts.length) return;
-
-            // Estimate font size from block height (PDF.js provides height in canvas-pixel coords)
-            // Use a generic sans-serif font for measurement — proportions are close enough
-            const estimatedFontSize = b.rect[3] * 0.85; // height → approximate font size
-            measureCtx.font = `${estimatedFontSize}px Arial, sans-serif`;
-
-            // Measure each character's actual width
-            const charWidths = parts.map(ch => measureCtx.measureText(ch).width);
-            const measuredTotal = charWidths.reduce((s, w) => s + w, 0);
-
-            // Scale factor: map measured widths to actual PDF block width
-            const scaleFactor = measuredTotal > 0 ? b.rect[2] / measuredTotal : 1;
-
-            let currentX = b.rect[0];
-            parts.forEach((part, i) => {
-                const w = charWidths[i] * scaleFactor;
-                if (part.trim().length > 0) {
-                    blocks.push({ text: part, rect: [currentX, b.rect[1], w, b.rect[3]] });
-                }
-                currentX += w;
-            });
-        });
-
-        // 2. User Text Elements (New Model)
-        currentPageElements.forEach(el => {
-            if (el.type === 'text') {
-                const textEl = el as any;
-                const rect = getElementRect(textEl);
-                const annFontSize = (Number(textEl.fontSize) || 20) * scale;
-                const lineHeight = annFontSize * 1.2;
-                const text = textEl.text || '';
-                const lines = text.split('\n');
-                const tyBase = rect[1] * scale;
-
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d')!;
-                ctx.font = `${annFontSize}px ${textEl.fontFamily || 'Outfit, sans-serif'}`;
-
-                lines.forEach((line: string, lineIdx: number) => {
-                    const ty = tyBase + (lineIdx * lineHeight);
-                    let currentX = rect[0] * scale;
-                    const parts = line.split('');
-
-                    parts.forEach((part: string) => {
-                        const w = ctx.measureText(part).width;
-                        if (part.trim().length > 0) {
-                            blocks.push({
-                                text: part,
-                                rect: [currentX, ty, w, annFontSize]
-                            });
-                        }
-                        currentX += w;
-                    });
-                });
-            }
-        });
-
-
-
-        return blocks;
+        return buildTextSnapBlocks(textBlocks, currentPageElements, scale);
     }, [textBlocks, currentPageElements, scale]);
 
     // Ref so toolManager can always access the latest wordBlocks without closure issues
@@ -881,7 +730,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                 await renderPage(page, s, renderKey);
 
                 // Extract text content for snapping
-                const textContent = await page.getTextContent();
+                const textContent = await getPdfTextContent(doc, pageNum);
                 const viewport = page.getViewport({ scale: s });
 
                 const blocks = textContent.items.map((item: any) => {
@@ -1003,111 +852,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
             if (pData && !skipElementRestore) {
                 try {
-                    const parsed = JSON.parse(pData);
-                    const migrated: Record<number, RenderElement[]> = {};
-
-                    // 0. New architecture format: { elements: Record<number, RenderElement[]> }
-                    if (parsed.elements) {
-                        Object.keys(parsed.elements).forEach(pg => {
-                            const pNum = parseInt(pg);
-                            migrated[pNum] = migrated[pNum] || [];
-                            parsed.elements[pg].forEach((d: any) => {
-                                const type = d.type === 'rectangle' ? 'rect' : d.type;
-                                let element: RenderElement | null = null;
-
-                                if (type === 'text') {
-                                    element = ElementFactory.create('text', d.id,
-                                        [d.x ?? 0, d.y ?? 0, d.width ?? 200, d.height ?? 50],
-                                        d.style?.color || d.color || '#000000'
-                                    );
-                                    if (element) {
-                                        const textEl = element as any;
-                                        textEl.text = d.text || '';
-                                        textEl.fontSize = d.fontSize || 20;
-                                        textEl.fontFamily = d.fontFamily || 'Outfit, sans-serif';
-                                        textEl.fontWeight = d.fontWeight || 'normal';
-                                        textEl.textDecoration = d.textDecoration || '';
-                                        textEl.spans = d.spans || undefined;
-                                        textEl.width = d.width;
-                                        textEl.height = d.height;
-                                    }
-                                } else if (type === 'path') {
-                                    element = ElementFactory.create('pen', d.id, [], d.style?.color || '#000000');
-                                    if (element) {
-                                        (element as any).points = d.points || [];
-                                        element.style = element.style.copy({
-                                            strokeWidth: d.style?.strokeWidth ?? 2,
-                                            opacity: d.style?.opacity ?? 1,
-                                            color: d.style?.color || '#000000'
-                                        });
-                                    }
-                                } else {
-                                    element = ElementFactory.create(type, d.id,
-                                        d.rect || [d.x ?? 0, d.y ?? 0, d.width ?? 0, d.height ?? 0],
-                                        d.style?.color || d.color || '#000000'
-                                    );
-                                    if (element) {
-                                        element.style = element.style.copy({
-                                            strokeWidth: d.style?.strokeWidth ?? 2,
-                                            opacity: d.style?.opacity ?? 1,
-                                            arrowHeadSize: d.style?.arrowHeadSize ?? 12
-                                        });
-                                        if (d.points) (element as any).points = d.points;
-                                        if (d.shapeType) (element as any).shapeType = d.shapeType;
-                                        if (d.outlineSegments) (element as any).outlineSegments = d.outlineSegments;
-                                        if (d.rectParts) (element as any).rectParts = d.rectParts;
-                                        if (type === 'image' && d.imageSrc) {
-                                            (element as ImageElement).imageSrc = d.imageSrc;
-                                        }
-                                    }
-                                }
-
-                                if (element) migrated[pNum].push(element);
-                            });
-                        });
-                    }
-
-                    // 1. Migrate legacy Vector Drawings (pageDrawings format)
-                    if (parsed.pageDrawings) {
-                        Object.keys(parsed.pageDrawings).forEach(pg => {
-                            const pNum = parseInt(pg);
-                            migrated[pNum] = migrated[pNum] || [];
-                            parsed.pageDrawings[pg].forEach((d: any) => {
-                                const type = d.type === 'rectangle' ? 'rect' : d.type;
-                                const element = ElementFactory.create(type, d.id, d.rect || [], d.color || '#000000');
-
-                                if (element) {
-                                    element.style = element.style.copy({ opacity: d.opacity ?? 1 });
-                                    if (element.type === 'image' && d.imageSrc) {
-                                        (element as ImageElement).imageSrc = d.imageSrc;
-                                    }
-                                    migrated[pNum].push(element);
-                                }
-                            });
-                        });
-                    }
-
-                    // 2. Migrate legacy Text Annotations (pageTextAnnotations format)
-                    if (parsed.pageTextAnnotations) {
-                        Object.keys(parsed.pageTextAnnotations).forEach(pg => {
-                            const pNum = parseInt(pg);
-                            migrated[pNum] = migrated[pNum] || [];
-                            parsed.pageTextAnnotations[pg].forEach((a: any) => {
-                                const element = ElementFactory.create('text', a.id, [a.x, a.y, a.width || 200, a.height || 50], a.color || '#000000');
-                                if (element) {
-                                    const textEl = element as any;
-                                    textEl.text = a.text;
-                                    textEl.fontSize = a.fontSize;
-                                    textEl.fontFamily = a.fontFamily;
-                                    textEl.fontWeight = a.fontWeight || 'normal';
-                                    textEl.textDecoration = a.textDecoration || '';
-                                    textEl.spans = a.spans || undefined;
-                                    migrated[pNum].push(element);
-                                }
-                            });
-                        });
-                    }
-
+                    const migrated = restoreProjectElements(pData);
                     setAllElements(migrated);
                     // Mark as saved so loading existing annotations doesn't trigger unsaved warning
                     setTimeout(() => markSaved(), 0);
@@ -1229,8 +974,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                 } else {
                     // 첫 진입: 현재 파일을 미편집 원본으로 백업
                     pristineBytes = diskBytes.slice();
-                    workspaceApiService.uploadOriginalOffice(pdfKey, new Blob([diskBytes.slice()]))
-                        .catch(e => console.warn('[PdfViewer] uploadOriginalOffice failed:', e));
+                    await workspaceApiService.uploadOriginalOffice(pdfKey, new Blob([diskBytes.slice()]));
                     diskModified = false;
                 }
             } catch (e) {
@@ -1303,14 +1047,14 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
             setOfficeClean(officeClean);
             console.log('[PdfViewer] office baseline:', { pdfKey, diskModified, diskMatchesLastSave, skipElementRestore, officeClean });
             const result = await workspaceApiService.convertOfficeToPdf(
-                new File([convertBytes], baseName)
+                new File([toArrayBuffer(convertBytes)], baseName)
             );
             if (!result || !result.bytes || result.bytes.length === 0) {
                 alert('PPT/PPTX를 PDF로 변환하는 데 실패했습니다.');
                 return;
             }
-            const pdfBlob = new Blob([result.bytes], { type: 'application/pdf' });
-            const pdfFile = new File([pdfBlob], result.fileName, { type: 'application/pdf' });
+            const pdfBlob = new Blob([toArrayBuffer(result.bytes)], { type: 'application/pdf' });
+            const pdfFile = new File([pdfBlob], pdfKey, { type: 'application/pdf' });
             // Save the edited PDF next to the original Office file (same folder, .pdf name)
             // instead of overwriting the .ppt/.pptx (which would corrupt it).
             const dot = baseName.lastIndexOf('.');
@@ -1320,7 +1064,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
             // 신규 오피스 파일일 경우 요소 기록이 없으므로 기존 반영분이 없다고 초기화하고,
             // loadPdf에서 projectData를 복원하면 실제 반영분이 덮어씌워진다.
             setOfficeBakedIds({});
-            setCurrentFile(savePath, result.fileName);
+            setCurrentFile(savePath, pdfKey);
             // Load the freshly generated PDF directly — skip backend original restore to
             // avoid loading a stale/broken saved original under the same filename.
             // skipElementRestore=true(외부 수정)면 projectData의 기존 요소는 셰이프로
@@ -1344,28 +1088,31 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
     };
 
     const loadAnyDocument = async (file: File, isRestore: boolean = false) => {
+        documentLoadsRef.current++;
+        try {
         const lower = file.name.toLowerCase();
         // Extension must take priority: restored/auto-detected files may carry a
         // misleading application/pdf MIME even when they are actually Office files.
         if (lower.endsWith('.ppt') || lower.endsWith('.pptx') ||
             file.type === 'application/vnd.ms-powerpoint' ||
             file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
-            return loadOfficeDocument(file, isRestore);
+            return await loadOfficeDocument(file, isRestore);
         }
         if (lower.endsWith('.pdf') || file.type === 'application/pdf') {
             setOfficeOriginal(null, null);
             setOfficePristineBytes(null);
             setOfficeClean(true);
-            return loadPdf(file, isRestore);
+            return await loadPdf(file, isRestore);
         }
         if (lower.endsWith('.png') || file.type === 'image/png') {
             setOfficeOriginal(null, null);
             setOfficePristineBytes(null);
             setOfficeClean(true);
-            return loadImage(file, isRestore);
+            return await loadImage(file, isRestore);
         }
 
         alert('지원하지 않는 파일 형식입니다. (PDF, PNG, PPT, PPTX)');
+        } finally { documentLoadsRef.current--; }
     };
 
     // Unsaved changes warning state
@@ -1833,13 +1580,13 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                 return null;
             }
 
+            const saveScale = useSettingsStore.getState().saveQuality;
             for (let i = 1; i <= totalPages; i++) {
                 const pageElements = elements[i] || [];
                 if (pageElements.length > 0) {
                     const page = await pdfDoc.getPage(i);
-                    // [CUSTOMIZE] 필기 이미지 해상도 배율 (1.1로 축소하여 용량 최소화)
                     // 원본 텍스트는 벡터로 유지되므로, 이 배율은 오직 '사용자가 그린 펜/도형'의 선명도에만 영향을 줍니다.
-                    const viewport = page.getViewport({ scale: 1.4 });
+                    const viewport = page.getViewport({ scale: saveScale });
 
                     const tempCanvas = document.createElement('canvas');
                     tempCanvas.width = viewport.width;
@@ -1849,7 +1596,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                     // 핵심 수정: 원본 PDF 페이지를 캔버스에 그리지 않음 (배경 투명화)
                     // await page.render({ canvasContext: tempCtx, viewport }).promise;
 
-                    const visitor = new CanvasRenderVisitor(tempCtx, 1.4);
+                    const visitor = new CanvasRenderVisitor(tempCtx, saveScale);
                     const iterator = new LayerIterator(pageElements);
 
                     while (iterator.hasNext()) {
@@ -2478,8 +2225,8 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
     };
 
     const handleInputKeyDown = (e: React.KeyboardEvent) => {
-        const isDecrease = e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.code === 'ArrowDown' || e.code === 'ArrowLeft');
-        const isIncrease = e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowRight' || e.code === 'ArrowUp' || e.code === 'ArrowRight');
+        const isDecrease = e.altKey && !e.shiftKey && (e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.code === 'ArrowDown' || e.code === 'ArrowLeft');
+        const isIncrease = e.altKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowRight' || e.code === 'ArrowUp' || e.code === 'ArrowRight');
 
         if (isDecrease) {
             e.preventDefault();
@@ -2487,7 +2234,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
             const currentSize = Number((el as any)?.fontSize || toolSettings.fontSize) || 20;
             const newSize = Math.max(8, currentSize - 1);
 
-            setToolSettings({ fontSize: newSize });
+            setToolSettings({ fontSize: newSize, arrowHeadSize: Math.max(5, Math.min(50, (toolSettings.arrowHeadSize || 12) + (isIncrease ? 1 : -1))) });
             if (editingId && el) {
                 const command = new UpdateElementCommand(currentPage, el, { fontSize: newSize }, setElements);
                 getCommandHistory(currentPage).push(command);
@@ -2674,6 +2421,15 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
 
     const hasDocument = !!pdfDoc || !!imageDoc;
+    useIdleAutoSave({
+        documentKey: pdfDoc ? (currentFilePath || currentFileName) : null,
+        dirty: historyRevision !== lastSavedRevision,
+        revision: historyRevision,
+        pendingText: inputPos ? tempText : null,
+        blocked: () => usePdfEditorStore.getState().saveStatus === '저장 중...' || isSaveAsDialogOpen || isExitDialogOpen || isDraggingBox || !!resizingType || isFileDialogOpenRef.current || officeConverting,
+        prepare: () => { if (inputPos) flushSync(() => handleInputComplete()); },
+        save: () => handleSave(undefined, true),
+    });
     if (!hasDocument) {
         return (
             <div
@@ -2804,7 +2560,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                                     incrementRevision();
                                 }
                             }}
-                            disabled={!getCommandHistory(currentPage).canUndo}
+                            disabled={!usePdfEditorStore.getState().histories[currentPage]?.canUndo}
                             className="px-2 py-1 rounded text-[10px] theme-text-main theme-tool-hover disabled:opacity-30 transition-colors uppercase"
                             title="Ctrl + Z"
                         >
@@ -2817,7 +2573,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                                     incrementRevision();
                                 }
                             }}
-                            disabled={!getCommandHistory(currentPage).canRedo}
+                            disabled={!usePdfEditorStore.getState().histories[currentPage]?.canRedo}
                             className="px-2 py-1 rounded text-[10px] theme-text-main theme-tool-hover disabled:opacity-30 transition-colors uppercase"
                             title="Ctrl + Y"
                         >
@@ -2831,6 +2587,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                 {/* Right: Save Controls & Info */}
                 <div className="flex items-center gap-3">
                     <button
+                        title="저장 (PDF·PPT·PPTX는 마지막 작업 30초 후 자동 저장)"
                         onClick={() => handleSave()}
                         className="flex items-center gap-1.5 px-3 py-1.5 theme-btn-primary rounded-lg text-xs font-bold transition-colors"
                     >
@@ -2881,6 +2638,10 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                             className="pdf-guide-canvas"
                         />
 
+                        {activeTool === 'select' && pdfDoc && !isInputActive && (
+                            <PdfTextSelection document={pdfDoc} pageNumber={currentPage} scale={scale}
+                                onSelect={() => setSelectedElements([])} />
+                        )}
                         {/* Floating Text Input */}
                         {isInputActive && inputPos && (
                             <div

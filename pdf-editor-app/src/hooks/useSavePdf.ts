@@ -1,15 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useSettingsStore } from '../store/useSettingsStore';
+import { sha256Hex, toArrayBuffer } from '../utils/bytes';
+import { useCallback, useState, useRef } from 'react';
 import { usePdfEditorStore } from '../store/usePdfEditorStore';
 import { useAppStore } from '../store/useAppStore';
 import { workspaceApiService } from '../services/WorkspaceApiService';
 
-/** Hex-formatted sha-256 of a byte array (used to detect external PowerPoint edits). */
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
-    return Array.from(new Uint8Array(digest))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-}
 
 export const useSavePdf = (
     createEditedPdfBlob: () => Promise<Blob | null>,
@@ -29,8 +24,18 @@ export const useSavePdf = (
         markSaved 
     } = usePdfEditorStore();
 
+    const savingRef = useRef(false);
+
     // 1) 저장 로직
-    const handleSave = useCallback(async (onSuccess?: () => void): Promise<boolean> => {
+    const saveDocument = useCallback(async (onSuccess?: () => void, silent = false): Promise<boolean> => {
+        const revision = usePdfEditorStore.getState().historyRevision;
+        const rasterScale = useSettingsStore.getState().saveQuality;
+        const markSaved = () => {
+            const app = useAppStore.getState();
+            if (app.currentFilePath === currentFilePath && app.currentFileName === currentFileName) {
+                usePdfEditorStore.getState().markSaved(revision);
+            }
+        };
         setSaveStatus('저장 중...');
 
         const anyWindow = window as any;
@@ -84,11 +89,11 @@ export const useSavePdf = (
 
                 const hasChanges = isClean ? true : Object.keys(elementsToApply).length > 0;
                 if (hasChanges) {
-                    const officeFile = new File([baseBytes], originName);
+                    const officeFile = new File([toArrayBuffer(baseBytes)], originName);
                     const pageSizes = await getPageSizes();
                     const editedBytes = await workspaceApiService.saveOfficeEdited(
                         officeFile,
-                        JSON.stringify(elementsToApply),
+                        JSON.stringify(elementsToApply, (key,value) => key === 'style' ? {...value,rasterScale} : value),
                         JSON.stringify(pageSizes)
                     );
 
@@ -99,7 +104,7 @@ export const useSavePdf = (
                             resolve(dataUrl.split(',')[1] || '');
                         };
                         reader.onerror = reject;
-                        reader.readAsDataURL(new Blob([editedBytes], { type: 'application/octet-stream' }));
+                        reader.readAsDataURL(new Blob([toArrayBuffer(editedBytes)], { type: 'application/octet-stream' }));
                     });
 
                     const result = await electronAPI.writeFile({ filePath: officeOriginalPath, data: base64 });
@@ -147,7 +152,7 @@ export const useSavePdf = (
                 const isLocked = /EBUSY|EPERM|ETXTBSY|resource busy|locked|다른 프로그램/i.test(msg);
                 if (isLocked) {
                     setSaveStatus('저장 실패: 파일이 다른 프로그램에서 열려 있습니다');
-                    alert('원본 파일이 다른 프로그램(예: Microsoft PowerPoint)에서 열려 있어 저장할 수 없습니다.\n파일을 닫은 뒤 다시 저장해 주세요.');
+                    if (!silent) alert('원본 파일이 다른 프로그램(예: Microsoft PowerPoint)에서 열려 있어 저장할 수 없습니다.\n파일을 닫은 뒤 다시 저장해 주세요.');
                 } else {
                     setSaveStatus('저장 오류');
                 }
@@ -213,6 +218,7 @@ export const useSavePdf = (
                 await workspaceApiService.saveProjectData(currentFileName, JSON.stringify({ elements }));
 
                 setSaveStatus('저장 완료');
+                markSaved();
                 if (onSuccess) onSuccess();
             }
         } catch (error) {
@@ -225,6 +231,19 @@ export const useSavePdf = (
         return true;
     }, [createEditedPdfBlob, currentFilePath, currentFileName, originalData, elements, currentPage, setSaveStatus, markSaved, officeOriginalPath, officeOriginalExt, officeBakedIds, setOfficeBakedIds, officePristineBytes, officeClean, getPageSizes]);
 
+    const handleSave = useCallback(async (onSuccess?: () => void, silent = false) => {
+        if (savingRef.current || usePdfEditorStore.getState().saveStatus === '저장 중...') return false;
+        savingRef.current = true;
+        try { return await saveDocument(onSuccess, silent); }
+        catch (error) {
+            console.error('[Save] Failed:', error);
+            setSaveStatus('저장 오류');
+            setTimeout(() => setSaveStatus(null), 3000);
+            return false;
+        }
+        finally { savingRef.current = false; }
+    }, [saveDocument, setSaveStatus]);
+
     // 2) 다른 이름으로 저장 다이얼로그
     const openSaveAsDialog = useCallback(() => {
         const base = currentFileName || 'document.pdf';
@@ -234,6 +253,8 @@ export const useSavePdf = (
 
     // 3) 다른 이름으로 저장 확정
     const confirmSaveAs = async (isClosingAfterSaveAs: boolean, onSuccess?: () => void) => {
+        if (savingRef.current) return;
+        const savedRevision = usePdfEditorStore.getState().historyRevision;
         const blob = await createEditedPdfBlob();
         if (!blob) return;
 
@@ -282,7 +303,7 @@ export const useSavePdf = (
 
                     setCurrentFile(result.filePath, newFileName);
                     setSaveStatus('저장 완료');
-                    markSaved();
+                    markSaved(savedRevision);
                     setTimeout(() => setSaveStatus(null), 3000);
                     toggleSaveAsDialog(false);
 

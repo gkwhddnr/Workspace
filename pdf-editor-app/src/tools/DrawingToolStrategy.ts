@@ -1,3 +1,5 @@
+import type { ToolSettings } from '../types/toolSettings';
+export type { ToolSettings } from '../types/toolSettings';
 // DrawingToolStrategy.ts
 // Defines the Strategy interface and the shared DrawingAnnotation data model.
 
@@ -19,15 +21,7 @@ export interface DrawingAnnotation {
     arrowHeadSize?: number; // Size of the arrowhead (length of tips)
 }
 
-export interface ToolSettings {
-    color: string;
-    strokeWidth: number;
-    fontSize: number;
-    fontFamily: string;
-    arrowHeadSize: number;
-    fontWeight: 'normal' | 'bold';
-    textDecoration: '' | 'underline' | 'line-through' | 'underline line-through';
-}
+
 
 /**
  * Strategy Interface

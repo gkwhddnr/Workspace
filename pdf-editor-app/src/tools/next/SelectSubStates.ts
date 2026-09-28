@@ -1,38 +1,17 @@
-// SelectSubStates.ts
-import { PointerEventParams } from './ToolState';
+import type { SelectTool, DragHandle } from './SelectTool';
+import type { PointerEventParams } from './ToolState';
 import { ShapeElement } from '../../models/ShapeElement';
 import { RenderElement } from '../../models/RenderElement';
 import { UpdateElementCommand } from '../../commands/UpdateElementCommand';
-import { DragHandle, hitTestElement, hitTestHandles, mergePoints, getExpandedPoints } from '../../utils/geometry';
-
-/**
- * State Pattern for SelectTool Sub-states
- */
 export interface ISelectSubState {
     onPointerDown(params: PointerEventParams): ISelectSubState;
     onPointerMove(params: PointerEventParams): ISelectSubState;
     onPointerUp(params: PointerEventParams): ISelectSubState;
 }
 
-/**
- * Minimal contract that SelectTool satisfies.
- * Lets sub-states depend on the interface instead of the concrete SelectTool,
- * avoiding a circular import between SelectTool and its sub-states.
- */
-export interface SelectToolLike {
-    getState(): any;
-    onSelectionChange: ((id: string | null, handle: DragHandle | null) => void) | null;
-    getCommandHistory: ((page: number) => any) | null;
-    getTextBlocks: (() => { text: string; rect: [number, number, number, number] }[]) | null;
-    onEditRequest: ((id: string) => void) | null;
-}
-
-/**
- * ── Sub-State: Idle ──
- * Initial state waiting for user interaction.
- */
 export class SelectIdleSubState implements ISelectSubState {
-    constructor(private tool: SelectToolLike) {}
+    constructor(private tool: SelectTool) {}
+
     onPointerDown(params: PointerEventParams): ISelectSubState {
         const { pos, scale } = params;
         const normalizedPos = { x: pos.x / scale, y: pos.y / scale };
@@ -44,7 +23,7 @@ export class SelectIdleSubState implements ISelectSubState {
         if (selectedIds.length === 1) {
             const selected = elements.find((e: RenderElement) => e.id === selectedIds[0]);
             if (selected) {
-                const handle = hitTestHandles(selected, pos, scale);
+                const handle = this.tool.hitTestHandles(selected, pos, scale);
                 if (handle) {
                     if (handle.startsWith('arrow-mid-')) {
                         const idx = parseInt(handle.split('-')[2]);
@@ -67,19 +46,21 @@ export class SelectIdleSubState implements ISelectSubState {
         // 2. Element hit test
         let hitEl: RenderElement | null = null;
         for (let i = elements.length - 1; i >= 0; i--) {
-            if (hitTestElement(elements[i], normalizedPos, scale)) {
+            if (this.tool.hitTestElement(elements[i], normalizedPos, scale)) {
                 hitEl = elements[i];
                 break;
             }
         }
 
         if (hitEl) {
+            // [NEW] Arrow Integration: Ctrl + Click on arrow handle to merge
             if (params.ctrlKey && ((hitEl as any).shapeType === 'arrow' || (hitEl as any).shapeType?.startsWith('arrow-'))) {
-                const handle = hitTestHandles(hitEl, pos, scale);
+                const handle = this.tool.hitTestHandles(hitEl, pos, scale);
                 if (handle === 'arrow-start' || handle === 'arrow-end') {
                     const isEnd1 = handle === 'arrow-end';
                     const hitPoint = (hitEl as any).points[isEnd1 ? (hitEl as any).points.length - 1 : 0];
 
+                    // Find another arrow that shares this endpoint
                     const otherArrowIndex = elements.findIndex((e: RenderElement) => {
                         if (e.id === hitEl!.id || !((e as any).shapeType === 'arrow' || (e as any).shapeType?.startsWith('arrow-'))) return false;
                         const s = e as any;
@@ -92,7 +73,7 @@ export class SelectIdleSubState implements ISelectSubState {
                         const otherArrow = elements[otherArrowIndex] as any;
                         const isEnd2 = Math.hypot(otherArrow.points[otherArrow.points.length - 1].x - hitPoint.x, otherArrow.points[otherArrow.points.length - 1].y - hitPoint.y) < 15 / scale;
                         
-                        const mergedPoints = mergePoints((hitEl as any).points, isEnd1, otherArrow.points, isEnd2);
+                        const mergedPoints = this.tool.mergePoints((hitEl as any).points, isEnd1, otherArrow.points, isEnd2);
 
                         state.setElements(state.currentPage, (prev: RenderElement[]) => {
                             const filtered = prev.filter(e => e.id !== hitEl!.id && e.id !== otherArrow.id);
@@ -123,8 +104,9 @@ export class SelectIdleSubState implements ISelectSubState {
 
             const isAlreadySelected = selectedIds.includes(hitEl.id);
             if (isAlreadySelected && hitEl.type === 'text') {
+                // User Request: 2-click (Click on already selected text) -> Edit
                 this.tool.onEditRequest?.(hitEl.id);
-                return this;
+                return this; // Stay in idle since edit mode is handled by UI
             }
 
             state.setSelectedElements([hitEl.id]);
@@ -151,7 +133,7 @@ export class SelectDraggingSubState implements ISelectSubState {
     private snapPartner: { id: string, isEnd: boolean } | null = null;
 
     constructor(
-        private tool: SelectToolLike,
+        private tool: SelectTool,
         private element: RenderElement,
         private handle: DragHandle,
         startPos: { x: number; y: number }
@@ -169,6 +151,7 @@ export class SelectDraggingSubState implements ISelectSubState {
 
         this.snapPartner = null;
 
+        // Interactive Snapping
         const isArrowHandle = this.handle === 'arrow-start' || this.handle === 'arrow-end' || this.handle.startsWith('arrow-point-');
         if (params.ctrlKey && isArrowHandle) {
             const thresholdPx = 20;
@@ -198,11 +181,12 @@ export class SelectDraggingSubState implements ISelectSubState {
                 const s = el as any;
 
                 if ((s.shapeType === 'arrow' || s.shapeType?.startsWith('arrow-')) && s.points?.length >= 2) {
-                    const expanded = getExpandedPoints(el);
+                    const expanded = this.tool.getExpandedPoints(el);
                     expanded.forEach((p, idx) => {
                         checkCanvas(p.x * scale, p.y * scale, el.id, idx === expanded.length - 1);
                     });
                 } else if (s.x !== undefined && s.width !== undefined) {
+                    // Rect / Circle / Image / Text boxes
                     const { x, y, width: w, height: h } = s;
                     const checkLogical = (lx: number, ly: number) => checkCanvas(lx * scale, ly * scale);
                     checkLogical(x, y);
@@ -286,6 +270,7 @@ export class SelectDraggingSubState implements ISelectSubState {
     onPointerUp(params: PointerEventParams): ISelectSubState {
         const state = this.tool.getState();
 
+        // [NEW] Merge on Drop logic
         if (params.ctrlKey && this.snapPartner) {
             const elements = state.elements[state.currentPage] || [];
             const partner = elements.find((e: any) => e.id === this.snapPartner!.id) as any;
@@ -295,10 +280,11 @@ export class SelectDraggingSubState implements ISelectSubState {
                 const isEnd1 = this.handle === 'arrow-end' || this.handle === 'arrow-point-' + (myLatest.points.length - 1);
                 const isEnd2 = this.snapPartner.isEnd;
 
+                // [NEW] Only merge Head-to-Tail or Tail-to-Head (isEnd1 !== isEnd2)
                 if (isEnd1 !== isEnd2) {
-                    const points1 = getExpandedPoints(myLatest);
-                    const points2 = getExpandedPoints(partner);
-                    const mergedPoints = mergePoints(points1, isEnd1, points2, isEnd2);
+                    const points1 = this.tool.getExpandedPoints(myLatest);
+                    const points2 = this.tool.getExpandedPoints(partner);
+                    const mergedPoints = this.tool.mergePoints(points1, isEnd1, points2, isEnd2);
 
                 state.setElements(state.currentPage, (prev: RenderElement[]) => {
                     const filtered = prev.filter((e: any) => e.id !== this.element.id && e.id !== partner.id);
@@ -326,11 +312,36 @@ export class SelectDraggingSubState implements ISelectSubState {
             }
         }
 
-        if (this.handle !== 'body' && !this.snapPartner) {
-            const history = this.tool.getCommandHistory?.(state.currentPage);
-            if (history) {
-                const cmd = new UpdateElementCommand(state.currentPage, this.element, this.initialSnapshot, state.setElements);
-                history.stack?.push(cmd);
+        // Register an undo command for body moves AND handle resize/endpoint drags.
+        // The live element is already mutated to its final state, so the command is
+        // built from pre-drag (initialSnapshot) and post-drag snapshots and pushed
+        // properly (execute + pointer advance). Skipped only for arrow-merge drops.
+        if (!this.snapPartner) {
+            const s = this.element as any;
+            const finalProps: Record<string, any> = {};
+            if (s.x !== undefined || this.initialSnapshot.x !== undefined) finalProps.x = s.x;
+            if (s.y !== undefined || this.initialSnapshot.y !== undefined) finalProps.y = s.y;
+            if (s.width !== undefined || this.initialSnapshot.width !== undefined) finalProps.width = s.width;
+            if (s.height !== undefined || this.initialSnapshot.height !== undefined) finalProps.height = s.height;
+            if (this.initialSnapshot.points) finalProps.points = s.points?.map((p: { x: number; y: number }) => ({ ...p }));
+
+            const changed = Object.keys(finalProps).some(key => {
+                if (key === 'points') {
+                    const a = this.initialSnapshot.points as { x: number; y: number }[];
+                    const b = finalProps.points as { x: number; y: number }[];
+                    if ((a?.length || 0) !== (b?.length || 0)) return true;
+                    return a.some((p, i) => p.x !== b[i].x || p.y !== b[i].y);
+                }
+                return this.initialSnapshot[key] !== finalProps[key];
+            });
+
+            if (changed) {
+                const history = this.tool.getCommandHistory?.(state.currentPage);
+                if (history) {
+                    const preDrag = { id: this.element.id, ...this.initialSnapshot } as any;
+                    const cmd = new UpdateElementCommand(state.currentPage, preDrag, finalProps, state.setElements);
+                    history.push(cmd);
+                }
             }
         }
         state.incrementRevision();

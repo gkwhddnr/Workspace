@@ -12,8 +12,8 @@ export class CommandHistory {
     /** Execute a command and push it onto the history stack. */
     push(command: Command): void {
         // Discard all redo-able commands after the current pointer.
-        this.stack = this.stack.slice(0, this.pointer + 1);
         command.execute();
+        this.stack = this.stack.slice(0, this.pointer + 1);
         this.stack.push(command);
         this.pointer++;
     }
@@ -29,8 +29,8 @@ export class CommandHistory {
     /** Redo the next command. */
     redo(): boolean {
         if (this.pointer >= this.stack.length - 1) return false;
+        this.stack[this.pointer + 1].execute();
         this.pointer++;
-        this.stack[this.pointer].execute();
         return true;
     }
 

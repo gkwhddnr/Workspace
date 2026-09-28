@@ -29,6 +29,8 @@ export interface PluginDefinition {
 
 // 플러그인이 PDF 편집기에 접근할 수 있는 컨텍스트 (생성 시 주입)
 export interface PluginContext {
+    signal: AbortSignal;
+    addCleanup: (cleanup: () => void | Promise<void>) => () => void;
     api: {
         // 편집기 공용 스토어 (요소 추가/삭제/이동, 페이지 탐색 등)
         editor: typeof usePdfEditorStore;
@@ -57,6 +59,8 @@ export interface PluginRegistryEntry {
     source: PluginSource;
     // 실행/활성화 상태
     active: boolean;
+    status?: "inactive" | "activating" | "active" | "deactivating";
+    evaluated?: boolean;
     // 원본 코드 (스크립트 소스)
     code: string;
     error?: string;

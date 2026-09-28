@@ -1,11 +1,8 @@
 import { create } from 'zustand';
-import {
-    DocumentChangePayload,
-    PluginDefinition,
-    PluginRegistryEntry,
-    PluginSource,
-} from '../plugins/types';
+import type { DocumentChangePayload, PluginDefinition, PluginRegistryEntry } from '../plugins/types';
 import { createPluginContext, evaluatePluginCode } from '../plugins/pluginRuntime';
+import { PluginScope } from '../plugins/PluginScope';
+import { savePersistedPlugins } from '../plugins/pluginStorage';
 
 export interface PluginNotification {
     id: string;
@@ -15,276 +12,221 @@ export interface PluginNotification {
     type: 'info' | 'success' | 'error' | 'warning';
 }
 
+type EntryInput = Omit<PluginRegistryEntry, 'active' | 'context' | 'installedAt' | 'error' | 'status'> & {
+    active?: boolean;
+    installedAt?: number;
+};
+
 interface PluginState {
     entries: PluginRegistryEntry[];
-    // 플러그인 실행 시 표시할 "렌더링" 정보 (패널에 표시)
-    activeView: {
-        pluginId: string;
-        html?: string;
-        componentContainer?: HTMLElement;
-    } | null;
+    activeView: { pluginId: string; html?: string; componentContainer?: HTMLElement } | null;
     notifications: PluginNotification[];
-    // 실행 중인 플러그인 (onRun 호출 중)
     runningPluginId: string | null;
-
-    registerEntry: (entry: Omit<PluginRegistryEntry, 'active' | 'context' | 'installedAt' | 'error'> & { active?: boolean; installedAt?: number }) => void;
-    updateDefinition: (id: string, definition: PluginDefinition) => void;
-    toggleActive: (id: string) => void;
-    removeEntry: (id: string) => void;
+    registerEntry: (entry: EntryInput) => Promise<void>;
+    updateDefinition: (id: string, definition: PluginDefinition) => Promise<void>;
+    setActive: (id: string, active: boolean) => Promise<void>;
+    toggleActive: (id: string) => Promise<void>;
+    removeEntry: (id: string) => Promise<void>;
     runPlugin: (id: string) => Promise<void>;
     stopView: () => void;
-    setActiveView: (pluginId: string, payload?: { html?: string; componentContainer?: HTMLElement }) => void;
-    pushNotification: (n: PluginNotification) => void;
+    setActiveView: (id: string, payload?: { html?: string; componentContainer?: HTMLElement }) => void;
+    pushNotification: (notification: PluginNotification) => void;
     dismissNotification: (id: string) => void;
     clearNotifications: () => void;
     dispatchDocumentChange: (payload: DocumentChangePayload) => void;
 }
 
-// localStorage 영속화 (설치된 플러그인 코드 + 활성 상태 보존)
-const STORAGE_KEY = 'pdfEditorPlugins';
-const MAX_PERSIST_CODE = 200_000;
+// Operations for a plugin run in order; disabling aborts its resources immediately.
+const queues = new Map<string, Promise<void>>();
+const desired = new Map<string, boolean>();
+const scopes = new Map<string, PluginScope>();
+const runTokens = new Map<string, symbol>();
 
-interface PersistedPlugin {
-    code: string;
-    active: boolean;
-    source: PluginSource;
-    installedAt: number;
-    name: string;
-    id: string;
+function enqueue(id: string, task: () => Promise<void>): Promise<void> {
+    const next = (queues.get(id) || Promise.resolve()).then(task).catch(error => {
+        reportError(id, error);
+    });
+    queues.set(id, next);
+    void next.finally(() => { if (queues.get(id) === next) queues.delete(id); });
+    return next;
 }
 
-function loadPersisted(): PersistedPlugin[] {
+function updateEntry(id: string, update: Partial<PluginRegistryEntry>) {
+    usePluginStore.setState(state => ({
+        entries: state.entries.map(entry => entry.definition.id === id ? { ...entry, ...update } : entry),
+    }));
+}
+
+function persist() {
+    savePersistedPlugins(usePluginStore.getState().entries);
+}
+
+function reportError(id: string, error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    updateEntry(id, { error: message });
+    console.warn('[Plugin:' + id + ']', error);
+}
+
+function cancelResources(id: string) {
+    scopes.get(id)?.cancel();
+    runTokens.delete(id);
+    usePluginStore.setState(state => ({
+        entries: state.entries.map(entry => entry.definition.id === id ? { ...entry, active: false } : entry),
+        activeView: state.activeView?.pluginId === id ? null : state.activeView,
+        runningPluginId: state.runningPluginId === id ? null : state.runningPluginId,
+    }));
+}
+
+async function deactivate(id: string) {
+    const entry = usePluginStore.getState().entries.find(e => e.definition.id === id);
+    const scope = scopes.get(id);
+    if (!entry?.context && !scope) return;
+    cancelResources(id);
+    updateEntry(id, { status: 'deactivating' });
     try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
+        if (entry?.context) await entry.definition.hooks?.onDeactivate?.(entry.context);
+    } catch (error) {
+        reportError(id, error);
+    } finally {
+        await scope?.dispose();
+        if (scopes.get(id) === scope) scopes.delete(id);
+        updateEntry(id, { context: undefined, active: false, status: 'inactive' });
     }
 }
 
-function savePersisted(entries: PluginRegistryEntry[]) {
-    const persisted: PersistedPlugin[] = entries
-        .filter(e => e.source.kind === 'builtin' || e.code.length <= MAX_PERSIST_CODE)
-        .map(e => ({
-            code: e.code,
-            active: e.active,
-            source: e.source,
-            installedAt: e.installedAt,
-            name: e.definition.name,
-            id: e.definition.id,
-        }));
+async function reconcile(id: string) {
+    let entry = usePluginStore.getState().entries.find(e => e.definition.id === id);
+    if (!entry) return;
+    if (!desired.get(id)) {
+        await deactivate(id);
+        updateEntry(id, { active: false, status: 'inactive' });
+        persist();
+        return;
+    }
+    if (entry.active && entry.context && !entry.context.signal.aborted) return;
+    await deactivate(id);
+    if (!desired.get(id)) return;
+
+    // Disabled restored scripts remain metadata until explicitly enabled.
+    if (entry.source.kind !== 'builtin' && entry.code && !entry.evaluated) {
+        const result = evaluatePluginCode(entry.code, entry.source);
+        if (!result.definition || result.definition.id !== id) {
+            desired.set(id, false);
+            updateEntry(id, { status: 'inactive', active: false });
+            reportError(id, result.error || '플러그인 ID가 저장된 항목과 다릅니다.');
+            persist();
+            return;
+        }
+        updateEntry(id, { definition: result.definition, evaluated: true });
+        entry = usePluginStore.getState().entries.find(e => e.definition.id === id)!;
+    }
+
+    const scope = new PluginScope();
+    scopes.set(id, scope);
+    const context = createPluginContext(entry, scope);
+    updateEntry(id, { context, status: 'activating', error: undefined });
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
-    } catch (e) {
-        console.warn('[PluginStore] 영속화 실패:', e);
+        await entry.definition.hooks?.onActivate?.(context);
+        if (scope.signal.aborted || !desired.get(id)) {
+            await deactivate(id);
+            return;
+        }
+        updateEntry(id, { active: true, status: 'active' });
+        if (entry.definition.render) usePluginStore.getState().setActiveView(id);
+    } catch (error) {
+        desired.set(id, false);
+        reportError(id, error);
+        await deactivate(id);
+    } finally {
+        persist();
     }
 }
 
 export const usePluginStore = create<PluginState>((set, get) => ({
-    entries: [],
-    activeView: null,
-    notifications: [],
-    runningPluginId: null,
+    entries: [], activeView: null, notifications: [], runningPluginId: null,
 
-    registerEntry: (entry) => {
-        const full: PluginRegistryEntry = {
-            ...entry,
-            active: entry.active ?? false,
-            installedAt: entry.installedAt ?? Date.now(),
-        };
-        set(s => {
-            const exists = s.entries.find(e => e.definition.id === entry.definition.id);
-            if (exists) {
-                // 이미 있으면 업데이트
-                return {
-                    entries: s.entries.map(e =>
-                        e.definition.id === entry.definition.id ? full : e
-                    ),
-                };
-            }
-            return { entries: [...s.entries, full] };
+    registerEntry: entry => {
+        const id = entry.definition.id;
+        const existing = get().entries.find(e => e.definition.id === id);
+        if (existing?.source.kind === 'builtin' && entry.source.kind !== 'builtin') {
+            return Promise.reject(new Error('내장 플러그인 ID는 외부 플러그인에서 사용할 수 없습니다.'));
+        }
+        const active = entry.active ?? desired.get(id) ?? existing?.active ?? false;
+        desired.set(id, active);
+        cancelResources(id);
+        return enqueue(id, async () => {
+            await deactivate(id);
+            const full: PluginRegistryEntry = {
+                ...entry, active: false, status: 'inactive',
+                installedAt: entry.installedAt ?? existing?.installedAt ?? Date.now(),
+            };
+            set(state => ({ entries: [
+                ...state.entries.filter(e => e.definition.id !== id), full,
+            ] }));
+            await reconcile(id);
+            persist();
         });
-        savePersisted(get().entries);
     },
 
-    updateDefinition: (id, definition) =>
-        set(s => ({
-            entries: s.entries.map(e =>
-                e.definition.id === id ? { ...e, definition } : e
-            ),
-        })),
-
-    toggleActive: (id) => {
+    updateDefinition: (id, definition) => {
         const entry = get().entries.find(e => e.definition.id === id);
-        if (!entry) return;
-        const nextActive = !entry.active;
-
-        if (!nextActive) {
-            // 비활성화 시 정리 훅 호출
-            try {
-                entry.definition.hooks?.onDeactivate?.(entry.context ?? createPluginContext(entry));
-            } catch (e) {
-                console.warn('[Plugin] onDeactivate 오류:', e);
-            }
-        } else {
-            // 활성화 시 컨텍스트 생성 + onActivate 호출
-            const ctx = createPluginContext({ ...entry, active: true });
-            try {
-                entry.definition.hooks?.onActivate?.(ctx);
-            } catch (e) {
-                console.warn('[Plugin] onActivate 오류:', e);
-            }
-            set(s => ({
-                entries: s.entries.map(e =>
-                    e.definition.id === id
-                        ? { ...e, active: true, context: ctx, error: undefined }
-                        : e
-                ),
-            }));
-            savePersisted(get().entries);
-            // 활성화 즉시 패널(렌더러) 표시 — 활성/비활성 토글이 실제로 동작함을 보여줍니다.
-            if (entry.definition.render) get().setActiveView(id);
-            return;
-        }
-
-        set(s => ({
-            entries: s.entries.map(e =>
-                e.definition.id === id && e.active
-                    ? { ...e, active: false, context: undefined }
-                    : e
-            ),
-            activeView: s.activeView?.pluginId === id ? null : s.activeView,
-        }));
-        savePersisted(get().entries);
+        return entry ? get().registerEntry({ ...entry, definition, active: desired.get(id) ?? entry.active }) : Promise.resolve();
     },
 
-    removeEntry: (id) => {
-        const entry = get().entries.find(e => e.definition.id === id);
-        if (entry?.active) {
-            try {
-                entry.definition.hooks?.onDeactivate?.(entry.context ?? createPluginContext(entry));
-            } catch (e) {
-                console.warn('[Plugin] onDeactivate 오류:', e);
-            }
-        }
-        set(s => ({
-            entries: s.entries.filter(e => e.definition.id !== id),
-            activeView: s.activeView?.pluginId === id ? null : s.activeView,
-        }));
-        savePersisted(get().entries);
+    setActive: (id, active) => {
+        if (!get().entries.some(e => e.definition.id === id)) return Promise.resolve();
+        desired.set(id, active);
+        if (!active) cancelResources(id);
+        return enqueue(id, () => reconcile(id));
+    },
+    toggleActive: id => get().setActive(id, !(desired.get(id) ?? get().entries.find(e => e.definition.id === id)?.active)),
+
+    removeEntry: id => {
+        desired.set(id, false);
+        cancelResources(id);
+        return enqueue(id, async () => {
+            await deactivate(id);
+            set(state => ({ entries: state.entries.filter(e => e.definition.id !== id) }));
+            desired.delete(id);
+            persist();
+        });
     },
 
-    runPlugin: async (id) => {
+    runPlugin: async id => {
         const entry = get().entries.find(e => e.definition.id === id);
-        if (!entry) return;
-        if (!entry.active) {
-            get().pushNotification({
-                id: `disabled-${id}-${Date.now()}`,
-                pluginId: id,
-                pluginName: entry.definition.name,
-                message: '비활성화된 플러그인입니다. 실행 전에 활성화해 주세요.',
-                type: 'warning',
-            });
-            return;
-        }
-        const ctx = entry.context ?? createPluginContext(entry);
+        if (!entry?.active || !entry.context || get().runningPluginId) return;
+        const context = entry.context;
+        const token = Symbol(id);
+        runTokens.set(id, token);
         set({ runningPluginId: id });
         try {
-            if (entry.definition.render) {
-                // 렌더러 지원 시
-                const render = entry.definition.render;
-                if (render.kind === 'html') {
-                    get().setActiveView(id, { html: render.html });
-                } else if (render.kind === 'react') {
-                    // React 컴포넌트 렌더러: 화면(메인 레이아웃)에서 activeView 기반으로 렌더링
-                    get().setActiveView(id);
-                }
-                // component 렌더러는 mount 시점에 컨테이너가 필요하므로 패널에서 처리
-            }
-            await entry.definition.hooks?.onRun?.(ctx);
-        } catch (e) {
-            const error = e instanceof Error ? e.message : String(e);
-            set(s => ({
-                entries: s.entries.map(x =>
-                    x.definition.id === id ? { ...x, error } : x
-                ),
-            }));
-            get().pushNotification({
-                id: `err-${id}-${Date.now()}`,
-                pluginId: id,
-                pluginName: entry.definition.name,
-                message: `플러그인 실행 오류: ${error}`,
-                type: 'error',
-            });
+            if (entry.definition.render) get().setActiveView(id);
+            await entry.definition.hooks?.onRun?.(context);
+        } catch (error) {
+            if (!context.signal.aborted) reportError(id, error);
         } finally {
-            set({ runningPluginId: null });
+            if (runTokens.get(id) === token) {
+                runTokens.delete(id);
+                set(state => ({ runningPluginId: state.runningPluginId === id ? null : state.runningPluginId }));
+            }
         }
     },
 
     stopView: () => set({ activeView: null }),
-
-    setActiveView: (pluginId, payload) =>
-        set({ activeView: { pluginId, ...payload } }),
-
-    pushNotification: (n) =>
-        set(s => ({ notifications: [n, ...s.notifications].slice(0, 20) })),
-
-    dismissNotification: (id) =>
-        set(s => ({
-            notifications: s.notifications.filter(n => n.id !== id),
-        })),
-
+    setActiveView: (id, payload) => {
+        if (get().entries.some(e => e.definition.id === id && e.active)) {
+            set({ activeView: { pluginId: id, ...payload } });
+        }
+    },
+    pushNotification: notification => set(state => ({ notifications: [notification, ...state.notifications].slice(0, 20) })),
+    dismissNotification: id => set(state => ({ notifications: state.notifications.filter(n => n.id !== id) })),
     clearNotifications: () => set({ notifications: [] }),
-
-    dispatchDocumentChange: (payload) => {
-        get().entries.forEach(entry => {
-            if (!entry.active) return;
-            try {
-                entry.definition.hooks?.onDocumentChange?.(
-                    entry.context ?? createPluginContext(entry),
-                    payload
-                );
-            } catch (e) {
-                console.warn('[Plugin] onDocumentChange 오류:', e);
-            }
-        });
+    dispatchDocumentChange: payload => {
+        for (const entry of get().entries) {
+            if (!entry.active || !entry.context || entry.context.signal.aborted) continue;
+            void Promise.resolve().then(() => {
+                if (!entry.context!.signal.aborted) return entry.definition.hooks?.onDocumentChange?.(entry.context!, payload);
+            }).catch(error => { if (!entry.context!.signal.aborted) reportError(entry.definition.id, error); });
+        }
     },
 }));
-
-// 마운트 시 저장된 외부 플러그인 복원
-function restorePersistedPlugins() {
-    const persisted = loadPersisted();
-    const pluginStore = usePluginStore.getState();
-    persisted.forEach(p => {
-        if (p.source.kind === 'builtin') {
-            // 빌트인 플러그인: 정의는 앱 코드가 등록하므로, 활성 상태만 먼저 복원하고
-            // 이후 registerPlugin 호출 시 render/hooks 정의가 보강된다.
-            pluginStore.registerEntry({
-                definition: { id: p.id, name: p.name, version: '', description: '' },
-                source: p.source,
-                code: '',
-                active: p.active,
-                installedAt: p.installedAt,
-            });
-            return;
-        }
-        if (!p.code) return;
-        const result = evaluatePluginCode(p.code, p.source);
-        if (result.definition && result.definition.id === p.id) {
-            pluginStore.registerEntry({
-                definition: result.definition,
-                source: p.source,
-                code: p.code,
-                active: p.active,
-                installedAt: p.installedAt,
-            });
-        }
-    });
-}
-
-// 상태 초기화 직후 복원 실행 (브라우저에서만)
-if (typeof window !== 'undefined') {
-    restorePersistedPlugins();
-}

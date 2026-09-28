@@ -6,11 +6,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openFileDialog: (options) => ipcRenderer.invoke('dialog:openFile', options),
   saveFileDialog: (data) => ipcRenderer.invoke('dialog:saveFile', data),
   selectFolderDialog: () => ipcRenderer.invoke('dialog:selectFolder'),
+  openBackupFolder: () => ipcRenderer.invoke('backup:openFolder'),
   
   // 파일 시스템
   readFile: (filePath) => ipcRenderer.invoke('file:read', filePath),
   writeFile: (data) => ipcRenderer.invoke('file:write', data),
   autoSave: (data) => ipcRenderer.invoke('file:autoSave', data),
+  
+  // 터미널 스킬 규칙 명세서 (AGENTS.md)
+  skillReadRules: () => ipcRenderer.invoke('skill:readRules'),
+  skillAppendRule: (text) => ipcRenderer.invoke('skill:appendRule', text),
   
   // AI
   aiRequest: (request) => ipcRenderer.invoke('ai:request', request),

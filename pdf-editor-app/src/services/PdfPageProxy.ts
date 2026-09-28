@@ -10,7 +10,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 export class PdfPageProxy {
     private realPage: pdfjsLib.PDFPageProxy | null = null;
     private renderCache: HTMLCanvasElement | null = null;
-    private isLoading: boolean = false;
+    private pendingPage: Promise<pdfjsLib.PDFPageProxy> | null = null;
 
     constructor(
         private pdfDoc: pdfjsLib.PDFDocumentProxy,
@@ -19,25 +19,26 @@ export class PdfPageProxy {
 
     /**
      * Gets the real page, loading it if necessary.
+     *
+     * Concurrent callers share the same in-flight load promise, so if the
+     * underlying getPage() fails, EVERY caller receives the real rejection
+     * (instead of a busy-wait race that hands back `null`).
      */
-    async getPage(): Promise<pdfjsLib.PDFPageProxy> {
-        if (this.realPage) return this.realPage;
-        
-        if (this.isLoading) {
-            // Wait-and-retry logic or use a proper promise management
-            while (this.isLoading) {
-                await new Promise(r => setTimeout(r, 100));
-            }
-            return this.realPage!;
+    getPage(): Promise<pdfjsLib.PDFPageProxy> {
+        if (this.realPage) return Promise.resolve(this.realPage);
+
+        if (!this.pendingPage) {
+            this.pendingPage = this.pdfDoc.getPage(this.pageNumber)
+                .then((page) => {
+                    this.realPage = page;
+                    return page;
+                })
+                .finally(() => {
+                    this.pendingPage = null;
+                });
         }
 
-        this.isLoading = true;
-        try {
-            this.realPage = await this.pdfDoc.getPage(this.pageNumber);
-            return this.realPage;
-        } finally {
-            this.isLoading = false;
-        }
+        return this.pendingPage;
     }
 
     /**
@@ -55,9 +56,9 @@ export class PdfPageProxy {
             // (Optional) add intent: 'display' or 'print'
         });
 
-        renderTask.promise.then(() => {
+        void renderTask.promise.then(() => {
             if (onComplete) onComplete();
-        });
+        }, () => { /* The caller owns renderTask.promise and handles cancellation/errors. */ });
 
         return renderTask;
     }

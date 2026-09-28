@@ -1,3 +1,4 @@
+import type { PluginScope } from './PluginScope';
 import { usePdfEditorStore } from '../store/usePdfEditorStore';
 import { useAppStore } from '../store/useAppStore';
 import { usePluginStore } from '../store/usePluginStore';
@@ -23,8 +24,10 @@ declare global {
  * 플러그인 스크립트가 접근할 수 있는 컨텍스트를 생성한다.
  * 각 플러그인마다 고유한 컨텍스트를 만들어 격리한다.
  */
-export function createPluginContext(entry: PluginRegistryEntry): PluginContext {
+export function createPluginContext(entry: PluginRegistryEntry, scope: PluginScope): PluginContext {
     const ctx: PluginContext = {
+        signal: scope.signal,
+        addCleanup: scope.addCleanup,
         api: {
             editor: usePdfEditorStore,
             app: useAppStore,
@@ -33,6 +36,7 @@ export function createPluginContext(entry: PluginRegistryEntry): PluginContext {
             console.log(`[Plugin:${entry.definition.name}]`, message, data ?? '');
         },
         notify: (message, type = 'info') => {
+            if (scope.signal.aborted) return;
             usePluginStore.getState().pushNotification({
                 id: `${entry.definition.id}-${Date.now()}`,
                 pluginId: entry.definition.id,
@@ -42,6 +46,22 @@ export function createPluginContext(entry: PluginRegistryEntry): PluginContext {
             });
         },
     };
+    if (entry.definition.hooks?.onDocumentChange) {
+        const notifyChange = (payload: import("./types").DocumentChangePayload) => {
+            void Promise.resolve().then(() => {
+                if (!scope.signal.aborted) return entry.definition.hooks?.onDocumentChange?.(ctx, payload);
+            }).catch(error => { if (!scope.signal.aborted) console.warn("[Plugin] Document hook failed:", error); });
+        };
+        scope.addCleanup(usePdfEditorStore.subscribe((next, previous) => {
+            if (next.docType !== previous.docType) notifyChange({ type: "document" });
+            if (next.currentPage !== previous.currentPage) notifyChange({ type: "page", page: next.currentPage });
+            if (next.elements !== previous.elements || next.historyRevision !== previous.historyRevision) notifyChange({ type: "elements" });
+            if (next.selectedElementIds !== previous.selectedElementIds) notifyChange({ type: "selection" });
+        }));
+        scope.addCleanup(useAppStore.subscribe((next, previous) => {
+            if (next.pdfOriginalData !== previous.pdfOriginalData) notifyChange({ type: "document" });
+        }));
+    }
     return ctx;
 }
 
@@ -51,29 +71,14 @@ export function createPluginContext(entry: PluginRegistryEntry): PluginContext {
  * - 플러그인은 마지막에 `export default { ... }` 형태가 아니라,
  *   전역에 `registerPlugin(definition)` 을 호출해 등록한다.
  */
-const BUILTIN_REGISTRATIONS: Record<string, PluginDefinition> = {};
-
-export function registerPlugin(definition: PluginDefinition) {
-    BUILTIN_REGISTRATIONS[definition.id] = definition;
-    const pluginStore = usePluginStore.getState();
-    // 이미 있으면 업데이트만
-    const existing = pluginStore.entries.find(e => e.definition.id === definition.id);
-    if (existing) {
-        pluginStore.updateDefinition(definition.id, definition);
-    } else {
-        pluginStore.registerEntry({
-            definition,
-            source: { kind: 'builtin' },
-            active: false,
-            code: '',
-            installedAt: Date.now(),
-        });
-    }
+export function registerPlugin(definition: PluginDefinition): Promise<void> {
+    return usePluginStore.getState().registerEntry({
+        definition, source: { kind: 'builtin' }, code: '', evaluated: true,
+    });
 }
-
 /**
  * 외부 스크립트를 평가해 등록된 플러그인 정의를 수집한다.
- * 평가된 코드는 신뢰할 수 없는 코드이므로 try/catch로 격리한다.
+ * Errors are captured; scripts still run with host access, not in a sandbox.
  */
 export function evaluatePluginCode(
     code: string,
@@ -122,9 +127,5 @@ export function evaluatePluginCode(
 
     // 마지막에 등록된 정의 사용 (여러 개 등록 시 마지막 우선)
     const def = captured[captured.length - 1] ?? null;
-    if (def) {
-        // 글로벌 등록에도 반영
-        registerPlugin(def);
-    }
-    return { definition: def };
+    return def ? { definition: def } : { definition: null, error: 'registerPlugin 호출이 없습니다.' };
 }
