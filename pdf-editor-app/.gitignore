@@ -58,3 +58,6 @@ Thumbs.db
 .OpenCode/
 .kiro/
 .vscode/
+# User document originals (keep local, never commit)
+backend/data/originals/
+backend/data/originals-office/
