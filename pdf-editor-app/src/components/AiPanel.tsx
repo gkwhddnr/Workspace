@@ -11,6 +11,7 @@ import { runAiAgent, buildAgentToolInstructions, hasTerminalForAgent } from '../
 import type { AiAgentContext } from '../services/AiContextService';
 import { buildAiAgentContext } from '../services/AiContextService';
 import { describeTheme } from '../services/AiActions';
+import { readCachedModelCatalog, refreshModelCatalog } from '../services/AiModelCatalogService';
 
 // ─── AI 제공자 설정 ─────────────────────────────────────────────────────────────
 const PROVIDERS: {
@@ -152,6 +153,7 @@ const AiPanel: React.FC = () => {
     } = useAppStore();
 
     const [input, setInput] = useState('');
+    const [modelCatalog, setModelCatalog] = useState(() => readCachedModelCatalog());
     const [isLoading, setIsLoading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [threadsOpen, setThreadsOpen] = useState(false);
@@ -680,7 +682,7 @@ ${ctxText.text}
                                         onChange={e => setAiModel(provider.id as AiProvider, e.target.value)}
                                         className="w-full text-[11px] px-3 py-1.5 rounded-lg border theme-border theme-bg-glass theme-text-main outline-none cursor-pointer"
                                     >
-                                        {provider.modelOptions.map(m => (
+                                        {(modelCatalog[provider.id] ?? provider.modelOptions).map(m => (
                                             <option key={m.value} value={m.value}>{m.label}</option>
                                         ))}
                                     </select>

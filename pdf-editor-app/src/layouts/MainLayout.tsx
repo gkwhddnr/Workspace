@@ -34,6 +34,16 @@ const AI_WEIGHT = 2;
 
 const MainLayout: React.FC = () => {
     const tabWeights = useSettingsStore(state => state.tabWeights);
+    const bodyFont = useSettingsStore(state => state.bodyFont);
+    const headingFont = useSettingsStore(state => state.headingFont);
+    const bodyWeight = useSettingsStore(state => state.bodyWeight);
+    const headingWeight = useSettingsStore(state => state.headingWeight);
+    useEffect(() => {
+        document.body.style.setProperty('--font-body', bodyFont);
+        document.body.style.setProperty('--font-heading', headingFont);
+        document.body.style.setProperty('--weight-body', String(bodyWeight));
+        document.body.style.setProperty('--weight-heading', String(headingWeight));
+    }, [bodyFont, headingFont, bodyWeight, headingWeight]);
     const mainGroup = useGroupRef();
     const otherGroup = useGroupRef();
     const {

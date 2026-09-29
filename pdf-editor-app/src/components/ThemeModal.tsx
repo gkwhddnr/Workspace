@@ -11,10 +11,17 @@ interface ThemeModalProps {
 
 const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
     const { themeMode, setThemeMode, customThemeColor, setCustomThemeColor } = useAppStore();
-    const {tabWeights,setTabWeight,rememberPlugins,setRememberPlugins,saveQuality,setSaveQuality} = useSettingsStore();
+    const {tabWeights,setTabWeight,rememberPlugins,setRememberPlugins,saveQuality,setSaveQuality,bodyFont,headingFont,bodyWeight,headingWeight,setTypography} = useSettingsStore();
     const {toolSettings,setToolSettings,customColors,addCustomColor,removeCustomColor} = useAppStore();
     const [isVisible, setIsVisible] = useState(false);
     const colorPreviewRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        document.body.style.setProperty('--font-body', bodyFont);
+        document.body.style.setProperty('--font-heading', headingFont);
+        document.body.style.setProperty('--weight-body', String(bodyWeight));
+        document.body.style.setProperty('--weight-heading', String(headingWeight));
+    }, [bodyFont, headingFont, bodyWeight, headingWeight]);
 
     useEffect(() => {
         if (themeMode === 'custom' && colorPreviewRef.current) {
@@ -95,6 +102,16 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                             aria-label={tab.label+' 공간 크기'} onChange={e=>setTabWeight(tab.id,Number(e.target.value))} className="flex-1 min-w-0"/>
                         <output className="w-6 text-right tabular-nums">{tabWeights[tab.id]}</output>
                     </label>)}
+                </section>
+                <section className="px-6 pt-5 space-y-3">
+                    <h3 className="font-bold">상세 테마 글꼴</h3>
+                    <p className="text-xs text-slate-500">IDE처럼 본문과 대주제·소주제의 글꼴과 굵기를 따로 지정합니다.</p>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                        <label>본문 글꼴<select value={bodyFont} onChange={e=>setTypography({bodyFont:e.target.value})} className="w-full mt-1 border rounded px-2 py-1"><option>Inter</option><option>Noto Sans KR</option><option>Segoe UI</option><option>Malgun Gothic</option><option>Consolas</option></select></label>
+                        <label>제목 글꼴<select value={headingFont} onChange={e=>setTypography({headingFont:e.target.value})} className="w-full mt-1 border rounded px-2 py-1"><option>Inter</option><option>Noto Sans KR</option><option>Segoe UI</option><option>Malgun Gothic</option><option>Consolas</option></select></label>
+                        <label>본문 굵기<input type="range" min="300" max="700" step="100" value={bodyWeight} onChange={e=>setTypography({bodyWeight:Number(e.target.value)})} className="w-full"/><output>{bodyWeight}</output></label>
+                        <label>제목 굵기<input type="range" min="400" max="900" step="100" value={headingWeight} onChange={e=>setTypography({headingWeight:Number(e.target.value)})} className="w-full"/><output>{headingWeight}</output></label>
+                    </div>
                 </section>
                 <section className="px-6 pt-5 space-y-3">
                     <h3 className="font-bold">저장 화질</h3>
