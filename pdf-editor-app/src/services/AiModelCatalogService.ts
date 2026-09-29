@@ -23,6 +23,8 @@ export async function refreshModelCatalog(keys: Partial<Record<AiProvider, strin
     const result: ModelCatalog = {};
     const requests: Promise<void>[] = [];
     if (keys.chatgpt) requests.push(axios.get('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${keys.chatgpt}` }, timeout: 8000 }).then(r => { result.chatgpt = normalize(r.data?.data); }).catch(() => {}));
+    if (keys.claude) requests.push(axios.get('https://api.anthropic.com/v1/models', { headers: { 'x-api-key': keys.claude, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }, timeout: 8000 }).then(r => { result.claude = normalize(r.data?.data); }).catch(() => {}));
+    if (keys.factchat) requests.push(axios.get('https://factchat.mindlogic-kr-api.com/v1/gateway/models/', { headers: { Authorization: `Bearer ${keys.factchat}` }, timeout: 8000 }).then(r => { result.factchat = normalize(r.data?.data); }).catch(() => {}));
     if (keys.gemini) requests.push(axios.get('https://generativelanguage.googleapis.com/v1beta/models', { params: { key: keys.gemini, pageSize: 100 }, timeout: 8000 }).then(r => { result.gemini = normalize(r.data?.models); }).catch(() => {}));
     // Anthropic and FactChat do not expose a stable browser-safe catalog endpoint; retain curated options.
     await Promise.all(requests);
