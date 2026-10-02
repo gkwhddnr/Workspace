@@ -64,3 +64,23 @@ backend/data/originals-office/
 
 # Local work history (keep locally, do not push)
 logs/
+
+# Local build caches and database/work-history files
+backend/.gradle/
+backend/bin/
+backend/data/
+backend/*.log
+backend/*.log.err
+backend/temp-test.pdf
+docs/EDITING_UPDATES.md
+docs/REFACTOR_REVIEW.md
+.Codex/
+AGENTS.md
+recovery/
+
+# Locally converted documents and diagnostic scripts
+/*.pdf
+/*.ppt
+/*.pptx
+/*.bin
+/*.ps1
