@@ -1,7 +1,7 @@
 {
   "name": "pdf-editor-app",
   "private": true,
-  "version": "1.6.0",
+  "version": "1.7.0",
   "scripts": {
     "dev": "cross-env NODE_OPTIONS=--no-deprecation VITE_CJS_IGNORE_WARNING=1 concurrently \"vite\" \"wait-on http://localhost:5173 && electron ./electron/main.js\"",
     "dev:vite": "vite",
@@ -17,7 +17,8 @@
     "test:annotations": "node scripts/test-ai-annotations.cjs",
     "test:text-selection": "electron scripts/test-text-selection.cjs",
     "test:cache": "node scripts/test-text-cache.cjs",
-    "verify": "npm run typecheck && npm run test:core && npm run test:cache && npm run test:annotations && npm run test:text-selection && npm run test:pdfjs && npm run test:ui && npm run build"
+    "verify": "npm run typecheck && npm run test:core && npm run test:cache && npm run test:annotations && npm run test:text-selection && npm run test:pdfjs && npm run test:ui && npm run test:plugins && npm run build",
+    "test:plugins": "node scripts/test-plugin-editor.cjs && node scripts/test-ai-plugin-drafts.cjs && electron scripts/test-plugin-ai-view.cjs"
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",

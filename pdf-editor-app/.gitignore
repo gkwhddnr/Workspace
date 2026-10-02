@@ -84,3 +84,4 @@ recovery/
 /*.pptx
 /*.bin
 /*.ps1
+/scripts/check-font-render.cjs

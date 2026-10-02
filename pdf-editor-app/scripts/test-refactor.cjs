@@ -127,4 +127,3 @@ async function main() {
     console.log('PASS: plugin activation/cancellation/reload/restoration, subscription cleanup, failures, history and PTY lifecycle');
 }
 main().catch(error=>{console.error(error);process.exitCode=1});
-
