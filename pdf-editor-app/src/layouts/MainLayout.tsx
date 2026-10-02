@@ -1,12 +1,11 @@
 import { useSettingsStore } from '../store/useSettingsStore';
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { shallow } from 'zustand/shallow';
 import { Group, Panel, Separator, useGroupRef } from 'react-resizable-panels';
 import { useAppStore, ActiveTab, PRESET_COLORS, DrawingTool } from '../store/useAppStore';
 import Sidebar from '../components/Sidebar';
 import PdfViewer from '../components/viewers/PdfViewer';
 const WebViewer = lazyPanel(() => import('../components/viewers/WebViewer'));
-const CodeViewer = lazyPanel(() => import('../components/viewers/CodeViewer'));
 const ThemeModal = lazyPanel(() => import('../components/ThemeModal'));
 const FlattenModal = lazyPanel(() => import('../components/FlattenModal'));
 const ShortcutsModal = lazyPanel(() => import('../components/ShortcutsModal'));
@@ -21,29 +20,44 @@ import { useDockDrag } from '../hooks/useDockDrag';
 import { useAppShortcuts } from '../hooks/useAppShortcuts';
 import { TABS } from '../config/tabs';
 import {
-    FileText, Globe, Code2, Bot, Keyboard, Puzzle,
+    FileText, Globe, Bot, Keyboard, Puzzle,
     Download, ChevronDown, Image, FileCode, Presentation, FileDown,
     Settings, Terminal as TerminalIcon, PanelBottomOpen, FolderOpen
 } from 'lucide-react';
 import type { ExportFormat } from '../services/ExportService';
 
-// 탭 화면 기본 크기 웨이트 — 크게: 웹(3)·코드(3) / 작게: 단축키(1)·플러그인(1)
+// 탭 화면 기본 크기 웨이트 — 웹(3) / 단축키(1)·플러그인(1)
 // AI 코파일럿 실행 뷰(채팅)는 작게 유지(AI 2)
 
 const AI_WEIGHT = 2;
 
+function blockSeparatorArrowKeys(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+}
+
+type PanelLayoutGroup = {
+    getLayout: () => Record<string, number>;
+    setLayout: (layout: Record<string, number>) => unknown;
+};
+
+const setLayoutWhenPanelIdsMatch = (group: PanelLayoutGroup | null, layout: Record<string, number>) => {
+    if (!group) return;
+    try {
+        const currentIds = Object.keys(group.getLayout()).sort();
+        const requestedIds = Object.keys(layout).sort();
+        if (currentIds.length !== requestedIds.length || currentIds.some((id, index) => id !== requestedIds[index])) return;
+        group.setLayout(layout);
+    } catch {
+        // A group can be between panel registrations during keyboard-driven tab changes.
+        // Its defaultSize values already provide the correct layout for the newly rendered panels.
+    }
+};
+
 const MainLayout: React.FC = () => {
     const tabWeights = useSettingsStore(state => state.tabWeights);
-    const bodyFont = useSettingsStore(state => state.bodyFont);
-    const headingFont = useSettingsStore(state => state.headingFont);
-    const bodyWeight = useSettingsStore(state => state.bodyWeight);
-    const headingWeight = useSettingsStore(state => state.headingWeight);
-    useEffect(() => {
-        document.body.style.setProperty('--font-body', bodyFont);
-        document.body.style.setProperty('--font-heading', headingFont);
-        document.body.style.setProperty('--weight-body', String(bodyWeight));
-        document.body.style.setProperty('--weight-heading', String(headingWeight));
-    }, [bodyFont, headingFont, bodyWeight, headingWeight]);
     const mainGroup = useGroupRef();
     const otherGroup = useGroupRef();
     const {
@@ -135,25 +149,33 @@ const MainLayout: React.FC = () => {
     const hasOther = openOthers.length > 0;
     const otherWeight = openOthers.reduce((s, t) => s + tabWeights[t], 0);
     const withPluginRun = !!pluginActiveView && !terminalViewOpen;
+    const mainGroupKey = `${hasPdf ? 'pdf|' : ''}${hasOther ? 'others|' : ''}${withPluginRun ? 'plugin-run' : ''}`;
+    const otherGroupKey = openOthers.join('|');
+    const previousMainGroupKey = useRef(mainGroupKey);
+    const previousOtherGroupKey = useRef(otherGroupKey);
 
     // 최상위 수평 분할 기본 비율 (PDF / 기타 / 플러그인·AI 실행 뷰)
     const totalWeight = (hasPdf ? tabWeights.pdf : 0) + otherWeight + (withPluginRun ? AI_WEIGHT : 0);
     const pdfSize = hasPdf ? tabWeights.pdf / totalWeight * 100 : 0;
     const otherSize = otherWeight / totalWeight * 100;
     const aiSize = withPluginRun ? AI_WEIGHT / totalWeight * 100 : 0;
-    useEffect(() => {
-        const timer = requestAnimationFrame(() => {
-            const layout: Record<string,number> = {};
-            if (hasPdf) layout['pane-pdf'] = pdfSize;
-            if (hasOther) layout['pane-others'] = otherSize;
-            if (withPluginRun) layout['pane-plugin-run'] = aiSize;
-            mainGroup.current?.setLayout(layout);
-            if (hasOther) otherGroup.current?.setLayout(Object.fromEntries(
-                openOthers.map(tab => ['pane-'+tab, tabWeights[tab]/otherWeight*100])
-            ));
-        });
-        return () => cancelAnimationFrame(timer);
-    }, [tabWeights, activeTabs, withPluginRun]);
+    useLayoutEffect(() => {
+        const mainTopologyChanged = previousMainGroupKey.current !== mainGroupKey;
+        const otherTopologyChanged = previousOtherGroupKey.current !== otherGroupKey;
+        previousMainGroupKey.current = mainGroupKey;
+        previousOtherGroupKey.current = otherGroupKey;
+
+        const mainPaneCount = Number(hasPdf) + Number(hasOther) + Number(withPluginRun);
+        const layout: Record<string,number> = {};
+        if (hasPdf) layout['pane-pdf'] = pdfSize;
+        if (hasOther) layout['pane-others'] = otherSize;
+        if (withPluginRun) layout['pane-plugin-run'] = aiSize;
+        // setLayout validates split ratios and rejects a one-panel layout.
+        if (mainPaneCount > 1 && !mainTopologyChanged) setLayoutWhenPanelIdsMatch(mainGroup.current, layout);
+        if (openOthers.length > 1 && !otherTopologyChanged) setLayoutWhenPanelIdsMatch(otherGroup.current, Object.fromEntries(
+            openOthers.map(tab => ['pane-'+tab, tabWeights[tab]/otherWeight*100])
+        ));
+    }, [tabWeights, activeTabs, withPluginRun, mainGroupKey, otherGroupKey]);
     // 기타 그룹 내 탭별 기본 크기 (열린 탭끼리 웨이트 비례)
     const tabDefault = (t: ActiveTab) => (otherWeight > 0 ? (tabWeights[t] / otherWeight) * 100 : 100);
 
@@ -445,18 +467,17 @@ const MainLayout: React.FC = () => {
                 • PDF + 기타 + AI:  PDF(44%) + [Other : AI 실행 뷰 = 웨이트합 : 2]
                 • 기타만(AI없):     Other(100%)
                 • 기타 + AI:        [Other : AI 실행 뷰 = 웨이트합 : 2]
-                탭 웨이트 — 크게: 웹(3)·코드(3) / 작게: 단축키(1)·플러그인(1) / AI(2)
-                기타 그룹 내부: 열린 탭끼리 웨이트 비례 (예: 웹·코드 2개 = 1:1)
+                기타 그룹 내부: 현재 열린 기본 탭끼리 설정 웨이트 비례
             */}
             <div className="flex-1 min-h-0 overflow-hidden">
-                <Group groupRef={mainGroup} orientation="horizontal" className="h-full">
+                <Group key={mainGroupKey} groupRef={mainGroup} orientation="horizontal" className="h-full">
 
                     {/* ① PDF 편집: [도구창 | PDF 뷰어] */}
                     {hasPdf && (
                         <>
                             <Panel
                                 id="pane-pdf" defaultSize={`${pdfSize}%`}
-                                minSize={25}
+                                minSize={0}
                                 className="flex flex-col min-w-0"
                             >
                                 <div className="flex-1 p-6 overflow-hidden animate-slide-up h-full">
@@ -469,45 +490,37 @@ const MainLayout: React.FC = () => {
                             </Panel>
 
                             {hasOther && (
-                                <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                                <Separator onKeyDownCapture={blockSeparatorArrowKeys} className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
                             )}
                         </>
                     )}
 
-                    {/* ② 웹/코드/단축키 */}
+                    {/* ② 웹/단축키/플러그인 관리 */}
                     {hasOther && (
                         <Panel
                             id="pane-others" defaultSize={`${otherSize}%`}
-                            minSize={15}
+                            minSize={0}
                             className="flex flex-col min-w-0"
                         >
-                            <Group groupRef={otherGroup} orientation="horizontal" className="h-full">
+                            <Group key={otherGroupKey} groupRef={otherGroup} orientation="horizontal" className="h-full">
                                 {activeTabs.includes('web') && (
-                                    <Panel id="pane-web" defaultSize={`${tabDefault('web')}%`} minSize={20} className="flex flex-col min-w-0 h-full">
+                                    <Panel id="pane-web" defaultSize={`${tabDefault('web')}%`} minSize={0} className="flex flex-col min-w-0 h-full">
                                         <WebViewer />
                                     </Panel>
                                 )}
-                                {activeTabs.includes('web') && (activeTabs.includes('code') || activeTabs.includes('shortcuts')) && (
-                                    <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
-                                )}
-                                {activeTabs.includes('code') && (
-                                    <Panel id="pane-code" defaultSize={`${tabDefault('code')}%`} minSize={20} className="flex flex-col min-w-0 h-full">
-                                        <CodeViewer />
-                                    </Panel>
-                                )}
-                                {activeTabs.includes('code') && activeTabs.includes('shortcuts') && (
-                                    <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                                {activeTabs.includes('web') && (activeTabs.includes('shortcuts') || activeTabs.includes('plugins')) && (
+                                    <Separator onKeyDownCapture={blockSeparatorArrowKeys} className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
                                 )}
                                 {activeTabs.includes('shortcuts') && (
-                                    <Panel id="pane-shortcuts" defaultSize={`${tabDefault('shortcuts')}%`} minSize={20} className="flex flex-col min-w-0 h-full">
+                                    <Panel id="pane-shortcuts" defaultSize={`${tabDefault('shortcuts')}%`} minSize={0} className="flex flex-col min-w-0 h-full">
                                         <ShortcutsViewer />
                                     </Panel>
                                 )}
                                 {activeTabs.includes('shortcuts') && activeTabs.includes('plugins') && (
-                                    <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                                    <Separator onKeyDownCapture={blockSeparatorArrowKeys} className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
                                 )}
                                 {activeTabs.includes('plugins') && (
-                                    <Panel id="pane-plugins" defaultSize={`${tabDefault('plugins')}%`} minSize={20} className="flex flex-col min-w-0 h-full overflow-auto">
+                                    <Panel id="pane-plugins" defaultSize={`${tabDefault('plugins')}%`} minSize={0} className="flex flex-col min-w-0 h-full overflow-auto">
                                         <PluginManagerPanel />
                                     </Panel>
                                 )}
@@ -522,8 +535,8 @@ const MainLayout: React.FC = () => {
                         if (!render || !entry?.active) return null;
                         return (
                             <>
-                                <Separator className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
-                                <Panel id="pane-plugin-run" defaultSize={`${aiSize}%`} minSize={15} className="flex flex-col min-w-0">
+                                <Separator onKeyDownCapture={blockSeparatorArrowKeys} className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />
+                                <Panel id="pane-plugin-run" defaultSize={`${aiSize}%`} minSize={0} className="flex flex-col min-w-0">
                                     <PluginView key={entry!.definition.id} entry={entry!} onClose={stopPluginView} />
                                 </Panel>
                             </>

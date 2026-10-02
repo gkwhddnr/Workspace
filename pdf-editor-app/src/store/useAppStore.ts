@@ -8,7 +8,7 @@ import {
 } from '../services/AiThreadService';
 import type { AiProvider } from '../services/AiService';
 
-export type ActiveTab = 'pdf' | 'web' | 'code' | 'shortcuts' | 'plugins';
+export type ActiveTab = 'pdf' | 'web' | 'shortcuts' | 'plugins';
 export type DrawingTool = 'select' | 'pen' | 'highlight' | 'text' | 'rect' | 'circle' | 'eraser' | 'arrow' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right' | 'arrow-l-1' | 'arrow-l-2' | 'image';
 export type ThemeMode = 'white' | 'translucent' | 'dark' | 'custom';
 
@@ -280,8 +280,8 @@ const getStoredCustomColors = (): string[] => {
 const AI_MODELS_KEY = 'aiModels';
 const DEFAULT_AI_MODELS: Record<AiProvider, string> = {
     gemini: 'gemini-3.8-flash',
-    chatgpt: 'gpt-5.6-sol',
-    claude: 'claude-opus-5',
+    chatgpt: 'gpt-6-luna',
+    claude: 'claude-sonnet-5',
     factchat: 'claude-sonnet-5',
 };
 const getStoredAiModels = (): Record<AiProvider, string> => {
