@@ -8,6 +8,34 @@ export interface AiMessage {
     agent?: string;
 }
 
+const waitForRetry = (milliseconds: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+        reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+        return;
+    }
+    const timer = window.setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+    }, milliseconds);
+    const onAbort = () => {
+        window.clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+});
+
+const getRetryDelay = (error: any, attempt: number, initialDelayMs = 1000) => {
+    const header = error?.response?.headers?.['retry-after'];
+    const retryAfterSeconds = Number(header);
+    const retryAfterDate = typeof header === 'string' ? Date.parse(header) : NaN;
+    const retryAfterMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+        ? retryAfterSeconds * 1000
+        : Number.isFinite(retryAfterDate) ? Math.max(0, retryAfterDate - Date.now()) : 0;
+    const exponentialDelay = Math.min(initialDelayMs * (2 ** attempt), 8000) + Math.random() * 300;
+    return Math.min(Math.max(retryAfterMs, exponentialDelay), 30000);
+};
+
 // ─── Gemini ───────────────────────────────────────────────────────────────────
 export async function callGemini(
     apiKey: string,
@@ -16,8 +44,8 @@ export async function callGemini(
     model = 'gemini-3.8-flash',
     signal?: AbortSignal
 ): Promise<string> {
-    // 신규 출시 모델은 출시 초기 서버 과부하(503)가 잦아 자동 재시도합니다.
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    // Gemini transient 429/5xx errors use bounded exponential backoff with jitter.
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const payload = {
         system_instruction: { parts: [{ text: systemPrompt }] },
         contents: messages.map(m => ({
@@ -26,17 +54,17 @@ export async function callGemini(
         }))
     };
 
-    const maxAttempts = 3;
+    const maxAttempts = 4;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
-            const response = await axios.post(url, payload, { signal });
+            const response = await axios.post(url, payload, { headers: { 'x-goog-api-key': apiKey }, signal });
             return response.data.candidates[0].content.parts[0].text as string;
         } catch (error: any) {
             const status = error?.response?.status;
-            const retriable = status === 503 || status === 502;
+            const retriable = status === 408 || status === 429 || (status >= 500 && status < 600);
             if (signal?.aborted) throw error;
             if (!retriable || attempt === maxAttempts - 1) throw error;
-            await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+            await waitForRetry(getRetryDelay(error, attempt), signal);
         }
     }
     throw new Error('Gemini API 호출 실패');
@@ -50,24 +78,38 @@ export async function callChatGPT(
     model = 'gpt-5.6-sol',
     signal?: AbortSignal
 ): Promise<string> {
-    const response = await axios.post(
-        'https://api.openai.com/v1/chat/completions',
-        {
-            model,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                ...messages.map(m => ({ role: m.role, content: m.content }))
-            ]
-        },
-        {
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
-            },
-            signal
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const response = await axios.post(
+                'https://api.openai.com/v1/chat/completions',
+                {
+                    model,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        ...messages.map(m => ({ role: m.role, content: m.content }))
+                    ]
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    signal
+                }
+            );
+            return response.data.choices[0].message.content as string;
+        } catch (error: any) {
+            const status = error?.response?.status;
+            const apiError = error?.response?.data?.error;
+            const quotaExhausted = apiError?.code === 'insufficient_quota'
+                || /quota|billing|insufficient[_ ]credits?/i.test(String(apiError?.message || ''));
+            const transientRateLimit = status === 429 && !quotaExhausted;
+            const transientServerError = status >= 500 && status < 600;
+            if (signal?.aborted || attempt === 2 || (!transientRateLimit && !transientServerError)) throw error;
+            await waitForRetry(getRetryDelay(error, attempt), signal);
         }
-    );
-    return response.data.choices[0].message.content as string;
+    }
+    throw new Error('OpenAI API 호출 실패');
 }
 
 // ─── Claude (Anthropic) ───────────────────────────────────────────────────────
@@ -179,7 +221,7 @@ export function refineError(provider: AiProvider, raw: string): string {
     if (provider === 'factchat' && (raw.includes('organization') || raw.includes('scope'))) {
         return '발급된 키의 조직 범위가 아닙니다. 금오공대 AI 대시보드의 키를 사용해 주세요.';
     }
-    if (provider === 'gemini' && (raw.includes('503') || raw.toLowerCase().includes('overloaded'))) {
+    if (provider === 'gemini' && /(?:503|502|504|overloaded|service_unavailable)/i.test(raw)) {
         return 'Gemini 서버가 일시적으로 과부하 상태입니다(503). 잠시 후 다시 시도해 주세요.';
     }
     if (provider === 'gemini' && (raw.includes('404') || raw.toLowerCase().includes('not found'))) {

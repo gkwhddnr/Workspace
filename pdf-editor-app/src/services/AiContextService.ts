@@ -7,11 +7,15 @@
 
 import { useAppStore } from '../store/useAppStore';
 import { usePdfEditorStore } from '../store/usePdfEditorStore';
+import { usePluginStore } from '../store/usePluginStore';
 import { pdfTextService } from './PdfTextService';
 
 export interface AiContextOptions {
     signal?: AbortSignal;
     accessPermissions: Record<'file' | 'web' | 'code', boolean>;
+    annotationTask?: boolean;
+    requestedPages?: number[];
+    wholeDocument?: boolean;
 }
 
 export interface AiAgentContext {
@@ -30,7 +34,7 @@ export async function buildAiAgentContext(opts: AiContextOptions): Promise<AiAge
     let hasPdf = false, hasCode = false, hasWeb = false;
 
     // ① 코드 에디터 — 전체 소스 (권한 필요)
-    if (accessPermissions.code && s.activeTabs.includes('code')) {
+    if (!opts.annotationTask && accessPermissions.code && usePluginStore.getState().entries.some(entry => entry.definition.id === 'code-editor' && entry.active)) {
         const code: string[] = [];
         if (s.sharedCode.html.trim()) code.push(`<html>\n${s.sharedCode.html}`);
         if (s.sharedCode.css.trim()) code.push(`<css>\n${s.sharedCode.css}`);
@@ -44,10 +48,13 @@ export async function buildAiAgentContext(opts: AiContextOptions): Promise<AiAge
     }
 
     // ② 웹 서퍼 — 현재 페이지 본문 (권한 필요)
-    if (accessPermissions.web && s.activeTabs.includes('web') && s.webUrl && !s.webUrl.startsWith('workspace://')) {
+    if (!opts.annotationTask && accessPermissions.web && s.activeTabs.includes('web') && s.webUrl && !s.webUrl.startsWith('workspace://')) {
         const pageText = (s.webPageText || '').trim();
         if (pageText) {
-            const t = pageText.length > 80_000 ? pageText.slice(0, 80_000) + '\n...(본문 일부 생략)' : pageText;
+            const maxWebContextChars = 24_000;
+            const t = pageText.length > maxWebContextChars
+                ? pageText.slice(0, maxWebContextChars) + '\n...(토큰 사용량을 줄이기 위해 페이지 본문 일부만 포함함)'
+                : pageText;
             sections.push(`[웹 서퍼]\n현재 주소: ${s.webUrl}\n다음은 현재 표시 중인 웹 페이지의 텍스트입니다.\n${t}`);
         } else {
             sections.push(`[웹 서퍼]\n현재 주소: ${s.webUrl} (페이지 텍스트를 추출할 수 없습니다)`);
@@ -60,12 +67,14 @@ export async function buildAiAgentContext(opts: AiContextOptions): Promise<AiAge
         const cacheKey = `${s.currentFileName}:${s.pdfOriginalData.byteLength}`;
         const data = s.pdfOriginalData;
 
-        // 문서 전체 텍스트(요약/분석용)
-        const pdfText = await pdfTextService.extractDocumentText(data, cacheKey);
-        opts.signal?.throwIfAborted();
-        if (pdfText.trim()) {
-            const t = pdfText.length > 120_000 ? pdfText.slice(0, 120_000) + '\n...(문서 일부만 포함됨, 나머지 생략)' : pdfText;
-            sections.push(`[PDF 편집]\n파일: ${s.currentFileName}\n다음은 열려 있는 PDF 파일의 전체 추출 텍스트입니다.\n${t}`);
+        // 필기 작업에서는 아래 페이지별 좌표 목록이 본문도 포함하므로 전체 추출 텍스트를 중복 첨부하지 않습니다.
+        if (!opts.annotationTask) {
+            const pdfText = await pdfTextService.extractDocumentText(data, cacheKey);
+            opts.signal?.throwIfAborted();
+            if (pdfText.trim()) {
+                const t = pdfText.length > 80_000 ? pdfText.slice(0, 80_000) + '\n...(문서 일부만 포함됨, 나머지 생략)' : pdfText;
+                sections.push(`[PDF 편집]\n파일: ${s.currentFileName}\n${t}`);
+            }
         }
 
         // 페이지 크기/현재 페이지 정보 + 모든 페이지 라인(정규화 좌표)
@@ -75,13 +84,17 @@ export async function buildAiAgentContext(opts: AiContextOptions): Promise<AiAge
             hasPdf = true;
             const cur = Math.max(1, Math.min(sizes.length, ps.currentPage || 1));
 
-            const MAX_PAGES = 40;              // 너무 긴 문서의 컨텍스트 폭증 방지
-            const MAX_LINES_PER_PAGE = 80;     // 페이지당 포함할 라인 수(배치 좌표용)
-            const MAX_TOTAL_CHARS = 100_000;   // 라인 섹션 전체 최대 길이
+            const requested = opts.requestedPages?.filter(page => page >= 1 && page <= sizes.length);
+            const pageNumbers = opts.wholeDocument ? Array.from({length: sizes.length}, (_, i) => i + 1)
+                : requested?.length ? [...new Set(requested)]
+                : opts.requestedPages?.length ? [] : [cur];
+            const MAX_PAGES = opts.annotationTask ? pageNumbers.length : 40;
+            const MAX_LINES_PER_PAGE = opts.annotationTask ? 48 : 80;
+            const MAX_TOTAL_CHARS = opts.annotationTask ? 42_000 : 100_000;
             const pageBlocks: string[] = [];
             let pagesIncluded = 0;
 
-            for (let pi = 1; pi <= Math.min(sizes.length, MAX_PAGES); pi++) {
+            for (const pi of pageNumbers.slice(0, MAX_PAGES)) {
                 opts.signal?.throwIfAborted();
                 const p = sizes[pi - 1];
                 const lines = await pdfTextService.getPageLines(data, cacheKey, pi);
@@ -99,14 +112,14 @@ export async function buildAiAgentContext(opts: AiContextOptions): Promise<AiAge
                 const totalSoFar = pageBlocks.join('\n\n').length + block.length;
                 if (totalSoFar > MAX_TOTAL_CHARS && pageBlocks.length > 0) break;
                 pageBlocks.push(block);
-                pagesIncluded = pi;
+                pagesIncluded++;
             }
 
-            const truncatedNote = Math.min(sizes.length, MAX_PAGES) > pagesIncluded
-                ? `\n...(일부 페이지가 위 목록에서 생략됨 — 생략된 페이지는 goto_page→read_page 도구로 확인하세요)`
+            const truncatedNote = pageNumbers.length > pagesIncluded
+                ? `\n...(일부 페이지가 위 목록에서 생략됨 — 생략된 페이지는 read_page 도구로 확인하세요)`
                 : '';
-            sections.push(`[PDF 문서 구조]\n파일: ${s.currentFileName} | 전체 ${sizes.length}페이지 | 현재 표시 페이지: ${cur}\n` +
-                `아래는 문서의 모든 페이지(1~${pagesIncluded}) 텍스트 라인입니다 — 좌표는 페이지 왼쪽 위 기준 정규화 값(0~1)이며 편집 도구 배치에 그대로 사용합니다. 전체 PDF 필기 요청 시 이 좌표를 이용해 각 페이지에 바로 표시하세요.\n---\n` +
+            sections.push(`[PDF 문서 구조]\n파일: ${s.currentFileName} | 전체 ${sizes.length}페이지 | 현재 표시 페이지: ${cur} | 이번 요청에 제공된 페이지: ${pageNumbers.slice(0,pagesIncluded).join(', ')}\n` +
+                `아래 텍스트 라인에는 정규화 좌표(0~1)가 포함되어 있습니다. 요청 범위에 해당하는 페이지에만 사용하고, 좌표 정보가 없거나 생략된 페이지는 read_page 도구로 확인하세요.\n---\n` +
                 (pageBlocks.join('\n\n') || '(추출 가능한 텍스트 라인이 없습니다)') + truncatedNote);
         }
     }
