@@ -1,8 +1,10 @@
 import { create } from 'zustand';
+import type { StoreApi, UseBoundStore } from 'zustand';
 import type { DocumentChangePayload, PluginDefinition, PluginRegistryEntry } from '../plugins/types';
 import { createPluginContext, evaluatePluginCode } from '../plugins/pluginRuntime';
 import { PluginScope } from '../plugins/PluginScope';
 import { savePersistedPlugins } from '../plugins/pluginStorage';
+import { waitForPluginView } from '../plugins/pluginViewReady';
 
 export interface PluginNotification {
     id: string;
@@ -28,6 +30,7 @@ interface PluginState {
     toggleActive: (id: string) => Promise<void>;
     removeEntry: (id: string) => Promise<void>;
     runPlugin: (id: string) => Promise<void>;
+    runPluginAiTool: (id: string, toolName: string, args: Record<string, unknown>) => Promise<unknown>;
     stopView: () => void;
     setActiveView: (id: string, payload?: { html?: string; componentContainer?: HTMLElement }) => void;
     pushNotification: (notification: PluginNotification) => void;
@@ -142,7 +145,10 @@ async function reconcile(id: string) {
     }
 }
 
-export const usePluginStore = create<PluginState>((set, get) => ({
+// Keep one registry per renderer, including imports re-evaluated by Vite HMR.
+// Existing UI subscriptions and newly loaded agent tools must see the same store.
+const registryHost = window as unknown as { __pdfEditorPluginRegistry?: UseBoundStore<StoreApi<PluginState>> };
+export const usePluginStore: UseBoundStore<StoreApi<PluginState>> = registryHost.__pdfEditorPluginRegistry ?? window.__pdfEditorPluginHost__?.usePluginStore ?? create<PluginState>((set, get) => ({
     entries: [], activeView: null, notifications: [], runningPluginId: null,
 
     registerEntry: entry => {
@@ -199,11 +205,45 @@ export const usePluginStore = create<PluginState>((set, get) => ({
         const token = Symbol(id);
         runTokens.set(id, token);
         set({ runningPluginId: id });
+        updateEntry(id, { error: undefined });
         try {
             if (entry.definition.render) get().setActiveView(id);
             await entry.definition.hooks?.onRun?.(context);
         } catch (error) {
             if (!context.signal.aborted) reportError(id, error);
+        } finally {
+            if (runTokens.get(id) === token) {
+                runTokens.delete(id);
+                set(state => ({ runningPluginId: state.runningPluginId === id ? null : state.runningPluginId }));
+            }
+        }
+    },
+
+    runPluginAiTool: async (id, toolName, args) => {
+        const entry = get().entries.find(item => item.definition.id === id);
+        if (!entry?.active || !entry.context || entry.context.signal.aborted) throw new Error('플러그인이 활성 상태가 아닙니다.');
+        const aiTools = Array.isArray(entry.definition.aiTools) ? entry.definition.aiTools : [];
+        if (!aiTools.some(tool => tool?.name === toolName)) throw new Error('플러그인이 이 AI 기능을 공개하지 않았습니다.');
+        if (!entry.definition.hooks?.onAiTool) throw new Error('플러그인에 onAiTool 처리기가 없습니다.');
+        if (get().runningPluginId) throw new Error(`다른 플러그인이 실행 중입니다: ${get().runningPluginId}`);
+
+        const context = entry.context;
+        const token = Symbol(id);
+        runTokens.set(id, token);
+        set({ runningPluginId: id });
+        updateEntry(id, { error: undefined });
+        try {
+            // Make a UI-backed plug-in visible when its AI tool generates a
+            // preview or result for the user to inspect.
+            if (entry.definition.render) get().setActiveView(id);
+            if (entry.definition.render?.kind === 'component') await waitForPluginView(context);
+            context.signal.throwIfAborted();
+            const result = await entry.definition.hooks.onAiTool(context, toolName, args);
+            context.signal.throwIfAborted();
+            return result;
+        } catch (error) {
+            if (!context.signal.aborted) reportError(id, error);
+            throw error;
         } finally {
             if (runTokens.get(id) === token) {
                 runTokens.delete(id);
@@ -230,3 +270,4 @@ export const usePluginStore = create<PluginState>((set, get) => ({
         }
     },
 }));
+registryHost.__pdfEditorPluginRegistry = usePluginStore;

@@ -11,7 +11,9 @@ import { runAiAgent, buildAgentToolInstructions, hasTerminalForAgent } from '../
 import type { AiAgentContext } from '../services/AiContextService';
 import { buildAiAgentContext } from '../services/AiContextService';
 import { describeTheme } from '../services/AiActions';
-import { readCachedModelCatalog, refreshModelCatalog } from '../services/AiModelCatalogService';
+import { readCachedModelCatalog } from '../services/AiModelCatalogService';
+import { AI_PLUGIN_GUIDE_UPDATED_EVENT, DEFAULT_AI_PLUGIN_GUIDE, isPluginAuthoringRequest, buildPluginAuthoringInstructions } from '../services/AiPluginGuide';
+import { isPluginDraftRequest, isPluginInstallRequest } from '../services/PluginScriptDraftService';
 
 // ─── AI 제공자 설정 ─────────────────────────────────────────────────────────────
 const PROVIDERS: {
@@ -47,8 +49,11 @@ const PROVIDERS: {
         color: 'from-emerald-500 to-green-400',
         badge: 'bg-emerald-100 text-emerald-700',
         placeholder: 'sk-...',
-        modelDefault: 'gpt-5.6-sol',
+        modelDefault: 'gpt-6-luna',
         modelOptions: [
+            { value: 'gpt-6-astra', label: 'GPT-6 Astra' },
+            { value: 'gpt-6-sol', label: 'GPT-6 Sol' },
+            { value: 'gpt-6-luna', label: 'GPT-6 Luna (저비용)' },
             { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
             { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
             { value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
@@ -63,12 +68,18 @@ const PROVIDERS: {
         color: 'from-orange-500 to-amber-400',
         badge: 'bg-orange-100 text-orange-700',
         placeholder: 'sk-ant-...',
-        modelDefault: 'claude-opus-5',
+        modelDefault: 'claude-sonnet-5',
         modelOptions: [
+            { value: 'claude-fable-5-1', label: 'Claude Fable 5.1' },
+            { value: 'claude-mythos-5-1', label: 'Claude Mythos 5.1 (초대 전용)' },
+            { value: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
+            { value: 'claude-sonnet-5', label: 'Claude Sonnet 5 (저비용 기본)' },
             { value: 'claude-opus-5', label: 'Claude Opus 5' },
-            { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
-            { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
-            { value: 'claude-opus-4-8', label: 'Claude Opus 4.8 (Legacy)' },
+            { value: 'claude-fable-5', label: 'Claude Fable 5' },
+            { value: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+            { value: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
+            { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+            { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
         ],
         keyPrefix: 'sk-ant-',
         docUrl: 'https://console.anthropic.com/settings/keys',
@@ -81,10 +92,12 @@ const PROVIDERS: {
         placeholder: 'API 키를 입력하세요',
         modelDefault: 'claude-sonnet-5',
         modelOptions: [
+            { value: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
             { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
-            { value: 'claude-opus-5', label: 'Claude Opus 5' },
-            { value: 'claude-fable-5', label: 'Claude Fable 5' },
+            { value: 'claude-fable-5-1', label: 'Claude Fable 5.1' },
             { value: 'gpt-6-astra', label: 'GPT-6 Astra' },
+            { value: 'gpt-6-sol', label: 'GPT-6 Sol' },
+            { value: 'gpt-6-luna', label: 'GPT-6 Luna (저비용)' },
             { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
             { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
             { value: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (Preview)' },
@@ -141,6 +154,56 @@ const heuristicThreadTitle = (question: string): string => {
     return oneLine.length > 30 ? oneLine.slice(0, 30) : oneLine;
 };
 
+const isPdfAnnotationRequest = (text: string, enabled: boolean, hasPdf: boolean) =>
+    enabled && hasPdf && /필기|형광펜|하이라이트|밑줄|주석|중요.*표시|표시.*중요|강조.*표시|도형.*추가|화살표.*그려|메모.*추가/.test(text);
+
+// Plug-in status is local application state. Answer status-only questions from
+// the store so providers do not need to infer it from instructions or receive
+// the installed plug-in list as prompt context.
+const getLocalPluginStatusReply = (text: string): string | null => {
+    if (isPluginAuthoringRequest(text) || isPluginDraftRequest(text)) return null;
+    if (!/플러그인|plug[ -]?in|registerPlugin/i.test(text)) return null;
+    if (!/활성|비활성|켜져|꺼져|상태|설치|작동|사용할 수|확인|목록/i.test(text)) return null;
+    if (/활성화해|켜\s*줘|꺼\s*줘|실행해|사용해\s*줘|추가해|삭제해|제작해|수정해|만들어/i.test(text)) return null;
+
+    const entries = usePluginStore.getState().entries;
+    const normalize = (value: string) => value.toLocaleLowerCase().replace(/[\s._-]/g, '');
+    const query = normalize(text);
+    const requested = entries.find(entry =>
+        query.includes(normalize(entry.definition.name)) || query.includes(normalize(entry.definition.id))
+    );
+
+    if (requested) {
+        const { definition, active, status, error } = requested;
+        const aiToolCount = Array.isArray(definition.aiTools) ? definition.aiTools.length : 0;
+        const state = active ? '활성화되어 있습니다' : '비활성화되어 있습니다';
+        const lines = [`${definition.name} (${definition.id}) 플러그인은 현재 ${state}.`, `상태: ${status || (active ? 'active' : 'inactive')}.`];
+        if (aiToolCount > 0) lines.push(`AI 공개 기능: ${aiToolCount}개. 에이전트 도구가 켜져 있으면 기능을 조회하고 호출할 수 있습니다.`);
+        else lines.push('AI 공개 기능(aiTools)은 등록되어 있지 않습니다. 플러그인 자체 화면이나 실행 훅은 별도로 동작할 수 있지만, AI가 내부 기능을 직접 호출하려면 플러그인에 aiTools와 onAiTool 구현이 필요합니다.');
+        if (error) lines.push(`최근 오류: ${error}`);
+        return lines.join('\n');
+    }
+
+    if (!entries.length) return '설치된 플러그인이 없습니다.';
+    const list = entries.map(entry => `- ${entry.definition.name} (${entry.definition.id}): ${entry.active ? '활성' : '비활성'}`).join('\n');
+    return `요청에서 플러그인 이름을 찾지 못했습니다. 현재 설치된 플러그인 상태는 다음과 같습니다.\n${list}`;
+};
+
+const getRequestedAnnotationPages = (text: string): { pages: number[]; wholeDocument: boolean } => {
+    const wholeDocument = /전체\s*(pdf|문서|페이지)|모든\s*페이지|전\s*페이지|문서\s*전체/.test(text);
+    if (wholeDocument) return { pages: [], wholeDocument: true };
+    const pages = new Set<number>();
+    for (const match of text.matchAll(/(?:페이지|쪽|page)\s*(\d+)\s*[-~–]\s*(\d+)|(\d+)\s*[-~–]\s*(\d+)\s*(?:페이지|쪽|pages?)/gi)) {
+        const low = Math.min(Number(match[1] || match[3]), Number(match[2] || match[4]));
+        const high = Math.max(Number(match[1] || match[3]), Number(match[2] || match[4]));
+        if (high - low < 100) for (let page = low; page <= high; page++) pages.add(page);
+    }
+    for (const match of text.matchAll(/(?:페이지|쪽|page)\s*(\d+)|(\d+)\s*(?:페이지|쪽|pages?)/gi)) pages.add(Number(match[1] || match[2]));
+    return { pages: [...pages].filter(Number.isFinite), wholeDocument: false };
+};
+
+const DEFAULT_AI_WRITING_GUIDE = `필기 작성 지침\n- 원문 텍스트와 겹치지 않도록 여백에 배치하고, 겹칠 가능성이 있으면 위치를 조정합니다.\n- 사용자가 지정한 페이지와 대상에만 적용하고, 요청한 색상·도구·표시 방식을 따릅니다.\n- 긴 내용은 핵심 위주로 짧게 나누고, 원문을 가리거나 읽기 어렵게 만들지 않습니다.\n- 실제 적용 결과를 확인한 뒤 완료 여부와 적용한 페이지를 알려 줍니다.`;
+
 // ─── 컴포넌트 ───────────────────────────────────────────────────────────────────
 const AiPanel: React.FC = () => {
     const {
@@ -196,6 +259,13 @@ const AiPanel: React.FC = () => {
     });
     // 에이전트 도구 사용 모드 (localStorage 영속화) — 켜면 AI가 PDF 필기/터미널 작업을 직접 수행
     const [agentMode, setAgentMode] = useState(() => localStorage.getItem('aiAgentMode') !== 'false');
+    // 사용자 정의 필기 지침 (localStorage 영속화)
+    const [aiWritingGuide, setAiWritingGuide] = useState(() => localStorage.getItem('aiWritingGuide') || DEFAULT_AI_WRITING_GUIDE);
+    const [aiPluginGuide, setAiPluginGuide] = useState(() => {
+        try { return localStorage.getItem('aiPluginGuide.v1') ?? DEFAULT_AI_PLUGIN_GUIDE; }
+        catch { return DEFAULT_AI_PLUGIN_GUIDE; }
+    });
+    const [pluginGuideSaveError, setPluginGuideSaveError] = useState(false);
     // 마지막 에이전트 실행의 도구 활동 로그 (대화 하단에 표시)
     const [agentLog, setAgentLog] = useState<AgentActionLog[] | null>(null);
     const [tempKeys, setTempKeys] = useState<Record<AiProvider, string>>({
@@ -234,6 +304,12 @@ const AiPanel: React.FC = () => {
     // 앱 시작/패널 최초 진입 시 백엔드에 저장된 대화 스레드를 불러와 동기화합니다.
     useEffect(() => {
         syncAiThreadsWithBackend();
+    }, []);
+
+    useEffect(() => {
+        const update = (event: Event) => setModelCatalog((event as CustomEvent).detail);
+        window.addEventListener('ai-model-catalog-updated', update);
+        return () => window.removeEventListener('ai-model-catalog-updated', update);
     }, []);
 
     // 현재 선택된 제공자 정보
@@ -292,6 +368,14 @@ const AiPanel: React.FC = () => {
         const text = (textOverride ?? input).trim();
         if (!text || isLoading || abortRef.current || pluginSignal?.aborted) return;
 
+        const localPluginStatusReply = getLocalPluginStatusReply(text);
+        if (localPluginStatusReply) {
+            addAiMessage('user', text);
+            setInput('');
+            addAiMessage('assistant', localPluginStatusReply, activeThreadId);
+            return;
+        }
+
         const currentKey = apiKeys[aiAgent];
         if (!currentKey) {
             addAiMessage('assistant', `⚠️ [${currentProvider.label}] API 키가 설정되지 않았습니다. 우측 상단 ⚙️ 설정에서 키를 입력해 주세요.`);
@@ -312,7 +396,12 @@ const AiPanel: React.FC = () => {
         const runAbort = new AbortController();
         abortRef.current = runAbort;
 
-        const systemPrompt = `당신은 ${currentProvider.label} AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다.
+        const pluginTask = isPluginAuthoringRequest(text, aiMessages);
+        const annotationTask = !pluginTask && isPdfAnnotationRequest(text, agentMode, !!useAppStore.getState().pdfOriginalData);
+        const requestedPageScope = annotationTask ? getRequestedAnnotationPages(text) : { pages: [], wholeDocument: false };
+        let systemPrompt = annotationTask
+            ? `당신은 ${currentProvider.label} PDF 필기 도우미입니다. 제공된 페이지 정보만 사용해 요청한 필기를 실제 도구로 적용하세요. 한국어로 간결히 답하고, 실행하지 않은 작업은 완료했다고 말하지 마세요.`
+            : `당신은 ${currentProvider.label} AI 에이전트입니다. PDF 편집, 코드 작성, 학습 보조를 전문으로 합니다.
 현재 사용자 컨텍스트:
 - 열린 탭: ${activeTabs.join(', ')}
 - 열린 파일: ${currentFileName || '없음'}
@@ -320,49 +409,59 @@ const AiPanel: React.FC = () => {
 - 코드 에디터 언어: ${codeLanguage}
 - 파일 액세스 권한: 파일내용 ${accessPermissions.file ? '허용' : '거부'} / 웹서퍼 ${accessPermissions.web ? '허용' : '거부'} / 코드에디터 ${accessPermissions.code ? '허용' : '거부'}
 한국어로 친절하고 간결하게 답변해 주세요. 권한이 '허용'으로 표시된 소스의 내용이 아래 컨텍스트로 첨부되며, 그 파일/화면을 읽고 요약·분석해도 되는 권한이 사용자에게 부여된 것입니다. '파일을 읽으려는데 권한이 제한된다'며 거부하지 말고 첨부된 내용을 적극 활용해 주세요.`;
+        if (annotationTask && aiWritingGuide.trim()) {
+            systemPrompt += `\n\n[사용자 필기 지침서]\n필기 요청을 수행할 때 아래 지침을 반영하세요. 현재 요청의 구체적인 지시가 지침서와 다르면 현재 요청을 따르세요.\n${aiWritingGuide.trim()}\n[/사용자 필기 지침서]`;
+        }
 
         // 현재 화면(코드·웹)과 열린 파일(PDF 전체 텍스트 + 문서 구조)을 컨텍스트로 첨부하고,
         // 에이전트 모드면 도구(형광펜/터미널) 사용 지침을 함께 붙인다.
         let finalSystemPrompt = systemPrompt;
+        if (pluginTask) finalSystemPrompt += '\n\n' + buildPluginAuthoringInstructions(aiPluginGuide, agentMode);
         // 앱 사용 방법/기능 설명 질문에 정확히 답할 수 있도록 앱 사용 안내를 상시 포함한다.
-        finalSystemPrompt += `\n\n${PDF_EDITOR_USAGE_GUIDE}`;
+        if (!annotationTask && /사용법|어떻게\s*사용|기능\s*설명|도움말/.test(text)) finalSystemPrompt += `\n\n${PDF_EDITOR_USAGE_GUIDE}`;
         let ctxText: AiAgentContext | null = null;
 
         // 에이전트 모드가 꺼져 있으면 실제로 편집·실행할 수 없으므로,
         // AI가 "적용 완료"처럼 실행한 척 답하지 않도록 토글 ON을 안내하게 유도한다.
-        if (!agentMode) {
+        if (!agentMode && !pluginTask) {
             finalSystemPrompt += `\n\n[에이전트 도구 사용 제한 안내]
-현재 '에이전트 도구 사용'이 꺼져 있어, PDF에 실제로 필기/도형/형광펜을 추가하거나 터미널 명령을 실행할 수 없습니다.
-사용자가 PDF 편집·파일 실행 같은 실질적 작업(예: "형광펜/하이라이트/밑줄 표시", "도형·텍스트 추가", "명령 실행")을 요청하면:
+현재 '에이전트 도구 사용'이 꺼져 있어, 설치 플러그인 상태를 조회하거나 PDF를 편집하거나 터미널 명령을 실행하거나 플러그인을 조작할 수 없습니다.
+사용자가 플러그인 상태 확인·실행·사용 또는 PDF 편집·파일 실행 같은 실질적 작업을 요청하면:
 1. '적용 완료', '표시했습니다', '반영했습니다'처럼 이미 적용된 것처럼 답하지 마세요.
-2. 어떤 도구(형광펜·주석·터미널 등)를 쓰면 되는지 짧게 설명하고,
-   끝에 반드시 "AI 패널 상단의 🔧 에이전트 도구 사용을 켜 주세요. 켠 뒤 다시 요청하면 직접 적용해 드릴게요."라는 안내를 붙여,
+2. 어떤 도구가 필요한지 짧게 설명하고,
+   끝에 반드시 "AI 패널 상단의 🔧 에이전트 도구 사용을 켜 주세요. 켠 뒤 다시 요청하면 플러그인 상태를 확인하거나 요청한 작업을 수행할 수 있어요."라는 안내를 붙여,
    사용자가 토글을 먼저 켜도록 유도하세요.
-3. 그런 편집 요청이 아닌 일반 질문·요약·분석에는 이 제한을 언급하지 않고 평소처럼 답변하세요.`;
+3. 그런 실행 요청이 아닌 일반 질문·요약·분석에는 이 제한을 언급하지 않고 평소처럼 답변하세요.`;
         }
 
         if (includeContext) {
             try {
-                ctxText = await buildAiAgentContext({ accessPermissions, signal: runAbort.signal });
+                ctxText = await buildAiAgentContext({ accessPermissions, signal: runAbort.signal, annotationTask,
+                    requestedPages: requestedPageScope.pages, wholeDocument: requestedPageScope.wholeDocument });
                 if (ctxText.text) {
-                    finalSystemPrompt += `\n\n[현재 작업 컨텍스트]
+                    finalSystemPrompt += annotationTask
+                        ? `\n\n[필기 대상 페이지 정보]\n${ctxText.text}\n[/필기 대상 페이지 정보]`
+                        : `\n\n[현재 작업 컨텍스트]
 아래는 사용자가 파일 액세스 권한을 허용한 실제 화면과 열린 파일의 전체 내용입니다.
 파일 요약, 코드 검토, 내용 분석 등에 참고하여 답변해 주세요.
  
 ${ctxText.text}
 [/현재 작업 컨텍스트]`;
                 }
-                if (agentMode && (ctxText.hasPdf || hasTerminalForAgent())) {
-                    finalSystemPrompt += '\n\n' + buildAgentToolInstructions({
-                        hasPdf: ctxText.hasPdf,
-                        hasTerminal: hasTerminalForAgent(),
-                        palette: PRESET_COLORS,
-                        theme: describeTheme(),
-                    });
-                }
             } catch (e) {
                 console.warn('[AiPanel] 컨텍스트 수집 실패:', e);
             }
+        }
+
+        if (agentMode) {
+            finalSystemPrompt += '\n\n' + buildAgentToolInstructions({
+                hasPdf: !pluginTask && !!ctxText?.hasPdf,
+                hasTerminal: !pluginTask && !annotationTask && includeContext && hasTerminalForAgent(),
+                palette: PRESET_COLORS,
+                theme: describeTheme(),
+                annotationOnly: annotationTask,
+                pluginManagement: !annotationTask,
+            });
         }
 
         if (runAbort.signal.aborted || !mountedRef.current) {
@@ -374,7 +473,8 @@ ${ctxText.text}
 
         try {
             // 현재 메시지 히스토리 (마지막으로 추가된 user 메시지 포함)
-            const history = [...aiMessages, { role: 'user' as const, content: text }];
+            const priorMessages = aiMessages.slice(-12);
+            const history = [...priorMessages, { role: 'user' as const, content: text }];
             let reply: string;
             if (agentMode) {
                 // 에이전트 모드 — 모델이 <ai_tool> 호출로 PDF를 직접 편집하거나 터미널 명령을 실행할 수 있다.
@@ -386,8 +486,10 @@ ${ctxText.text}
                     model: aiModels[aiAgent],
                     messages: history,
                     systemPrompt: finalSystemPrompt,
-                    maxRounds: 24,
+                    maxRounds: annotationTask && !requestedPageScope.wholeDocument ? 12 : 24,
                     signal: runAbort.signal,
+                    pluginDraftRequest: pluginTask && isPluginDraftRequest(text),
+                    pluginInstallRequest: isPluginInstallRequest(text),
                 });
                 reply = agentRes.text;
                 setAgentLog(agentRes.log);
@@ -403,7 +505,7 @@ ${ctxText.text}
             // 나오면 그걸로 교체한다.
             if (isFirstExchange && firstThreadId) {
                 setAiThreadTitle(firstThreadId, heuristicThreadTitle(firstQuestion));
-                const refined = await generateAiThreadTitle(firstQuestion, reply, runAbort.signal);
+                const refined = annotationTask || pluginTask ? null : await generateAiThreadTitle(firstQuestion, reply, runAbort.signal);
                 if (refined) setAiThreadTitle(firstThreadId, refined);
             }
         } catch (error: any) {
@@ -690,7 +792,53 @@ ${ctxText.text}
                             );
                         })}
 
+                        {/* ── PDF 필기 지침서 ── */}
+                        <div className="rounded-xl border theme-border theme-bg-glass p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold theme-text-main">AI 필기 지침서</span>
+                                <span className="text-[9px] theme-text-muted">자동 저장</span>
+                            </div>
+                            <p className="text-[10px] theme-text-muted leading-relaxed">
+                                PDF에 필기를 요청할 때 적용할 배치·색상·표현 규칙을 적어 두세요. 이 지침은 이 기기에 저장되며, 필기 요청을 보낼 때 AI 프롬프트에 포함됩니다.
+                            </p>
+                            <textarea
+                                value={aiWritingGuide}
+                                onChange={e => {
+                                    const value = e.target.value;
+                                    setAiWritingGuide(value);
+                                    try { localStorage.setItem('aiWritingGuide', value); } catch { /* keep current session value */ }
+                                }}
+                                rows={7}
+                                placeholder="예: 필기는 원문과 겹치지 않게 배치하고, 핵심 용어는 파란색으로 짧게 메모해 주세요."
+                                aria-label="AI PDF 필기 지침서"
+                                className="w-full resize-y text-[11px] leading-relaxed px-3 py-2 rounded-lg border theme-border theme-bg-panel theme-text-main placeholder:theme-text-muted outline-none focus:border-indigo-400"
+                            />
+                        </div>
+
                         {/* ── 파일 액세스 권한 ── */}
+                        <div className="rounded-xl border theme-border theme-bg-glass p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold theme-text-main">AI JS 플러그인 제작 지침서</span>
+                                <span className="text-[9px] theme-text-muted">{pluginGuideSaveError ? '저장 실패 · 현재 세션에만 적용' : '자동 저장'}</span>
+                            </div>
+                            <p className="text-[10px] theme-text-muted leading-relaxed">
+                                플러그인 제작·수정 요청을 JavaScript로 구현할 때 적용합니다. 지침은 이 기기에 저장되어 재실행 후에도 유지됩니다. 생성된 코드는 JS 플러그인 편집에서 저장하고 활성화하세요.
+                            </p>
+                            <textarea
+                                value={aiPluginGuide}
+                                onChange={e => {
+                                    const value = e.target.value;
+                                    setAiPluginGuide(value);
+                                    window.dispatchEvent(new CustomEvent(AI_PLUGIN_GUIDE_UPDATED_EVENT, { detail: value }));
+                                    try { localStorage.setItem('aiPluginGuide.v1', value); setPluginGuideSaveError(false); }
+                                    catch { setPluginGuideSaveError(true); }
+                                }}
+                                rows={7}
+                                aria-label="AI JS 플러그인 제작 지침서"
+                                className="w-full resize-y text-[11px] leading-relaxed px-3 py-2 rounded-lg border theme-border theme-bg-panel theme-text-main outline-none focus:border-indigo-400"
+                            />
+                        </div>
+
                         <div className="rounded-xl border theme-border theme-bg-glass p-3 space-y-2">
                             <div className="flex items-center justify-between">
                                 <span className="text-[11px] font-bold theme-text-main">파일 액세스 권한</span>
@@ -715,7 +863,7 @@ ${ctxText.text}
                             {([
                                 { key: 'file' as const, label: '열린 파일 내용', desc: 'PDF 전체 텍스트 · Office 문서 내용' },
                                 { key: 'web' as const, label: '웹 서퍼 화면', desc: '현재 주소 · 페이지 본문' },
-                                { key: 'code' as const, label: '코드 에디터 화면', desc: 'HTML / CSS / JavaScript 전체 소스' },
+                                { key: 'code' as const, label: '코드 에디터 플러그인', desc: '플러그인이 활성화된 경우 HTML / CSS / JavaScript 소스 공유' },
                             ]).map(item => (
                                 <label key={item.key} className="flex items-start gap-2 text-[10px] theme-text-muted cursor-pointer select-none">
                                     <input

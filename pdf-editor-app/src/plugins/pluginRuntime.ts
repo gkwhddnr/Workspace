@@ -25,12 +25,31 @@ declare global {
  * 각 플러그인마다 고유한 컨텍스트를 만들어 격리한다.
  */
 export function createPluginContext(entry: PluginRegistryEntry, scope: PluginScope): PluginContext {
+    const documentOperation = async <T>(operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal) => {
+        const controller = new AbortController();
+        const abort = () => controller.abort(scope.signal.reason || signal?.reason);
+        scope.signal.addEventListener('abort', abort, { once: true });
+        signal?.addEventListener('abort', abort, { once: true });
+        if (scope.signal.aborted || signal?.aborted) abort();
+        try { return await operation(controller.signal); }
+        finally { scope.signal.removeEventListener('abort', abort); signal?.removeEventListener('abort', abort); }
+    };
     const ctx: PluginContext = {
         signal: scope.signal,
         addCleanup: scope.addCleanup,
         api: {
             editor: usePdfEditorStore,
             app: useAppStore,
+            document: {
+                getPageText: (page, signal) => documentOperation(async combined => {
+                    const { readPluginPage } = await import('../services/PluginDocumentService');
+                    return readPluginPage(page, combined);
+                }, signal),
+                summarizePage: (page, signal) => documentOperation(async combined => {
+                    const { summarizePluginPage } = await import('../services/PluginDocumentService');
+                    return summarizePluginPage(page, combined);
+                }, signal),
+            },
         },
         log: (message, data) => {
             console.log(`[Plugin:${entry.definition.name}]`, message, data ?? '');
@@ -59,7 +78,9 @@ export function createPluginContext(entry: PluginRegistryEntry, scope: PluginSco
             if (next.selectedElementIds !== previous.selectedElementIds) notifyChange({ type: "selection" });
         }));
         scope.addCleanup(useAppStore.subscribe((next, previous) => {
-            if (next.pdfOriginalData !== previous.pdfOriginalData) notifyChange({ type: "document" });
+            if (next.pdfOriginalData !== previous.pdfOriginalData
+                || next.currentFilePath !== previous.currentFilePath
+                || next.currentFileName !== previous.currentFileName) notifyChange({ type: "document" });
         }));
     }
     return ctx;

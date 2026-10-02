@@ -11,6 +11,16 @@ export interface PluginHooks {
     onDeactivate?: (ctx: PluginContext) => void | Promise<void>;
     // PDF 문서/페이지/요소가 변경될 때 호출됨
     onDocumentChange?: (ctx: PluginContext, payload: DocumentChangePayload) => void | Promise<void>;
+    // AI 코파일럿이 선언된 기능을 호출할 때 실행되는 라우터
+    onAiTool?: (ctx: PluginContext, toolName: string, args: Record<string, unknown>) => unknown | Promise<unknown>;
+}
+
+export interface PluginAiToolDefinition {
+    // plugin id와 조합해 고유하게 식별되는 도구 이름
+    name: string;
+    description: string;
+    // AI가 인자를 구성하는 데 참고할 JSON Schema object
+    parameters?: Record<string, unknown>;
 }
 
 // 플러그인 정의 (플러그인 스크립트가 export 하는 형태)
@@ -25,6 +35,8 @@ export interface PluginDefinition {
     // 실용적인 확장을 위해 "콘텐츠 렌더러"를 지원.
     render?: PluginRenderer;
     hooks?: PluginHooks;
+    // AI 코파일럿에 공개할 기능 목록. 실제 처리는 hooks.onAiTool에서 라우팅한다.
+    aiTools?: PluginAiToolDefinition[];
 }
 
 // 플러그인이 PDF 편집기에 접근할 수 있는 컨텍스트 (생성 시 주입)
@@ -36,6 +48,10 @@ export interface PluginContext {
         editor: typeof usePdfEditorStore;
         // 앱 공용 스토어 (파일, 탭, 툴, 테마 등)
         app: typeof useAppStore;
+        document: {
+            getPageText: (page: number, signal?: AbortSignal) => Promise<PluginPageText>;
+            summarizePage: (page: number, signal?: AbortSignal) => Promise<PluginPageDiagram>;
+        };
     };
     log: (message: string, data?: unknown) => void;
     notify: (message: string, type?: 'info' | 'success' | 'error' | 'warning') => void;
@@ -45,6 +61,9 @@ export interface DocumentChangePayload {
     type: 'page' | 'document' | 'elements' | 'selection';
     [key: string]: unknown;
 }
+
+export interface PluginPageText { page: number; text: string; truncated: boolean }
+export interface PluginPageDiagram { page: number; title: string; summary: string; flow: string }
 
 // 렌더러: 플러그인이 패널 UI를 제공할 때 사용.
 // 현재는 문자열 기반 "콘텐츠" 또는 커스텀 마운트 함수를 지원.

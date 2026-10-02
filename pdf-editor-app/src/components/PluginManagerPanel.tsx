@@ -21,6 +21,18 @@ const PluginManagerPanel: React.FC = () => {
     } = usePluginStore();
 
     const [busy, setBusy] = useState(false);
+    const upgradeEditorial = async () => {
+        if (busy) return;
+        const entry = usePluginStore.getState().entries.find(item => item.definition.id === 'editorial-diagram');
+        if (!entry || entry.source.kind === 'builtin') return;
+        setBusy(true);
+        try {
+            const { upgradeEditorialPlugin } = await import('../services/EditorialDiagramService');
+            await upgradeEditorialPlugin();
+        } catch (error) {
+            usePluginStore.getState().pushNotification({ id: `editorial-update-${Date.now()}`, pluginId: 'editorial-diagram', pluginName: 'Editorial Diagram', message: error instanceof Error ? error.message : String(error), type: 'error' });
+        } finally { setBusy(false); }
+    };
 
     const reload = async (id: string) => {
         setBusy(true);
@@ -91,6 +103,7 @@ const PluginManagerPanel: React.FC = () => {
                                     onToggle={toggleActive}
                                     onRun={runPlugin}
                                     onRemove={removeEntry}
+                                    onUpgrade={entry.definition.id === 'editorial-diagram' ? upgradeEditorial : undefined}
                                 />
                             ))}
                         </div>
@@ -102,4 +115,3 @@ const PluginManagerPanel: React.FC = () => {
 };
 
 export default PluginManagerPanel;
-

@@ -17,6 +17,10 @@ import { DeleteElementCommand } from '../commands/DeleteElementCommand';
 import { CompositeCommand } from '../commands/CompositeCommand';
 import { pdfTextService, PdfLine } from './PdfTextService';
 import { aiTerminal } from './AiTerminalService';
+import { usePluginStore } from '../store/usePluginStore';
+import { writeAiPluginDraft } from './PluginScriptDraftService';
+import { pluginLoader } from './PluginLoaderService';
+import { loadPersistedPlugins } from '../plugins/pluginStorage';
 
 const appStore = () => useAppStore.getState();
 const pdfStore = () => usePdfEditorStore.getState();
@@ -455,20 +459,148 @@ async function terminalDestroy(): Promise<string> {
     return 'AI 터미널 세션을 종료했습니다. 다음 terminal_run이 새 셸을 시작합니다.';
 }
 
+function pluginList(args: any): string {
+    const state = usePluginStore.getState();
+    const requestedId = typeof args?.id === 'string' ? args.id.trim() : '';
+    const offset = Number.isInteger(args?.offset) && args.offset > 0 ? args.offset : 0;
+    const toolOffset = Number.isInteger(args?.toolOffset) && args.toolOffset > 0 ? args.toolOffset : 0;
+    const pluginPageSize = 15;
+    const selected = requestedId
+        ? state.entries.filter(entry => entry.definition.id === requestedId)
+        : state.entries.slice(offset, offset + pluginPageSize);
+    const plugins = selected.map(entry => {
+        const declaredAiTools = (Array.isArray(entry.definition.aiTools) ? entry.definition.aiTools : [])
+            .filter(tool => !!tool && typeof tool.name === 'string' && typeof tool.description === 'string');
+        const basic = {
+            id: entry.definition.id,
+            name: entry.definition.name.slice(0, 120),
+            version: entry.definition.version || '',
+            source: entry.source.kind,
+            active: entry.active,
+            status: entry.status || (entry.active ? 'active' : 'inactive'),
+            hasRunHook: typeof entry.definition.hooks?.onRun === 'function',
+            hasView: !!entry.definition.render,
+            aiToolCount: declaredAiTools.length,
+            error: entry.error || undefined,
+        };
+        if (!requestedId) return basic;
+        const allAiTools = declaredAiTools;
+        const aiTools = allAiTools.slice(toolOffset, toolOffset + 4).map(tool => {
+            let parameters: Record<string, unknown> = { type: 'object' };
+            try {
+                const serialized = JSON.stringify(tool.parameters ?? parameters);
+                if (serialized && serialized.length <= 600) parameters = JSON.parse(serialized);
+            } catch { /* omit malformed or circular schema */ }
+            return { name: String(tool.name).slice(0, 80), description: String(tool.description).slice(0, 180), parameters };
+        });
+        return {
+            ...basic,
+            description: (entry.definition.description || '').slice(0, 180),
+            aiTools,
+            nextToolOffset: toolOffset + aiTools.length < allAiTools.length ? toolOffset + aiTools.length : null,
+        };
+    });
+    return JSON.stringify({ plugins, totalCount: state.entries.length, offset, nextOffset: !requestedId && offset + pluginPageSize < state.entries.length ? offset + pluginPageSize : null, runningPluginId: state.runningPluginId });
+}
+
+function findPlugin(idValue: unknown) {
+    const id = typeof idValue === 'string' ? idValue.trim() : '';
+    if (!id) throw new Error('설치된 플러그인 목록에서 확인한 정확한 id가 필요합니다.');
+    const entry = usePluginStore.getState().entries.find(item => item.definition.id === id);
+    if (!entry) throw new Error(`플러그인을 찾을 수 없습니다: ${id}`);
+    return entry;
+}
+
+async function pluginSetActive(args: any): Promise<string> {
+    const entry = findPlugin(args?.id);
+    if (typeof args?.active !== 'boolean') throw new Error('active에는 true 또는 false를 지정해야 합니다.');
+    await usePluginStore.getState().setActive(entry.definition.id, args.active);
+    const result = usePluginStore.getState().entries.find(item => item.definition.id === entry.definition.id);
+    if (!result) throw new Error('상태 변경 후 플러그인을 찾을 수 없습니다.');
+    if (args.active && !result.active) throw new Error(result.error || '플러그인 활성화에 실패했습니다.');
+    return JSON.stringify({ id: result.definition.id, name: result.definition.name, active: result.active, status: result.status, error: result.error });
+}
+
+async function pluginRun(args: any): Promise<string> {
+    const entry = findPlugin(args?.id);
+    if (!entry.active) throw new Error('비활성 플러그인입니다. 먼저 plugin_set_active(active:true)로 활성화해야 합니다.');
+    if (!entry.definition.hooks?.onRun && !entry.definition.render) throw new Error('이 플러그인에는 실행 훅이나 화면이 없습니다.');
+    const runningPluginId = usePluginStore.getState().runningPluginId;
+    if (runningPluginId) throw new Error(`다른 플러그인이 실행 중입니다: ${runningPluginId}`);
+    await usePluginStore.getState().runPlugin(entry.definition.id);
+    const result = usePluginStore.getState().entries.find(item => item.definition.id === entry.definition.id);
+    if (result?.error) throw new Error(result.error);
+    return JSON.stringify({ id: entry.definition.id, name: entry.definition.name, ran: true, viewOpened: !!entry.definition.render });
+}
+
+async function pluginUse(args: any): Promise<string> {
+    const entry = findPlugin(args?.id);
+    const toolName = typeof args?.tool === 'string' ? args.tool.trim() : '';
+    if (!toolName) throw new Error('플러그인 목록에서 확인한 정확한 기능 이름이 필요합니다.');
+    const tool = (Array.isArray(entry.definition.aiTools) ? entry.definition.aiTools : []).find(item => item?.name === toolName);
+    if (!tool) throw new Error(`플러그인이 공개하지 않은 기능입니다: ${toolName}`);
+    const input = args?.input ?? {};
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('input은 JSON 객체여야 합니다.');
+    const result = await usePluginStore.getState().runPluginAiTool(entry.definition.id, toolName, input);
+    let output: string;
+    try { output = typeof result === 'string' ? result : JSON.stringify(result); }
+    catch { output = String(result); }
+    return JSON.stringify({ id: entry.definition.id, name: entry.definition.name, tool: toolName, result: output ?? '완료' });
+}
+
 export interface AiToolCall {
     name: string;
     args: any;
 }
 
 // ─── 실행 디스패치 ───────────────────────────────────────────────────────────
-export async function executeAiTool(name: string, args: any, signal?: AbortSignal): Promise<string> {
+export async function executeAiTool(name: string, args: any, signal?: AbortSignal, access?: { pluginSourceIds: string[] }): Promise<string> {
     const document = appStore().pdfOriginalData;
     const guard = () => {
         signal?.throwIfAborted();
         if (document !== appStore().pdfOriginalData) throw new Error('작업 중 문서가 변경되어 필기를 중단했습니다.');
     };
     try {
+        signal?.throwIfAborted();
         switch (name) {
+            case 'plugin_get_source': {
+                const id = typeof args?.id === 'string' ? args.id.trim() : '';
+                if (!access?.pluginSourceIds.includes(id)) throw new Error('현재 요청에서 수정을 지정한 플러그인의 소스만 조회할 수 있습니다.');
+                const entry = usePluginStore.getState().entries.find(item => item.definition.id === id);
+                if (entry?.source.kind === 'builtin') throw new Error('내장 플러그인은 JS 소스 수정 대상이 아닙니다.');
+                const saved = entry ? undefined : loadPersistedPlugins().find(item => item.id === id && item.source.kind !== 'builtin');
+                const source = entry?.code || saved?.code;
+                if (!source) throw new Error('설치 목록과 저장소에 해당 소스가 없습니다. Editorial Diagram 예제는 plugin_get_example로 조회할 수 있습니다.');
+                const offset = Number.isInteger(args?.offset) && args.offset >= 0 ? args.offset : 0;
+                const code = source.slice(offset, offset + 1200);
+                return JSON.stringify({ id, origin: entry ? 'installed' : 'persisted', code, offset, totalCharacters: source.length, nextOffset: offset + code.length < source.length ? offset + code.length : null });
+            }
+            case 'plugin_get_example': {
+                if (args?.id !== 'editorial-diagram') throw new Error('앱에서 제공하는 예제 소스가 없는 ID입니다.');
+                const { getEditorialDiagramExample } = await import('./EditorialDiagramService');
+                const editorialDiagramExample = getEditorialDiagramExample();
+                const offset = Number.isInteger(args?.offset) && args.offset >= 0 ? args.offset : 0;
+                const code = editorialDiagramExample.slice(offset, offset + 1200);
+                return JSON.stringify({ id: 'editorial-diagram', origin: 'bundled-example', note: '앱에 포함된 예제이며 사용자의 설치 여부나 수정된 소스를 나타내지 않습니다.', code, offset, nextOffset: offset + code.length < editorialDiagramExample.length ? offset + code.length : null });
+            }
+            case 'plugin_install': {
+                const code = args?.code;
+                if (typeof code !== 'string' || !code.trim() || code.length > 200_000) throw new Error('유효한 플러그인 코드가 필요합니다.');
+                const existing = usePluginStore.getState().entries.find(entry => entry.source.kind !== 'builtin' && entry.code === code);
+                if (existing) {
+                    const saved = JSON.parse(localStorage.getItem('pdfEditorPlugins') || '[]');
+                    if (!saved.some((item: any) => item.id === existing.definition.id && item.code === code)) throw new Error('등록된 코드의 영구 저장을 확인하지 못했습니다.');
+                    return JSON.stringify({ installed: true, id: existing.definition.id, alreadyInstalled: true, active: existing.active });
+                }
+                const installed = await pluginLoader.saveEditedPlugin(code);
+                if (!installed.ok) throw new Error(installed.message);
+                return JSON.stringify({ installed: true, id: installed.id, active: false });
+            }
+            case 'plugin_write_draft': return JSON.stringify(await writeAiPluginDraft(args?.code, args?.editingId));
+            case 'plugin_list': return pluginList(args);
+            case 'plugin_set_active': return await pluginSetActive(args);
+            case 'plugin_run': return await pluginRun(args);
+            case 'plugin_use': return await pluginUse(args);
             case 'set_tool': return await setTool(args);
             case 'set_settings': return await setSettings(args);
             case 'goto_page': return await gotoPage(args);

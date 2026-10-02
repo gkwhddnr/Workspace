@@ -11,6 +11,7 @@ interface PluginListItemProps {
     onToggle: (id: string) => void;
     onRun: (id: string) => void;
     onRemove: (id: string) => void;
+    onUpgrade?: () => void;
 }
 
 // ─── 설치된 플러그인 목록 카드 ────────────────────────────────────────────────
@@ -22,38 +23,50 @@ export const PluginListItem: React.FC<PluginListItemProps> = ({
     onToggle,
     onRun,
     onRemove,
+    onUpgrade,
 }) => {
     const id = entry.definition.id;
     const transitioning = entry.status === "activating" || entry.status === "deactivating";
     const isRunning = runningPluginId === id;
 
     return (
-        <div className={`border rounded-2xl p-3 transition-colors ${entry.active ? 'border-indigo-300 theme-bg-sub' : 'theme-border'}`}>
-            <div className="flex items-start gap-3">
+        <div className={`min-w-0 overflow-hidden border rounded-2xl p-3 transition-colors ${entry.active ? 'border-indigo-300 theme-bg-sub' : 'theme-border'}`}>
+            <div className="grid grid-cols-[36px_minmax(0,1fr)] items-start gap-3">
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${entry.active ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
                     <Puzzle size={16} />
                 </div>
 
                 <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                        <span className="font-bold theme-text-main text-sm truncate">{entry.definition.name}</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="w-full min-w-0 break-words font-bold theme-text-main text-sm">{entry.definition.name}</span>
                         {entry.definition.version && (
-                            <span className="text-[9px] font-mono text-slate-400">v{entry.definition.version}</span>
+                            <span className="shrink-0 whitespace-nowrap text-[9px] font-mono text-slate-400">v{entry.definition.version}</span>
                         )}
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${entry.active ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-500'}`}>
+                        <span className={`shrink-0 whitespace-nowrap text-[9px] px-1.5 py-0.5 rounded-full font-bold ${entry.active ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-500'}`}>
                             {transitioning ? "변경 중" : entry.active ? "활성" : "비활성"}
                         </span>
+                        {Array.isArray(entry.definition.aiTools) && !!entry.definition.aiTools.length && (
+                            <span className="shrink-0 whitespace-nowrap text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-bold" title="AI 코파일럿이 호출할 수 있는 기능">
+                                AI 기능 {entry.definition.aiTools.length}
+                            </span>
+                        )}
+                        {entry.source.kind !== 'builtin' && !(Array.isArray(entry.definition.aiTools) && entry.definition.aiTools.length) && (
+                            <span className="shrink-0 whitespace-nowrap text-[9px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 font-bold" title="AI가 플러그인 내부 기능을 직접 호출하려면 aiTools와 onAiTool을 구현해야 합니다.">
+                                AI 기능 미등록
+                            </span>
+                        )}
                     </div>
                     {entry.definition.description && (
                         <p className="text-[11px] theme-text-muted mt-0.5 line-clamp-2">{entry.definition.description}</p>
                     )}
                     <p className="text-[10px] text-slate-400 mt-1 truncate">{sourceLabel(entry.source)}</p>
                     {entry.error && (
-                        <p className="text-[10px] text-red-500 mt-1">⚠️ {entry.error}</p>
+                        <p className="break-words text-[10px] text-red-500 mt-1">⚠️ {entry.error}</p>
                     )}
                 </div>
 
-                <div className="flex items-center gap-1 shrink-0">
+                <div className="col-span-2 flex flex-wrap justify-end items-center gap-1 min-w-0">
+                    {onUpgrade && <button disabled={busy || transitioning || runningPluginId !== null} onClick={onUpgrade} className="rounded-lg border theme-border px-2 py-1.5 text-[10px] theme-text-main disabled:opacity-40" title="현재 JS를 백업하고 본문 요약 버전 1.3.0을 적용합니다">본문 요약 버전 적용</button>}
                     {entry.source.kind !== 'builtin' && (
                         <>
                             <button

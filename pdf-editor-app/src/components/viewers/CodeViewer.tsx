@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import MonacoEditor from '@monaco-editor/react';
 import { useAppStore } from '../../store/useAppStore';
 import { Play, Download, Copy, Code2 } from 'lucide-react';
+import PluginScriptEditor from '../plugin/PluginScriptEditor';
+import { PLUGIN_SCRIPT_DRAFT_UPDATED } from '../../services/PluginScriptDraftService';
 
 const DEFAULT_CODE: Record<string, string> = {
     html: `<!DOCTYPE html>
@@ -58,6 +60,12 @@ document.addEventListener('DOMContentLoaded', () => {
 const CodeViewer: React.FC = () => {
     const { codeLanguage, setCodeLanguage, sharedCode, setSharedCode, setWebUrl, toggleTab, activeTabs } = useAppStore();
     const [showPreview, setShowPreview] = useState(false);
+    const [pluginMode, setPluginMode] = useState(true);
+    useEffect(() => {
+        const showPluginEditor = () => setPluginMode(true);
+        window.addEventListener(PLUGIN_SCRIPT_DRAFT_UPDATED, showPluginEditor);
+        return () => window.removeEventListener(PLUGIN_SCRIPT_DRAFT_UPDATED, showPluginEditor);
+    }, []);
 
     const currentCode = sharedCode[codeLanguage];
 
@@ -95,8 +103,13 @@ const CodeViewer: React.FC = () => {
 
     return (
         <div className="flex-1 flex flex-col gap-2 min-h-0">
+            <div className="flex gap-2 p-2 text-xs theme-text-main">
+                <button aria-pressed={pluginMode} onClick={() => setPluginMode(true)} className={`rounded px-3 py-2 ${pluginMode ? 'bg-indigo-600 text-white' : 'theme-bg-panel'}`}>JS 플러그인 편집</button>
+                <button aria-pressed={!pluginMode} onClick={() => setPluginMode(false)} className={`rounded px-3 py-2 ${!pluginMode ? 'bg-indigo-600 text-white' : 'theme-bg-panel'}`}>웹 코드 편집</button>
+            </div>
+            {pluginMode ? <PluginScriptEditor /> : <>
             {/* Toolbar */}
-            <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
+            <div className="flex flex-wrap items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
                 <Code2 size={16} className="text-gray-500" />
                 <span className="text-sm font-medium text-gray-700 mr-2">언어:</span>
                 {(['html', 'css', 'javascript'] as const).map((lang) => (
@@ -108,7 +121,7 @@ const CodeViewer: React.FC = () => {
                         {lang.toUpperCase()}
                     </button>
                 ))}
-                <div className="ml-auto flex items-center gap-2">
+                <div className="ml-auto flex flex-wrap items-center gap-2">
                     <button
                         onClick={handleSendToWeb}
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 transition-colors shadow-sm"
@@ -162,6 +175,7 @@ const CodeViewer: React.FC = () => {
                     />
                 )}
             </div>
+            </>}
         </div>
     );
 };

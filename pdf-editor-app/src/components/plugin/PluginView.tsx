@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import type { PluginRegistryEntry } from '../../plugins/types';
 import { PluginOutputPanel } from './PluginOutputPanel';
+import { setPluginViewReady } from '../../plugins/pluginViewReady';
 
 class PluginErrorBoundary extends React.Component<React.PropsWithChildren, { error: string | null }> {
     state = { error: null as string | null };
@@ -18,8 +19,22 @@ function MountedPlugin({ entry }: { entry: PluginRegistryEntry }) {
         const renderer = entry.definition.render;
         if (!host.current || renderer?.kind !== 'component' || !entry.context) return;
         let disposed = false;
-        const cleanup = renderer.mount(host.current, entry.context);
-        const dispose = () => { if (!disposed) { disposed = true; cleanup?.(); } };
+        const context = entry.context;
+        let cleanup: (() => void) | undefined;
+        try {
+            cleanup = renderer.mount(host.current, context);
+            setPluginViewReady(context, true);
+        } catch (error) {
+            setPluginViewReady(context, false, error);
+            throw error;
+        }
+        const dispose = () => {
+            if (!disposed) {
+                disposed = true;
+                setPluginViewReady(context, false);
+                cleanup?.();
+            }
+        };
         const unregister = entry.context.addCleanup(dispose);
         return () => { unregister(); dispose(); };
     }, [entry.definition.render, entry.context]);
