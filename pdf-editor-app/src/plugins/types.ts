@@ -50,7 +50,11 @@ export interface PluginContext {
         app: typeof useAppStore;
         document: {
             getPageText: (page: number, signal?: AbortSignal) => Promise<PluginPageText>;
-            summarizePage: (page: number, signal?: AbortSignal) => Promise<PluginPageDiagram>;
+            lookupGlossaryTerm: (term: string, signal?: AbortSignal, context?: import("../services/GlossaryWebService").GlossaryWebContext) => Promise<import("../services/GlossaryWebService").GlossaryWebSource[]>;
+            summarizeGlossarySources: (term: string, sources: import("../services/GlossaryWebService").GlossaryWebSource[], signal?: AbortSignal, context?: import("../services/GlossaryWebService").GlossaryWebContext) => Promise<string>;
+            getDiagramInstructions: () => Promise<string>;
+            setDiagramInstructions: (value: string) => Promise<void>;
+            summarizePage: (page: number, signal?: AbortSignal, options?: { refresh?: boolean }) => Promise<PluginPageDiagram>;
         };
     };
     log: (message: string, data?: unknown) => void;
@@ -63,7 +67,7 @@ export interface DocumentChangePayload {
 }
 
 export interface PluginPageText { page: number; text: string; truncated: boolean }
-export interface PluginPageDiagram { page: number; title: string; summary: string; flow: string }
+export interface PluginPageDiagram { page: number; title: string; summary: string; flow: string; glossary?: { term: string; explanation: string; topicRelated?: boolean; documentTopic?: string }[] }
 
 // 렌더러: 플러그인이 패널 UI를 제공할 때 사용.
 // 현재는 문자열 기반 "콘텐츠" 또는 커스텀 마운트 함수를 지원.

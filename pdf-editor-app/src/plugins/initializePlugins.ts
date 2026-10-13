@@ -1,3 +1,4 @@
+import { registerUiDesignPlugin } from './builtin/uiDesign';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { lazyPanel } from '../components/LazyPanel';
 import { usePluginStore } from '../store/usePluginStore';
@@ -25,6 +26,7 @@ export function initializePlugins(): Promise<void> {
             registerAiCopilotPlugin(AiPanel),
             registerTerminalPlugin(TerminalPanel),
             registerCodeEditorPlugin(CodeEditorPanel),
+            registerUiDesignPlugin(),
         ]);
         builtins.forEach(result => {
             if (result.status === 'rejected') console.error('[Plugin] Built-in registration failed:', result.reason);

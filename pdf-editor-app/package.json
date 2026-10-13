@@ -12,13 +12,15 @@
     "package": "npm run build && npm run build:electron",
     "typecheck": "tsc --noEmit",
     "test:core": "node scripts/test-refactor.cjs && node scripts/test-terminal-input.cjs",
-    "test:ui": "electron scripts/test-ui-lifecycle.cjs && electron scripts/test-terminal-clear.cjs",
+    "test:ui": "electron scripts/test-web-navigation.cjs && electron scripts/test-ui-lifecycle.cjs && electron scripts/test-terminal-clear.cjs",
     "test:pdfjs": "electron scripts/test-pdfjs-vite.cjs",
     "test:annotations": "node scripts/test-ai-annotations.cjs",
     "test:text-selection": "electron scripts/test-text-selection.cjs",
     "test:cache": "node scripts/test-text-cache.cjs",
-    "verify": "npm run typecheck && npm run test:core && npm run test:cache && npm run test:annotations && npm run test:text-selection && npm run test:pdfjs && npm run test:ui && npm run test:plugins && npm run build",
-    "test:plugins": "node scripts/test-plugin-editor.cjs && node scripts/test-ai-plugin-drafts.cjs && electron scripts/test-plugin-ai-view.cjs"
+    "verify": "npm run typecheck && npm run test:core && npm run test:cache && npm run test:annotations && npm run test:text-selection && npm run test:pdfjs && npm run test:ui && npm run test:plugins && npm run test:custom-ai && npm run build",
+    "test:plugins": "node scripts/test-material-lab.cjs && node scripts/test-glossary-web.cjs && node scripts/test-plugin-editor.cjs && node scripts/test-ai-plugin-drafts.cjs && electron scripts/test-plugin-ai-view.cjs",
+    "test:custom-ai": "node scripts/test-custom-ai.cjs",
+    "test:material-references": "electron scripts/test-material-references.cjs"
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",
@@ -56,9 +58,9 @@
     "postcss": "^8.4.33",
     "sharp": "^0.34.5",
     "tailwindcss": "^3.4.1",
+    "typescript": "5.9.3",
     "vite": "^5.0.8",
-    "wait-on": "^7.2.0",
-    "typescript": "5.9.3"
+    "wait-on": "^7.2.0"
   },
   "build": {
     "appId": "com.pdfeditor.app",
@@ -80,5 +82,6 @@
       ],
       "icon": "build/icon.ico"
     }
-  }
+  },
+  "overrides": {}
 }

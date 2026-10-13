@@ -17,7 +17,7 @@ global.CustomEvent ??= class extends Event { constructor(type, options) { super(
             export { migrateEditorialPlugins, upgradeEditorialPlugin } from './src/services/EditorialDiagramService';
             export { default as legacyEditorialSource } from './docs/examples/editorial-diagram-v1.1.js?raw';
         `, resolveDir: process.cwd() },
-        bundle: true, platform: 'node', format: 'cjs', write: false, loader: { '.md': 'text' },
+        bundle: true, platform: 'node', external: ['canvas'], format: 'cjs', write: false, loader: { '.md': 'text' },
         plugins: [{ name: 'mock-provider', setup(build) {
             build.onLoad({ filter: /CodeViewer\.tsx$/ }, () => ({ contents: 'export default function CodeViewer(){ return null; }', loader: 'tsx' }));
             build.onLoad({ filter: /\.js$/ }, args => args.suffix === '?raw' ? { contents: require('node:fs').readFileSync(args.path, 'utf8'), loader: 'text' } : undefined);
@@ -29,6 +29,24 @@ global.CustomEvent ??= class extends Event { constructor(type, options) { super(
     new Function('require', 'module', 'exports', output.outputFiles[0].text)(require, mod, mod.exports);
     const { runAiAgent, executeAiTool, usePluginStore, readPluginScriptDrafts, readPluginScriptSelection, buildAgentToolInstructions, isPluginAuthoringRequest } = mod.exports;
     const { parseToolCalls } = mod.exports;
+    assert((await executeAiTool('material_get',{})).includes('활성화'));
+    await usePluginStore.getState().registerEntry({definition:{id:'ui-design',name:'UI 디자인'},source:{kind:'builtin'},code:'',evaluated:true,active:true});
+    const appliedUi=JSON.parse(await executeAiTool('editor_ui_apply',{design:{accent:'#008080',radius:6}}));assert.equal(appliedUi.applied,true);
+    const beforeInvalidUi=localStorage.getItem('editorUiDesign.v1');
+    assert((await executeAiTool('editor_ui_apply',{design:{radius:999}})).startsWith('도구 실행 중 오류:'));
+    assert.equal(localStorage.getItem('editorUiDesign.v1'),beforeInvalidUi,'invalid design cannot overwrite saved settings');
+    let uiRound=0;
+    global.aiReply=async()=>['현재 편집기를 꾸미겠습니다.','<ai_tool>{"name":"editor_ui_apply","args":{"design":{"radius":8}}}</ai_tool>','현재 편집기에 적용했습니다.'][uiRound++];
+    const localUiResult=await runAiAgent({provider:'factchat',apiKey:'fixture',messages:[{role:'user',content:'현재 편집기 UI 디자인 수정'}],systemPrompt:'editor UI',editorUiTask:true,maxRounds:5});assert.equal(localUiResult.done,true);assert.equal(uiRound,3);
+    for(const provider of ['gemini','chatgpt','claude','factchat']) {
+        let round=0;
+        const current=JSON.parse(await executeAiTool('material_get',{}));
+        global.aiReply=async()=>['재질을 만들겠습니다.','<ai_tool>'+JSON.stringify({name:'material_apply',args:{design:current.design}})+'</ai_tool>','재질 적용 완료'][round++];
+        const result=await runAiAgent({provider,apiKey:'fixture',messages:[{role:'user',content:'UI 재질 제작'}],systemPrompt:'design',editorUiTask:true,maxRounds:5});
+        assert.equal(result.done,true);assert.equal(round,3);
+    }
+    await usePluginStore.getState().setActive('ui-design',false);
+    assert((await executeAiTool('material_get',{})).includes('활성화'));
     assert.deepEqual(parseToolCalls('{"name":"plugin_list","args":{}}'), [{ name: 'plugin_list', args: {} }]);
     assert.deepEqual(parseToolCalls('```json\n{"name":"plugin_list","args":{}}\n```'), [{ name: 'plugin_list', args: {} }]);
     assert.equal(parseToolCalls('예시입니다: {"name":"plugin_list","args":{}}').length, 0);
@@ -149,7 +167,7 @@ global.CustomEvent ??= class extends Event { constructor(type, options) { super(
     assert.equal(global.draftExecuted, false);
     const oldEditorial = { id: 'editorial-diagram', name: 'Editorial Diagram', version: '1.1.0', code: mod.exports.legacyEditorialSource, source: { kind: 'code', label: 'fixture' }, installedAt: 41, active: false };
     const [migrated] = await mod.exports.migrateEditorialPlugins([oldEditorial]);
-    assert.equal(migrated.version, '1.3.0');
+    assert.equal(migrated.version, '1.8.1');
     assert.equal(migrated.active, false, 'migration preserves activation preference');
     assert(migrated.aiTools.some(tool => tool.name === 'summarize_page'));
     assert.equal(storage.get('editorialDiagram.sourceBackup.v1:41:1.1.0'), oldEditorial.code);
@@ -158,7 +176,7 @@ global.CustomEvent ??= class extends Event { constructor(type, options) { super(
     await usePluginStore.getState().registerEntry({ definition: { id: oldEditorial.id, name: oldEditorial.name, version: oldEditorial.version }, source: oldEditorial.source, code: oldEditorial.code, installedAt: 41, evaluated: false, active: false });
     await mod.exports.upgradeEditorialPlugin();
     const upgraded = usePluginStore.getState().entries.find(entry => entry.definition.id === oldEditorial.id);
-    assert.equal(upgraded.definition.version, '1.3.0');
+    assert.equal(upgraded.definition.version, '1.8.1');
     assert.equal(upgraded.active, true);
     assert.equal(upgraded.code, migrated.code);
     assert.equal(usePluginStore.getState().activeView.pluginId, oldEditorial.id);

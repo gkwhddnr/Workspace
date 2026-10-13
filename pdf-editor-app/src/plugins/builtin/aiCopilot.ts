@@ -27,15 +27,8 @@ export function registerAiCopilotPlugin(aiPanelComponent: unknown) {
                 const { apiKeys } = useAppStore.getState();
                 void refreshModelCatalog(apiKeys).then(catalog => {
                     if (ctx.signal.aborted) return;
-                    const app = useAppStore.getState();
-                    for (const provider of ['chatgpt', 'claude'] as const) {
-                        const available = catalog[provider]?.map(model => model.value) ?? [];
-                        const selected = app.aiModels[provider];
-                        if (available.length && !available.includes(selected)) {
-                            const preferred = provider === 'chatgpt' ? 'gpt-6-luna' : 'claude-sonnet-5';
-                            app.setAiModel(provider, available.includes(preferred) ? preferred : available[0]);
-                        }
-                    }
+                    // Catalog refresh must never replace a user's selected model.
+                    // Availability can be temporary; keep their explicit choice.
                     if (Object.keys(catalog).length) ctx.log('공급자 모델 목록을 갱신했습니다.', catalog);
                 });
             },

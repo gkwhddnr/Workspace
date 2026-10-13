@@ -1,3 +1,5 @@
+import { MATERIAL_INSTRUCTIONS } from '../services/MaterialLabService';
+import { readCustomAiProviders, saveCustomAiProvider, removeCustomAiProvider, CUSTOM_AI_CHANGED } from '../services/CustomAiProviders';
 import { pdfTextService } from '../services/PdfTextService';
 import { aiTerminal } from '../services/AiTerminalService';
 import { usePluginStore } from '../store/usePluginStore';
@@ -215,6 +217,16 @@ const AiPanel: React.FC = () => {
         apiKeys, setApiKey,
     } = useAppStore();
 
+    const [hiddenProviders,setHiddenProviders]=useState<string[]>(()=>{try{return JSON.parse(localStorage.getItem('hiddenAiProviders.v1')||'[]');}catch{return [];}});
+    const hideProvider=(id:AiProvider)=>{
+        const next=[...hiddenProviders,id];localStorage.setItem('hiddenAiProviders.v1',JSON.stringify(next));setHiddenProviders(next);
+        if(aiAgent===id)setAiAgent(providers.find(p=>p.id!==id)!.id);
+    };
+    const [customProviders,setCustomProviders]=useState(readCustomAiProviders);
+    const [customForm,setCustomForm]=useState({label:'',endpoint:'',model:'',key:''});
+    const [customError,setCustomError]=useState('');
+    useEffect(()=>{const update=()=>setCustomProviders(readCustomAiProviders());window.addEventListener(CUSTOM_AI_CHANGED,update);return()=>window.removeEventListener(CUSTOM_AI_CHANGED,update);},[]);
+    const providers=[...PROVIDERS.filter(p=>!hiddenProviders.includes(p.id)),...customProviders.map(p=>({id:p.id,label:p.label,color:'from-violet-500 to-indigo-500',badge:'bg-violet-100 text-violet-700',placeholder:'기관에서 발급한 API 키',modelDefault:p.model,modelOptions:[{value:p.model,label:p.model}],keyPrefix:'',docUrl:p.endpoint}))];
     const [input, setInput] = useState('');
     const [modelCatalog, setModelCatalog] = useState(() => readCachedModelCatalog());
     const [isLoading, setIsLoading] = useState(false);
@@ -258,6 +270,9 @@ const AiPanel: React.FC = () => {
         gemini: false, chatgpt: false, claude: false, factchat: false
     });
     // 에이전트 도구 사용 모드 (localStorage 영속화) — 켜면 AI가 PDF 필기/터미널 작업을 직접 수행
+    const designActive=usePluginStore(state=>state.entries.some(entry=>entry.definition.id==='ui-design'&&entry.active));
+    const [deepDesign,setDeepDesign]=useState(()=>localStorage.getItem('aiDeepDesign.v1')==='true');
+    const [designProgress,setDesignProgress]=useState('');
     const [agentMode, setAgentMode] = useState(() => localStorage.getItem('aiAgentMode') !== 'false');
     // 사용자 정의 필기 지침 (localStorage 영속화)
     const [aiWritingGuide, setAiWritingGuide] = useState(() => localStorage.getItem('aiWritingGuide') || DEFAULT_AI_WRITING_GUIDE);
@@ -269,6 +284,7 @@ const AiPanel: React.FC = () => {
     // 마지막 에이전트 실행의 도구 활동 로그 (대화 하단에 표시)
     const [agentLog, setAgentLog] = useState<AgentActionLog[] | null>(null);
     const [tempKeys, setTempKeys] = useState<Record<AiProvider, string>>({
+        ...apiKeys,
         gemini: apiKeys.gemini,
         chatgpt: apiKeys.chatgpt,
         claude: apiKeys.claude,
@@ -313,7 +329,8 @@ const AiPanel: React.FC = () => {
     }, []);
 
     // 현재 선택된 제공자 정보
-    const currentProvider = PROVIDERS.find(p => p.id === aiAgent)!;
+    useEffect(()=>{if(!providers.some(p=>p.id===aiAgent)&&providers.length)setAiAgent(providers[0].id);},[customProviders,hiddenProviders,aiAgent,setAiAgent]);
+    const currentProvider = (providers.find(p => p.id === aiAgent) ?? providers[0]);
 
     // API 키 저장 핸들러
     const handleSaveKeys = () => {
@@ -360,7 +377,7 @@ const AiPanel: React.FC = () => {
     const isKeyValid = (provider: AiProvider): boolean | null => {
         const key = apiKeys[provider];
         if (!key) return null; // 미입력
-        const p = PROVIDERS.find(x => x.id === provider)!;
+        const p = providers.find(x => x.id === provider)!;
         return key.startsWith(p.keyPrefix);
     };
 
@@ -396,8 +413,10 @@ const AiPanel: React.FC = () => {
         const runAbort = new AbortController();
         abortRef.current = runAbort;
 
-        const pluginTask = isPluginAuthoringRequest(text, aiMessages);
-        const annotationTask = !pluginTask && isPdfAnnotationRequest(text, agentMode, !!useAppStore.getState().pdfOriginalData);
+        const designRequest=designActive && /Material\s*Lab|재질|UI\s*디자인|디자인\s*스튜디오|편집기.*(?:꾸미|테마|디자인)/i.test(text);
+        const editorUiTask=designRequest;
+        const pluginTask = !designRequest && isPluginAuthoringRequest(text, aiMessages);
+        const annotationTask = !designRequest && !pluginTask && isPdfAnnotationRequest(text, agentMode, !!useAppStore.getState().pdfOriginalData);
         const requestedPageScope = annotationTask ? getRequestedAnnotationPages(text) : { pages: [], wholeDocument: false };
         let systemPrompt = annotationTask
             ? `당신은 ${currentProvider.label} PDF 필기 도우미입니다. 제공된 페이지 정보만 사용해 요청한 필기를 실제 도구로 적용하세요. 한국어로 간결히 답하고, 실행하지 않은 작업은 완료했다고 말하지 마세요.`
@@ -453,7 +472,7 @@ ${ctxText.text}
             }
         }
 
-        if (agentMode) {
+        if (agentMode || designRequest) {
             finalSystemPrompt += '\n\n' + buildAgentToolInstructions({
                 hasPdf: !pluginTask && !!ctxText?.hasPdf,
                 hasTerminal: !pluginTask && !annotationTask && includeContext && hasTerminalForAgent(),
@@ -476,7 +495,7 @@ ${ctxText.text}
             const priorMessages = aiMessages.slice(-12);
             const history = [...priorMessages, { role: 'user' as const, content: text }];
             let reply: string;
-            if (agentMode) {
+            if (agentMode || designRequest) {
                 // 에이전트 모드 — 모델이 <ai_tool> 호출로 PDF를 직접 편집하거나 터미널 명령을 실행할 수 있다.
                 // 도구 실행 결과는 <ai_result>로 다시 모델에 전달되며, 모델이 도구 없이
                 // 일반 텍스트로 답하는 순간 그 내용이 최종 답변이 된다.
@@ -485,8 +504,10 @@ ${ctxText.text}
                     apiKey: currentKey,
                     model: aiModels[aiAgent],
                     messages: history,
-                    systemPrompt: finalSystemPrompt,
-                    maxRounds: annotationTask && !requestedPageScope.wholeDocument ? 12 : 24,
+                    systemPrompt: finalSystemPrompt + (editorUiTask ? '\n'+MATERIAL_INSTRUCTIONS : ''),
+                    editorUiTask,
+                    onProgress: editorUiTask ? setDesignProgress : undefined,
+                    maxRounds: (editorUiTask && deepDesign) ? 60 : annotationTask && !requestedPageScope.wholeDocument ? 12 : 24,
                     signal: runAbort.signal,
                     pluginDraftRequest: pluginTask && isPluginDraftRequest(text),
                     pluginInstallRequest: isPluginInstallRequest(text),
@@ -656,7 +677,7 @@ ${ctxText.text}
                         onChange={(e) => setAiAgent(e.target.value as AiProvider)}
                         className="w-full min-w-0 text-[11px] font-bold bg-transparent px-2 py-1.5 outline-none appearance-none cursor-pointer theme-text-muted hover:text-indigo-600 transition-colors border theme-border rounded-lg pr-6"
                     >
-                        {PROVIDERS.map(p => (
+                        {providers.map(p => (
                             <option key={p.id} value={p.id}>{p.label}</option>
                         ))}
                     </select>
@@ -726,13 +747,27 @@ ${ctxText.text}
                 </div>
             </div>
 
+            {isLoading&&deepDesign&&<p role="status" className="px-4 py-2 text-xs theme-text-muted">{designProgress||"디자인 작업 준비 중…"}</p>}
             {/* ── API 키 설정 패널 ── */}
             {showSettings && (
                 <div className="border-b theme-border-subtle theme-bg-panel shrink-0 overflow-y-auto max-h-[55%]">
                     <div className="p-4 space-y-4">
                         <p className="text-[11px] theme-text-muted font-semibold uppercase tracking-wider">API 키 설정</p>
+                        {designActive && <label className="block text-xs"><input type="checkbox" checked={deepDesign} onChange={e=>{setDeepDesign(e.target.checked);localStorage.setItem('aiDeepDesign.v1',String(e.target.checked));if(e.target.checked){setAgentMode(true);localStorage.setItem('aiAgentMode','true');}}}/> UI 디자인 심층 에이전트 · 계획/생성/검토/수정 (추가 API 사용)</label>}
+                        {deepDesign&&designProgress&&<p className="text-xs" role="status">{designProgress}</p>}
 
-                        {PROVIDERS.map(provider => {
+                        <details className="rounded-xl border theme-border p-3 space-y-2">
+                            <summary className="text-xs font-bold cursor-pointer">학교 · 기관 AI 추가</summary>
+                            <p className="text-xs theme-text-muted">기관에서 제공한 Chat Completions 호환 API 주소, 모델 ID, Bearer API 키를 입력하세요. 웹 로그인 주소는 API 주소와 다릅니다.</p>
+                            {([['label','AI 이름'],['endpoint','전체 Chat Completions API 주소'],['model','모델 ID'],['key','API 키']] as const).map(([field,label])=><label key={field} className="block text-xs">{label}<input aria-label={label} type={field==='key'?'password':'text'} value={customForm[field]} onChange={e=>setCustomForm({...customForm,[field]:e.target.value})} className="block w-full border theme-border theme-bg-glass rounded-lg p-2 mt-1" /></label>)}
+                            <button type="button" disabled={isLoading} className="rounded-lg bg-indigo-600 text-white px-3 py-2 text-xs" onClick={()=>{
+                                try {const p=saveCustomAiProvider({label:customForm.label,endpoint:customForm.endpoint,model:customForm.model});setAiModel(p.id,p.model);setApiKey(p.id,customForm.key.trim());setTempKeys(prev=>({...prev,[p.id]:customForm.key.trim()}));setAiAgent(p.id);setCustomForm({label:'',endpoint:'',model:'',key:''});setCustomError('');}catch(error){setCustomError((error as Error).message);}
+                            }}>AI 추가</button>
+                            {hiddenProviders.length>0&&<button type="button" disabled={isLoading} className="text-xs underline ml-2" onClick={()=>{localStorage.removeItem('hiddenAiProviders.v1');setHiddenProviders([]);}}>기본 AI 목록 복원</button>}
+                            {customError&&<p role="alert" className="text-xs text-red-500">{customError}</p>}
+                        </details>
+
+                        {providers.map(provider => {
                             const valid = isKeyValid(provider.id);
                             return (
                                 <div key={provider.id} className="space-y-1.5">
@@ -741,6 +776,10 @@ ${ctxText.text}
                                             <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${provider.badge}`}>
                                                 {provider.label}
                                             </span>
+                                            {!provider.id.startsWith('custom:') && <button type="button" disabled={isLoading||providers.length<=1} title="AI 목록에서 제외" className="text-xs text-red-500" onClick={()=>hideProvider(provider.id)}>목록에서 제외</button>}
+                                            {provider.id.startsWith('custom:') && <button type="button" disabled={isLoading||providers.length<=1} title="AI 제공자 삭제" className="text-xs text-red-500" onClick={()=>{
+                                                if(aiAgent===provider.id)setAiAgent(providers.find(p=>p.id!==provider.id)!.id);removeCustomAiProvider(provider.id);setApiKey(provider.id,'');setTempKeys(prev=>{const next={...prev};delete next[provider.id];return next;});
+                                            }}>삭제</button>}
                                             {valid === true && <CheckCircle size={12} className="text-green-500" />}
                                             {valid === false && <XCircle size={12} className="text-red-400" />}
                                         </div>
@@ -764,7 +803,7 @@ ${ctxText.text}
                                     <div className="flex items-center gap-1">
                                         <input
                                             type={showKeys[provider.id] ? 'text' : 'password'}
-                                            value={tempKeys[provider.id]}
+                                            value={tempKeys[provider.id] ?? apiKeys[provider.id] ?? ''}
                                             onChange={e => setTempKeys(prev => ({ ...prev, [provider.id]: e.target.value }))}
                                             placeholder={provider.placeholder}
                                             className="flex-1 text-[11px] px-3 py-2 rounded-lg border theme-border theme-bg-glass theme-text-main placeholder:theme-text-muted outline-none focus:border-indigo-400 font-mono"
@@ -784,6 +823,9 @@ ${ctxText.text}
                                         onChange={e => setAiModel(provider.id as AiProvider, e.target.value)}
                                         className="w-full text-[11px] px-3 py-1.5 rounded-lg border theme-border theme-bg-glass theme-text-main outline-none cursor-pointer"
                                     >
+                                        {!(modelCatalog[provider.id] ?? provider.modelOptions).some(model => model.value === aiModels[provider.id]) && (
+                                            <option value={aiModels[provider.id]}>{aiModels[provider.id]} (저장된 선택)</option>
+                                        )}
                                         {(modelCatalog[provider.id] ?? provider.modelOptions).map(m => (
                                             <option key={m.value} value={m.value}>{m.label}</option>
                                         ))}

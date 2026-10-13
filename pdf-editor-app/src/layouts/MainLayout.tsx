@@ -317,6 +317,7 @@ const MainLayout: React.FC = () => {
 
     return (
         <div
+            data-editor-ui
             className="h-screen w-screen flex flex-col overflow-hidden theme-text-main"
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => e.preventDefault()}
@@ -324,23 +325,26 @@ const MainLayout: React.FC = () => {
             {/* ── Premium Header ── */}
             <header className="h-16 theme-bg-header flex items-center justify-between px-6 gap-4 z-50 shrink-0 border-b theme-border-subtle shadow-sm transition-all duration-500">
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-blue-500/20 transform hover:rotate-3 transition-transform">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center transition-colors">
                         <FileText size={20} className="text-white" />
                     </div>
                     <div className="flex flex-col">
-                        <span className="font-black text-transparent bg-clip-text bg-gradient-to-r from-indigo-500 to-purple-500 text-lg leading-tight tracking-tight drop-shadow-sm">Workspace Pro</span>
+                        <span className="font-black theme-text-main text-lg leading-tight tracking-tight">Workspace Pro</span>
                         <span className="text-[10px] font-bold text-blue-500 uppercase tracking-[0.2em] leading-none">Creative Suite</span>
                     </div>
                 </div>
 
                 <button onClick={() => setIsThemeModalOpen(true)} title="설정 (Ctrl+,)" aria-label="설정" className="p-2 rounded-xl theme-tool-hover theme-text-main"><Settings size={20}/></button>
                 {/* Tab switcher */}
-                <div className="flex p-1 rounded-2xl border theme-border theme-btn">
+                <div role="group" aria-label="화면 탭 선택" className="flex p-1 rounded-2xl border theme-border theme-btn">
                     {TABS.map((tab) => {
                         const isActive = activeTabs.includes(tab.id);
                         return (
                             <button
                                 key={tab.id}
+                                data-editor-tab={tab.id}
+                                aria-pressed={isActive}
+                                title={tab.label}
                                 onClick={() => toggleTab(tab.id)}
                                 className={`flex items-center gap-2 px-6 py-2 rounded-xl text-xs font-bold transition-all duration-300 ${isActive
                                     ? 'bg-indigo-600 text-white shadow-md'
@@ -380,7 +384,7 @@ const MainLayout: React.FC = () => {
                     {/* 파일 정리 버튼 */}
                     <button
                         onClick={() => setIsFlattenModalOpen(true)}
-                        className="flex items-center gap-2 px-4 py-1.5 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-xl text-xs font-bold shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5"
+                        className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-sm hover:shadow-md transition-all"
                         title="PDF 정리 (Ctrl+Shift+F)"
                     >
                         <FileText size={14} />
@@ -392,7 +396,7 @@ const MainLayout: React.FC = () => {
                         <button
                             onClick={() => setIsExportDropdownOpen(!isExportDropdownOpen)}
                             disabled={!hasPdf || isExporting}
-                            className={`flex items-center gap-2 px-4 py-1.5 rounded-xl text-xs font-bold shadow-sm transition-all hover:-translate-y-0.5 disabled:opacity-50 ${
+                            className={`flex items-center gap-2 px-4 py-1.5 rounded-xl text-xs font-bold shadow-sm transition-all disabled:opacity-50 ${
                                 isExportDropdownOpen 
                                 ? 'bg-slate-800 text-white' 
                                 : 'bg-white border theme-border text-slate-700 hover:bg-slate-50'

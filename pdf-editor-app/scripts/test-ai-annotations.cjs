@@ -15,7 +15,7 @@ global.pdfLines = global.pdfRuns;
         export {usePdfEditorStore} from './src/store/usePdfEditorStore';
         export {useAppStore} from './src/store/useAppStore';
         export {buildTextSnapBlocks,computeTextSnapRect} from './src/utils/textSnap';
-    `,resolveDir:root},bundle:true,platform:'node',format:'cjs',write:false,plugins:[{
+    `,resolveDir:root},bundle:true,platform:'node',external:['canvas'],format:'cjs',write:false,plugins:[{
         name:'local-fixtures',setup(build){
             build.onLoad({ filter: /CodeViewer\.tsx$/ }, () => ({ contents: 'export default function CodeViewer(){ return null; }', loader: 'tsx' }));
             build.onLoad({filter:/\.js$/},args=>args.suffix==='?raw'?{contents:require('node:fs').readFileSync(args.path,'utf8'),loader:'text'}:undefined);

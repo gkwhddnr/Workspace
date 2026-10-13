@@ -1,11 +1,32 @@
+import { readCustomAiProviders } from './CustomAiProviders';
 import axios from 'axios';
 
-export type AiProvider = 'gemini' | 'chatgpt' | 'claude' | 'factchat';
+export type AiProvider = 'gemini' | 'chatgpt' | 'claude' | 'factchat' | `custom:${string}`;
 
 export interface AiMessage {
     role: 'user' | 'assistant';
     content: string;
     agent?: string;
+    images?: string[];
+}
+
+// Reference images are supplied only by explicit design requests.
+export function imageData(url: string) {
+    const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(url);
+    if (!match) throw new Error('지원하지 않는 참고 이미지 데이터입니다.');
+    return {mimeType: match[1], data: match[2]};
+}
+export function openAiContent(message: AiMessage) {
+    return message.images?.length ? [{type:'text', text:message.content}, ...message.images.map(url => {
+        imageData(url);
+        return {type:'image_url', image_url:{url}};
+    })] : message.content;
+}
+export function claudeContent(message: AiMessage) {
+    return message.images?.length ? [{type:'text', text:message.content}, ...message.images.map(url => {
+        const image = imageData(url);
+        return {type:'image', source:{type:'base64', media_type:image.mimeType, data:image.data}};
+    })] : message.content;
 }
 
 const waitForRetry = (milliseconds: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -50,7 +71,7 @@ export async function callGemini(
         system_instruction: { parts: [{ text: systemPrompt }] },
         contents: messages.map(m => ({
             role: m.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: m.content }]
+            parts: [{ text: m.content }, ...(m.images || []).map(url => ({inlineData:imageData(url)}))]
         }))
     };
 
@@ -86,7 +107,7 @@ export async function callChatGPT(
                     model,
                     messages: [
                         { role: 'system', content: systemPrompt },
-                        ...messages.map(m => ({ role: m.role, content: m.content }))
+                        ...messages.map(m => ({ role: m.role, content: openAiContent(m) }))
                     ]
                 },
                 {
@@ -126,7 +147,7 @@ export async function callClaude(
             model,
             max_tokens: 4096,
             system: systemPrompt,
-            messages: messages.map(m => ({ role: m.role, content: m.content }))
+            messages: messages.map(m => ({ role: m.role, content: claudeContent(m) }))
         },
         {
             headers: {
@@ -166,7 +187,7 @@ export async function callFactChat(
             model,
             messages: [
                 { role: 'system', content: systemPrompt },
-                ...messages.map(m => ({ role: m.role, content: m.content }))
+                ...messages.map(m => ({ role: m.role, content: openAiContent(m) }))
             ]
         },
         {
@@ -191,6 +212,18 @@ export async function callAi(
 ): Promise<string> {
     if (!apiKey || apiKey.trim() === '') {
         throw new Error(`${provider.toUpperCase()} API 키가 설정되지 않았습니다.`);
+    }
+    if (provider.startsWith('custom:')) {
+        const saved = readCustomAiProviders().find(item => item.id === provider);
+        if (!saved) throw new Error('삭제되었거나 등록되지 않은 AI 제공자입니다.');
+        const response = await axios.post(saved.endpoint, {
+            model: model || saved.model,
+            messages:[{role:'system',content:systemPrompt},...messages.map(m=>({role:m.role,content:openAiContent(m)}))],
+            stream:false
+        }, {headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},signal,timeout:120000});
+        const reply=response.data?.choices?.[0]?.message?.content;
+        if(typeof reply!=='string')throw new Error('기관 AI 응답이 Chat Completions 형식이 아닙니다. API 규격을 확인하세요.');
+        return reply;
     }
     switch (provider) {
         case 'gemini':   return callGemini(apiKey, messages, systemPrompt, model, signal);

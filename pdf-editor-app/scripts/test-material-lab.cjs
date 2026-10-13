@@ -1,0 +1,34 @@
+global.window=new EventTarget();window.location={href:'http://localhost/'};
+const assert=require('node:assert/strict');const {build}=require('esbuild');const storage=new Map();
+global.localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)};
+(async()=>{
+const result=await build({stdin:{contents:`export * from './src/services/MaterialReferences';export * from './src/store/useMaterialLibrary';export {GRADIENT_KIT} from './src/services/GradientUiKit';export * from './src/store/useMaterialStore';export * from './src/services/MaterialLabService';export {useAppStore} from './src/store/useAppStore';export {usePluginStore} from './src/store/usePluginStore';`,resolveDir:process.cwd()},bundle:true,platform:'node',external:['canvas'],format:'cjs',write:false,plugins:[{name:'mock-ai',setup(b){b.onLoad({filter:/[\\/]PdfTextService\.ts$/},()=>({contents:'export const pdfTextService={}',loader:'ts'}));b.onLoad({filter:/[\\/]AiService\.ts$/},()=>({contents:'export const callAi=(...args)=>globalThis.aiReply(...args)',loader:'ts'}));}}]});
+const mod={exports:{}};new Function('require','module','exports',result.outputFiles[0].text)(require,mod,mod.exports);const m=mod.exports;
+const kit=m.validateMaterialDesign(m.GRADIENT_KIT);assert(kit.buttonStates.selected.gradient);assert.notEqual(kit.buttonStates.normal.fill,kit.buttonStates.selected.fill);assert(m.materialCss(kit).includes('[aria-pressed=true]'));const invalidKit=structuredClone(kit);delete invalidKit.buttonStates.disabled;assert.throws(()=>m.validateMaterialDesign(invalidKit));
+const valid=structuredClone(m.DEFAULT_MATERIAL);valid.materials.tools.fill='#123456';valid.materials.inputs.gradient=true;
+m.useMaterialStore.getState().apply(valid);assert.equal(JSON.parse(storage.get('uiMaterialLab.v1')).design.materials.tools.fill,'#123456');
+const before=storage.get('uiMaterialLab.v1');for(const patch of [{fill:'url(https://example.com)'},{radius:999},{shadow:NaN},{unknown:'x'}]){const bad=structuredClone(valid);Object.assign(bad.materials.tools,patch);assert.throws(()=>m.useMaterialStore.getState().apply(bad));assert.equal(storage.get('uiMaterialLab.v1'),before);}
+assert(m.materialCss(valid).includes('.brush-panel button'));assert(m.materialCss(valid).includes('[data-settings-dialog]'));assert(m.materialCss(valid).includes('textarea'));assert(!m.materialCss(valid).includes('canvas'));
+await m.usePluginStore.getState().registerEntry({definition:{id:'ui-design',name:'UI Material Lab'},source:{kind:'builtin'},code:'',evaluated:true,active:true});
+m.useAppStore.setState({aiAgent:'factchat',apiKeys:{factchat:'fixture'},aiModels:{factchat:'fixture-model'}});
+global.aiReply=async(provider,key,messages,system,model)=>{assert.equal(provider,'factchat');assert.equal(key,'fixture');assert.equal(model,'fixture-model');assert(JSON.parse(messages[0].content).request.includes('청록'));return JSON.stringify(valid);};
+assert.deepEqual(await m.generateMaterial('청록 재질',valid),valid);await assert.rejects(m.generateMaterial('청록 버튼',valid),/버튼 상태/);assert.equal(storage.get('uiMaterialLab.v1'),before,'generation does not auto apply');
+global.aiReply=async()=>'{"name":"bad"}';await assert.rejects(m.generateMaterial('test',valid));assert.equal(storage.get('uiMaterialLab.v1'),before);
+let release;let requests=0;global.aiReply=()=>{requests++;return new Promise(resolve=>{release=resolve;});};const pending=m.useMaterialJob.getState().start('continue after close',valid);await new Promise(r=>setTimeout(r,0));await m.useMaterialJob.getState().start('duplicate',valid);assert.equal(requests,1);release(JSON.stringify(valid));await pending;assert.equal(m.useMaterialJob.getState().busy,false);assert.deepEqual(JSON.parse(storage.get('materialLab.draft.v1')),valid);const saved=m.readMaterialLibrary();assert.equal(saved.length,1);assert.equal(saved[0].provider,'factchat');assert.equal(saved[0].model,'fixture-model');m.useMaterialLibrary.getState().rename(saved[0].id,'Saved design');assert.equal(m.readMaterialLibrary()[0].design.name,'Saved design');assert.throws(()=>m.useMaterialLibrary.getState().rename(saved[0].id,''));m.useMaterialLibrary.getState().save(valid);assert.equal(m.readMaterialLibrary().length,2);m.useMaterialLibrary.getState().remove(saved[0].id);assert.equal(m.readMaterialLibrary().length,1);
+const files=[new File(['A'.repeat(20000)+'TAIL'], 'guide.txt'),new File(['no'], 'archive.zip')];
+let reports;const chunks=[];
+const analysis=await m.analyzeReferences(files,new AbortController().signal,async message=>{chunks.push(message.content);return 'rounded buttons';},value=>{reports=value;});
+assert.equal(chunks.length,2);assert(chunks[1].includes('TAIL'));assert.equal(reports[0].status,'완료');assert.equal(reports[1].status,'제외');assert(analysis.includes('rounded buttons'));
+await assert.rejects(m.analyzeReferences([files[1]],new AbortController().signal,async()=>'',()=>{}),/성공한 참고/);
+const cancelled=new AbortController();let calls=0;
+await assert.rejects(m.analyzeReferences(files,cancelled.signal,async()=>{calls++;cancelled.abort();return 'x';},()=>{}));assert.equal(calls,1);
+let referenceCalls=0;global.aiReply=async(provider,key,messages)=>{referenceCalls++;const payload=JSON.parse(messages[0].content);if(payload.request){assert(payload.referenceAnalysis.includes('reference shape'));return JSON.stringify(valid);}return 'reference shape';};
+await m.useMaterialJob.getState().start('reference design',valid,[new File(['rounded'], 'style.txt')]);assert.equal(referenceCalls,2);assert.equal(m.useMaterialJob.getState().reports[0].status,'완료');
+const isolated=m.patchMaterialTarget(kit,'tools',{fill:'#ff0000',radius:19});
+assert.equal(isolated.toolButtonStates.normal.fill,'#ff0000');assert.equal(isolated.buttonStates.normal.fill,kit.buttonStates.normal.fill);
+assert.equal(m.validateMaterialDesign(isolated).toolButtonStates.normal.radius,19);
+const purpleTool=m.patchMaterialTarget({...isolated,buttonVariant:'purple'},'tools',{fill:'#00ff00'},'selected');
+assert.equal(m.buttonMaterial(purpleTool,'tools','selected').fill,'#00ff00');assert.notEqual(m.buttonMaterial(purpleTool,'buttons','selected').fill,'#00ff00');
+m.useMaterialStore.getState().disable();assert.equal(JSON.parse(storage.get('uiMaterialLab.v1')).enabled,false);
+console.log('PASS: material schema, persistence, scoped styles, selected AI provider, generation isolation, invalid output rejection');
+})().catch(e=>{console.error(e);process.exitCode=1});

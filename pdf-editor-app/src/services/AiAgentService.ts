@@ -32,6 +32,8 @@ export interface AgentOptions {
     messages: AiMessage[];
     systemPrompt: string;
     maxRounds?: number;
+    editorUiTask?: boolean;
+    onProgress?: (message: string) => void;
     signal?: AbortSignal;
     pluginDraftRequest?: boolean;
     pluginInstallRequest?: boolean;
@@ -69,7 +71,7 @@ export function parseToolCalls(reply: string): AiToolCall[] {
             const parsed = JSON.parse(raw);
             const candidates = Array.isArray(parsed) ? parsed : [parsed];
             if (candidates.length && candidates.length <= 20 && candidates.every(call =>
-                call && typeof call.name === 'string' && /^(?:plugin_(?:list|get_source|get_example|write_draft|install|set_active|run|use)|plan_annotations|verify_annotations|set_tool|set_settings|goto_page|read_page|add_shape|add_text|draw_path|highlight_text|erase_rect|undo|redo|terminal_run|terminal_interrupt|terminal_destroy)$/.test(call.name)
+                call && typeof call.name === 'string' && /^(?:editor_ui_get|editor_ui_apply|material_get|material_apply|plugin_(?:list|get_source|get_example|write_draft|install|set_active|run|use)|plan_annotations|verify_annotations|set_tool|set_settings|goto_page|read_page|add_shape|add_text|draw_path|highlight_text|erase_rect|undo|redo|terminal_run|terminal_interrupt|terminal_destroy)$/.test(call.name)
                 && (!call.args || (typeof call.args === 'object' && !Array.isArray(call.args))))) {
                 calls.push(...candidates.map(call => ({ name: call.name, args: call.args ?? {} })));
             }
@@ -100,8 +102,8 @@ export async function runAiAgent(opts: AgentOptions): Promise<AgentResult> {
     const effectiveRequest = /^(?:continue|계속|계속해|계속해줘)[.!\s]*$/i.test(currentRequest)
         ? [...messages].reverse().find(message => message.role === 'user' && !/^(?:continue|계속|계속해|계속해줘)[.!\s]*$/i.test(message.content))?.content || currentRequest
         : currentRequest;
-    const pluginRequest = !!expectedPluginTool || /플러그인|\bplugin\b|Editorial Diagram/i.test(effectiveRequest)
-        || usePluginStore.getState().entries.some(entry => effectiveRequest.toLowerCase().includes(entry.definition.name.toLowerCase()));
+    const pluginRequest = !opts.editorUiTask && (!!expectedPluginTool || /플러그인|\bplugin\b|Editorial Diagram/i.test(effectiveRequest)
+        || usePluginStore.getState().entries.some(entry => effectiveRequest.toLowerCase().includes(entry.definition.name.toLowerCase())));
     const normalizeTarget = (text: string) => text.toLowerCase().replace(/[\s_-]/g, '');
     const requestedText = normalizeTarget(effectiveRequest);
     const editingPlugin = /수정|편집|고쳐|AI\s*기능.*(?:추가|등록)|소스|코드.*(?:읽|확인)|\b(?:edit|modify|source)\b/i.test(effectiveRequest);
@@ -140,6 +142,7 @@ export async function runAiAgent(opts: AgentOptions): Promise<AgentResult> {
         if (opts.signal?.aborted) {
             return { text: '⏹ 사용자가 에이전트 실행을 중단했습니다. 지금까지 수행한 내용을 요약해 주세요.', log, rounds: i + 1, done: false };
         }
+        opts.onProgress?.(`디자인 에이전트 ${i+1}/${maxRounds}단계 · 검토 및 실행 중`);
         const reply = await callAi(opts.provider, opts.apiKey, messages, opts.systemPrompt, opts.model, opts.signal);
         if (opts.signal?.aborted) {
             return { text: '⏹ 사용자가 에이전트 실행을 중단했습니다. 지금까지 수행한 내용을 요약해 주세요.', log, rounds: i + 1, done: false };
@@ -147,6 +150,10 @@ export async function runAiAgent(opts: AgentOptions): Promise<AgentResult> {
         const calls = parseToolCalls(reply);
 
         if (calls.length === 0) {
+            if(opts.editorUiTask&&!log.some(entry=>!entry.error&&(entry.name==='material_apply'||entry.name==='editor_ui_apply'||entry.name==='plugin_use'&&['apply_editor_ui','material_apply'].includes(entry.args?.tool)))){
+                if(continuationAttempts++>=3)return {text:'편집기 UI 적용을 완료하지 못했습니다. 플러그인의 직접 조절 화면을 사용하거나 변경 항목을 구체적으로 요청하세요.',log,rounds:i+1,done:false};
+                messages.push({role:'assistant',content:reply},{role:'user',content:'현재 재질을 material_get으로 읽고 요청한 변경을 material_apply로 실제 적용하세요. 실행 예고로 끝내지 마세요.'});continue;
+            }
             if (expectedPluginTool && !/기존|수정|활성|실행|\b(?:edit|update|activate|run)\b/i.test(currentRequest) && !log.some(entry => entry.name === expectedPluginTool && !entry.error)) {
                 const generatedCode = extractPluginCode(reply);
                 if (generatedCode) return writeDraft(generatedCode);
@@ -179,6 +186,7 @@ export async function runAiAgent(opts: AgentOptions): Promise<AgentResult> {
 
         const results: string[] = [];
         for (const call of calls) {
+            opts.onProgress?.(`도구 실행 중: ${call.name} · 완료를 기다리고 있습니다.`);
             if (opts.signal?.aborted) return { text: "실행이 중단되었습니다.", log, rounds: i + 1, done: false };
             if (mutationTools.has(call.name)) attemptedAnnotations = true;
             let result: string;
@@ -223,8 +231,8 @@ export async function runAiAgent(opts: AgentOptions): Promise<AgentResult> {
                 result = `도구 실행 오류: ${e?.message || String(e)}`;
                 error = true;
             }
-            if (result.length > 4000) {
-                result = result.slice(0, 4000) + '\n...(결과가 길어 축약됨)';
+            if (result.length > (call.name.startsWith('design_')?18000:4000)) {
+                result = result.slice(0, call.name.startsWith('design_')?18000:4000) + '\n...(결과가 길어 축약됨)';
             }
             log.push({ name: call.name, args: call.args, result, error });
             if (!error) continuationAttempts = 0;
@@ -264,7 +272,12 @@ const COLOR_NAMES: Record<string, string> = {
 const IMPORTANCE_ORDER = ['#dc2626', '#0891b2', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#db2777', '#111827'];
 
 export function buildAgentToolInstructions(ctx: AgentToolsContext): string {
-    const tools: { name: string; args: string; desc: string }[] = [];
+    const tools: { name: string; args: string; desc: string }[] = usePluginStore.getState().entries.some(entry=>entry.definition.id==='ui-design'&&entry.active) ? [
+        {name:'editor_ui_get',args:'{}',desc:'현재 PDF 편집기 UI 디테일과 테마 설정 조회'},
+        {name:'editor_ui_apply',args:'{design?:{accent:#RRGGBB,radius:0~24,controlSize:11~18,density:compact|normal|spacious,borderStrength:0~2,shadows:boolean},themeMode?:white|translucent|dark|custom,customThemeColor?:#RRGGBB}',desc:'요청한 항목만 현재 편집기에 실제 적용하고 영구 저장. 문서 내용이나 임의 CSS는 변경하지 않음'},
+        {name:'material_get',args:'{}',desc:'현재 UI 재질과 완전한 JSON 예시를 조회'},
+        {name:'material_apply',args:'{design:{name,materials:{workspace,panels,buttons,tools,inputs,settings}}}',desc:'material_get 예시의 재질 요소를 수정하여 전체 UI에 적용하고 저장'},
+    ] : [];
     if (ctx.hasPdf) {
         tools.push(
             { name: 'plan_annotations', args: '{pages:[1,2,...], minimumCounts?:{"1":2}}', desc: '필기 전에 요청 범위의 모든 페이지와 페이지별 최소 추가 요소 수를 계획. 전체 요청은 마지막 페이지까지 포함' },

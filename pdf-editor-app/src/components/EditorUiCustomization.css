@@ -1,0 +1,11 @@
+[data-editor-ui] button:not(.material-preview *):not(.material-lab *){border-radius:var(--ui-radius,12px)!important;font-size:var(--ui-control-size,13px)!important;min-height:var(--ui-control-height,34px)}
+[data-editor-ui] :is(button.bg-indigo-600,button.bg-blue-600,button.bg-indigo-500,button[class*="from-indigo"],button.appearance-primary){background:var(--ui-accent,#4f46e5)!important;color:var(--ui-accent-text,#fff)!important;border-color:var(--ui-accent,#4f46e5)!important}
+[data-editor-ui] :is(.theme-bg-panel,.theme-bg-glass){border-radius:var(--ui-radius,12px)}
+[data-editor-ui] :is(.theme-border,.theme-border-subtle){border-width:var(--ui-border-width,1px)}
+[data-ui-shadows="false"] [data-editor-ui] :is([class*="shadow"],button){box-shadow:none!important}
+[data-editor-ui] :is(button,input,select,textarea):focus-visible{outline-color:var(--ui-accent,#4f46e5)!important}
+.editor-ui-fields{display:grid;gap:16px}.editor-ui-fields label{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;align-items:center}.editor-ui-fields input[type=range]{width:100%;accent-color:var(--ui-accent)}.editor-ui-fields select{max-width:65%;background:var(--bg-glass);color:var(--text-main);border:1px solid var(--border-glass);border-radius:8px;padding:8px}.editor-ui-fields input[type=color]{width:48px;height:32px;padding:2px;border:1px solid var(--border-glass);border-radius:8px;background:transparent}
+
+/* Native dropdown popups need opaque option colors independently of the field. */
+[data-settings-dialog] select{color-scheme:light}
+[data-settings-dialog] select :is(option,optgroup){background-color:#fff;color:#111827}

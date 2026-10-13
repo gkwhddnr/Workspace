@@ -563,6 +563,10 @@ export async function executeAiTool(name: string, args: any, signal?: AbortSigna
     try {
         signal?.throwIfAborted();
         switch (name) {
+            case 'editor_ui_get': return JSON.stringify((await import('./EditorUiDesignService')).readEditorUi());
+            case 'editor_ui_apply': return JSON.stringify((await import('./EditorUiDesignService')).applyEditorUi(args));
+            case 'material_get': return JSON.stringify((await import('./MaterialLabService')).readMaterials());
+            case 'material_apply': return JSON.stringify((await import('./MaterialLabService')).applyMaterials(args.design));
             case 'plugin_get_source': {
                 const id = typeof args?.id === 'string' ? args.id.trim() : '';
                 if (!access?.pluginSourceIds.includes(id)) throw new Error('현재 요청에서 수정을 지정한 플러그인의 소스만 조회할 수 있습니다.');

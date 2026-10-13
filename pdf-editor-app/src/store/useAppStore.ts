@@ -1,3 +1,5 @@
+import {useMaterialStore} from './useMaterialStore';
+import { readCustomAiProviders } from '../services/CustomAiProviders';
 import type { ToolSettings } from '../types/toolSettings';
 export type { ToolSettings } from '../types/toolSettings';
 import { create } from 'zustand';
@@ -238,8 +240,8 @@ interface AppState {
     setAiThreadTitle: (threadId: string, title: string) => void;
 
     // AI API Keys (localStorage persistent)
-    apiKeys: { gemini: string; chatgpt: string; claude: string; factchat: string };
-    setApiKey: (provider: 'gemini' | 'chatgpt' | 'claude' | 'factchat', key: string) => void;
+    apiKeys: Record<AiProvider, string>;
+    setApiKey: (provider: AiProvider, key: string) => void;
 
     // PDF Text Metadata
     textBlocks: { text: string; rect: [number, number, number, number] }[];
@@ -277,12 +279,23 @@ const getStoredCustomColors = (): string[] => {
     return [];
 };
 
+const readSavedTextTools = (): Partial<ToolSettings> => {
+    try {
+        const saved = JSON.parse(localStorage.getItem('textToolPreferences.v1') || '{}');
+        return {
+            ...(Number.isFinite(saved.fontSize) && saved.fontSize >= 1 && saved.fontSize <= 1000 ? {fontSize:saved.fontSize}:{}),
+            ...(typeof saved.fontFamily === 'string' && saved.fontFamily.length <= 200 ? {fontFamily:saved.fontFamily}:{}),
+            ...(Number.isFinite(saved.textBgOpacity) && saved.textBgOpacity >= 0 && saved.textBgOpacity <= 1 ? {textBgOpacity:saved.textBgOpacity}:{})
+        };
+    } catch { return {}; }
+};
 const AI_MODELS_KEY = 'aiModels';
 const DEFAULT_AI_MODELS: Record<AiProvider, string> = {
     gemini: 'gemini-3.8-flash',
     chatgpt: 'gpt-6-luna',
     claude: 'claude-sonnet-5',
     factchat: 'claude-sonnet-5',
+    ...Object.fromEntries(readCustomAiProviders().map(p=>[p.id,p.model])),
 };
 const getStoredAiModels = (): Record<AiProvider, string> => {
     try {
@@ -367,6 +380,8 @@ export const useAppStore = create<AppState>((set) => ({
         
         set({ customThemeColor: sanitized });
         localStorage.setItem('customThemeColor', sanitized);
+        const material=useMaterialStore.getState();
+        if(material.enabled&&/^#[a-f0-9]{6}$/i.test(sanitized))material.apply({...material.design,materials:{...material.design.materials,workspace:{...material.design.materials.workspace,fill:sanitized}}});
         if (useAppStore.getState().themeMode === 'custom') {
             applyCustomThemeVariables(sanitized);
         }
@@ -399,10 +414,15 @@ export const useAppStore = create<AppState>((set) => ({
         strokeWidth: 2,
         textBgOpacity: 0.5,
         arrowHeadSize: 12,
+        ...readSavedTextTools(),
     },
     setToolSettings: (settings) => {
         if (settings.color && /^#[0-9a-f]{6}$/i.test(settings.color)) localStorage.setItem('selectedToolColor', settings.color);
-        set((s) => ({ toolSettings: { ...s.toolSettings, ...settings } }));
+        set((s) => {
+            const next = { ...s.toolSettings, ...settings };
+            localStorage.setItem('textToolPreferences.v1', JSON.stringify({fontFamily:next.fontFamily,fontSize:next.fontSize,textBgOpacity:next.textBgOpacity}));
+            return { toolSettings: next };
+        });
     },
 
     customColors: getStoredCustomColors(),
@@ -486,8 +506,16 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
     setSharedCode: (code) => set({ sharedCode: code }),
 
     // AI Copilot defaults
-    aiAgent: 'gemini',
-    setAiAgent: (agent) => set({ aiAgent: agent }),
+    aiAgent: (() => {
+        try {
+            const saved = localStorage.getItem('aiSelectedProvider.v1');
+            return (['gemini', 'chatgpt', 'claude', 'factchat',...readCustomAiProviders().map(p=>p.id)].includes(saved || '') ? saved : 'gemini') as AiProvider;
+        } catch { return 'gemini' as AiProvider; }
+    })(),
+    setAiAgent: (agent) => {
+        localStorage.setItem('aiSelectedProvider.v1', agent);
+        set({ aiAgent: agent });
+    },
     aiModels: getStoredAiModels(),
     setAiModel: (provider, model) =>
         set((s) => {
@@ -594,6 +622,7 @@ console.log('실시간 프리뷰가 작동 중입니다!');`
         chatgpt:  localStorage.getItem('apiKey_chatgpt')  || '',
         claude:   localStorage.getItem('apiKey_claude')   || '',
         factchat: localStorage.getItem('apiKey_factchat') || '',
+        ...Object.fromEntries(readCustomAiProviders().map(p=>[p.id,localStorage.getItem(`apiKey_${p.id}`)||''])),
     },
     setApiKey: (provider, key) => {
         localStorage.setItem(`apiKey_${provider}`, key);

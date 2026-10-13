@@ -44,10 +44,18 @@ const Sidebar: React.FC<{ horizontal?: boolean }> = ({ horizontal = false }) => 
     const isCustomColor = customColors.includes(sanitizedCurrentColor);
 
     return (
-        <div className={`h-full flex theme-bg-panel ${horizontal
+        <div className={`brush-panel h-full flex theme-bg-panel ${horizontal
             ? 'flex-row items-center gap-6 px-5 py-3 overflow-x-auto'
             : 'flex-col gap-6 px-5 py-6 overflow-y-auto'
         }`}>
+            <section className={`brush-live-preview ${horizontal ? 'shrink-0 w-[190px]' : ''}`} aria-label="현재 브러시 미리보기">
+                <div className="brush-preview-heading"><span>{tools.find(tool=>tool.id===activeTool)?.label}</span><span>{activeTool==='text'?toolSettings.fontSize+'pt':toolSettings.strokeWidth+'px'}</span></div>
+                <svg viewBox="0 0 200 66" role="img" aria-label={`${tools.find(tool=>tool.id===activeTool)?.label} · ${toolSettings.color} 미리보기`}>
+                    <rect x="0" y="0" width="200" height="66" fill="var(--brush-paper)" rx="8" />
+                    {activeTool==='text' ? <><rect x="14" y="12" width="174" height="42" rx="4" fill="white" opacity={toolSettings.textBgOpacity}/><text x="22" y="42" fill={toolSettings.color} fontFamily={toolSettings.fontFamily} fontSize={Math.min(26,Math.max(12,toolSettings.fontSize))}>선명한 필기 Aa</text></> : activeTool==='highlight' ? <><text x="18" y="39" fontSize="15" fill="var(--brush-ink)">중요한 내용을 표시</text><path d="M16 34H182" stroke={toolSettings.color} strokeWidth={Math.min(24,toolSettings.strokeWidth*5)} opacity=".35" strokeLinecap="square"/></> : activeTool.startsWith('arrow') ? <><path d={activeTool==='arrow'?'M20 44L172 22':'M20 20H102V46H176'} fill="none" stroke={toolSettings.color} strokeWidth={Math.min(10,toolSettings.strokeWidth)} strokeLinecap="round" strokeLinejoin="round"/><path d={activeTool==='arrow'?'M160 15L176 21L165 32':'M164 38L177 46L164 54'} fill="none" stroke={toolSettings.color} strokeWidth={Math.min(10,toolSettings.strokeWidth)} strokeLinecap="round" strokeLinejoin="round"/></> : activeTool==='rect' ? <rect x="42" y="14" width="116" height="38" rx="2" fill="none" stroke={toolSettings.color} strokeWidth={Math.min(10,toolSettings.strokeWidth)}/> : activeTool==='circle' ? <ellipse cx="100" cy="33" rx="58" ry="21" fill="none" stroke={toolSettings.color} strokeWidth={Math.min(10,toolSettings.strokeWidth)}/> : ['select','eraser','image'].includes(activeTool) ? <text x="100" y="38" textAnchor="middle" fontSize="13" fill="var(--brush-ink)">{activeTool==='select'?'요소를 선택하고 이동':activeTool==='eraser'?'필기를 선택해 지우기':'이미지 배치'}</text> : <path d="M18 45C44 12 61 60 91 32S141 20 181 36" fill="none" stroke={toolSettings.color} strokeWidth={Math.min(18,toolSettings.strokeWidth)} strokeLinecap="round"/>}
+                </svg>
+                <p className="brush-preview-note">문서 위 표시 미리보기</p>
+            </section>
             {/* ── Tools Section ── */}
             <section className={horizontal ? 'shrink-0' : ''}>
                 <div className="flex items-center gap-2 mb-3">
@@ -59,19 +67,22 @@ const Sidebar: React.FC<{ horizontal?: boolean }> = ({ horizontal = false }) => 
                         <div key={tool.id} className={`relative ${activeTool === tool.id ? 'z-50' : 'z-0'}`}>
                         <button
                             id={`tool-${tool.id}`}
+                            title={`${tool.label} (${tool.shortcut})`}
+                            aria-label={`${tool.label} 도구`}
+                            aria-pressed={activeTool === tool.id}
                             onClick={() => setActiveTool(tool.id)}
-                            className={`relative flex flex-col items-center gap-1.5 py-3 px-1 rounded-2xl text-[10px] font-bold transition-all duration-300 ${horizontal ? 'w-[72px]' : 'w-full'} ${activeTool === tool.id
-                                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-[1.02]'
+                            className={`relative flex flex-col items-center gap-1.5 py-3 px-1 brush-tool rounded-xl text-xs font-semibold transition-colors duration-150 ${horizontal ? 'w-[72px]' : 'w-full'} ${activeTool === tool.id
+                                ? 'brush-tool-active'
                                 : 'theme-text-main theme-tool-hover'
                                 }`}
                         >
                             {tool.icon}
                             <div className="flex flex-col items-center gap-1 mt-0.5">
-                                <span className={activeTool === tool.id ? 'text-white' : 'theme-text-main'}>
+                                <span className={'theme-text-main'}>
                                     {tool.label}
                                 </span>
-                                <span className={`px-2 py-0.5 rounded-full text-[7px] font-mono border leading-none ${activeTool === tool.id 
-                                    ? 'bg-white/20 border-white/30 text-white' 
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono border leading-none ${activeTool === tool.id
+                                    ? 'border-indigo-200 text-indigo-600'
                                     : 'bg-slate-100 border-slate-200 text-slate-400 theme-bg-sub'}`}
                                 >
                                     {tool.shortcut}
@@ -120,7 +131,9 @@ const Sidebar: React.FC<{ horizontal?: boolean }> = ({ horizontal = false }) => 
                             ref={(el) => { if (el) el.style.setProperty('--bg-color', color); }}
                             onClick={() => setToolSettings({ color })}
                             title={`색상 선택: ${color}`}
-                            className={`sidebar-color-btn w-7 h-7 rounded-md border-2 transition-transform hover:scale-110 ${toolSettings.color === color ? 'border-blue-500 scale-110' : 'border-gray-200'
+                            aria-label={`색상 ${color}`}
+                            aria-pressed={toolSettings.color.toUpperCase()===color.toUpperCase()}
+                            className={`sidebar-color-btn w-7 h-7 rounded-md border-2 transition-colors ${toolSettings.color === color ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-gray-200'
                                 }`}
                         />
                     ))}
@@ -195,8 +208,8 @@ const Sidebar: React.FC<{ horizontal?: boolean }> = ({ horizontal = false }) => 
                                     ref={(el) => { if (el) el.style.setProperty('--bg-color', color); }}
                                     onClick={() => setToolSettings({ color })}
                                     title={`저장된 색상: ${color}`}
-                                    className={`sidebar-color-btn w-6 h-6 rounded-full shadow-sm transition-transform hover:scale-110 border ${
-                                        toolSettings.color.toUpperCase() === color.toUpperCase() ? 'border-indigo-500 scale-110' : 'border-white/50'
+                                    className={`sidebar-color-btn w-6 h-6 rounded-full shadow-sm transition-colors border ${
+                                        toolSettings.color.toUpperCase() === color.toUpperCase() ? 'border-indigo-500 ring-2 ring-indigo-500/20' : 'border-white/50'
                                     }`}
                                 />
                             ))}
@@ -221,10 +234,11 @@ const Sidebar: React.FC<{ horizontal?: boolean }> = ({ horizontal = false }) => 
                     >
                         <Minus size={14} />
                     </button>
-                    <div className="flex-1 h-7 flex items-center justify-center bg-gray-100 rounded">
+                    <div className="flex-1 h-7 flex items-center justify-center theme-bg-sub rounded">
                         <div
                             ref={strokePreviewRef}
-                            className="sidebar-stroke-preview rounded-full bg-gray-800"
+                            className="sidebar-stroke-preview rounded-full"
+                            style={{backgroundColor:toolSettings.color}}
                         />
                     </div>
                     <button
@@ -236,67 +250,17 @@ const Sidebar: React.FC<{ horizontal?: boolean }> = ({ horizontal = false }) => 
                     </button>
                 </div>
                 <p className="text-center text-xs mt-1 theme-text-muted">{toolSettings.strokeWidth}px</p>
+                <div className="brush-width-presets" role="group" aria-label="두께 프리셋">
+                    {[1,2,4,8].map(value=><button key={value} type="button" aria-label={`두께 ${value}px`} aria-pressed={toolSettings.strokeWidth===value} onClick={()=>setToolSettings({strokeWidth:value})}>{value}px</button>)}
+                </div>
+                <input aria-label="브러시 두께" type="range" min={1} max={20} step={1} value={toolSettings.strokeWidth} onChange={e=>setToolSettings({strokeWidth:Number(e.target.value)})} className="w-full mt-3 accent-indigo-600" />
+
             </div>
 
 
             <div className={horizontal ? 'w-px self-stretch bg-slate-200/50' : 'h-px bg-slate-200/50'} />
 
-            {/* Typography & Background settings */}
-            <div className={horizontal ? 'flex flex-col gap-4 shrink-0' : 'flex flex-col gap-4'}>
-                <div className="flex flex-col gap-2">
-                    <div className="flex justify-between items-center px-1">
-                        <p className="text-[10px] font-bold uppercase tracking-widest theme-text-muted">글꼴 & 크기</p>
-                        <p className="text-[8px] font-mono text-slate-400 border border-slate-200 rounded px-1">Alt + ↑ ↓ &nbsp; ← →</p>
-                    </div>
-                    <div className="flex gap-2">
-                        <select
-                            value={toolSettings.fontFamily}
-                            onChange={(e) => setToolSettings({ fontFamily: e.target.value })}
-                            className="flex-1 bg-slate-50 theme-bg-sub border theme-border rounded-xl px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                            title="글꼴 선택"
-                        >
-                            <option value="Inter, sans-serif">Inter</option>
-                            <option value="'Outfit', sans-serif">Outfit</option>
-                            <option value="'Roboto', sans-serif">Roboto</option>
-                            <option value="serif">Serif</option>
-                            <option value="monospace">Monospace</option>
-                        </select>
-                        <div className="flex items-center bg-slate-50 theme-bg-sub border theme-border rounded-xl px-3 py-2 gap-2">
-                            <span className="text-[10px] font-bold text-slate-400">AA</span>
-                            <input
-                                type="number"
-                                value={toolSettings.fontSize}
-                                onChange={(e) => setToolSettings({ fontSize: Number(e.target.value) })}
-                                className="w-8 bg-transparent text-xs font-bold focus:outline-none"
-                                min="8"
-                                max="100"
-                                title="글꼴 크기 설정"
-                            />
-                        </div>
-                    </div>
-                    <div className="flex flex-col gap-2 mt-4 pt-4 border-t theme-border border-dashed">
-                        <div className="flex justify-between items-center px-1">
-                            <p className="text-[10px] font-bold uppercase tracking-widest theme-text-muted">박스 투명도</p>
-                            <span className="text-[9px] font-mono font-black text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 uppercase leading-none">
-                                 {Math.round(toolSettings.textBgOpacity * 100)}%
-                            </span>
-                        </div>
-                        <div className="px-1 py-1">
-                            <input
-                                type="range"
-                                min="0"
-                                max="1"
-                                step="0.01"
-                                value={toolSettings.textBgOpacity}
-                                onChange={(e) => setToolSettings({ textBgOpacity: Number(e.target.value) })}
-                                className="w-full h-1 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                                title="텍스트 박스 투명도 설정"
-                            />
-                        </div>
-                    </div>
-                </div>
 
-            </div>
         </div>
     );
 };

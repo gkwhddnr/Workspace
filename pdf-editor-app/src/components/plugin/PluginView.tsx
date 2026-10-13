@@ -47,12 +47,12 @@ export function PluginView({ entry, onClose }: { entry: PluginRegistryEntry; onC
     if (renderer.kind === 'html') return <PluginOutputPanel html={renderer.html} onClose={onClose} />;
     const Component = renderer.kind === 'react' ? renderer.component as React.ComponentType : null;
     return (
-        <div className="flex flex-col min-w-0 h-full theme-bg-panel">
+        <div className="flex flex-col min-w-0 min-h-0 h-full theme-bg-panel">
             <div className="flex items-center justify-between px-3 py-2 border-b theme-border-subtle shrink-0">
                 <span className="text-xs font-bold theme-text-main">{entry.definition.name}</span>
                 <button onClick={onClose} className="p-1 theme-tool-hover rounded-md theme-text-muted hover:text-red-500" title="닫기">×</button>
             </div>
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <div data-plugin-view-body className={Component ? "flex-1 min-h-0 overflow-auto" : "flex-1 min-h-0 flex flex-col overflow-hidden"}>
                 <PluginErrorBoundary>
                     {Component ? <Component /> : <MountedPlugin entry={entry} />}
                 </PluginErrorBoundary>

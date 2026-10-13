@@ -1,0 +1,15 @@
+import React from 'react';
+import {ButtonVariant,MaterialDesign,materialStyle,buttonMaterial} from '../store/useMaterialStore';
+interface Props {design:MaterialDesign;onSelect?:(variant:ButtonVariant)=>void;}
+export default function ButtonKitPreview({design,onSelect}:Props){
+ const states=design.buttonStates;if(!states)return null;
+ const active=design.buttonVariant||'teal';
+ const variants:[ButtonVariant,string,string][]=[['teal','청록 선택 UI','selected'],['purple','보라 선택 UI','secondary']];
+ return <section className="material-preview kit-preview" style={materialStyle(design.materials.workspace)} aria-label="선택 가능한 버튼 UI 변형 미리보기"><h3>버튼 UI Kit · 적용할 디자인 선택</h3><p>두 변형 중 하나를 선택하면 편집기의 선택 버튼 색상에 적용됩니다.</p>
+ <div className="kit-variant-grid">{variants.map(([variant,label,state])=><article key={variant} className={'kit-variant '+(active===variant?'is-active':'')} aria-label={label}>
+ <div className="kit-variant-heading"><strong>{label}</strong><span>{variant==='teal'?'청록 그라데이션':'보라 그라데이션'}</span></div>
+ <div className="kit-state-grid">{(['normal','disabled',state,'highlight'] as const).map((buttonState,index)=><button key={index} type="button" disabled={buttonState==='disabled'} style={materialStyle(states[buttonState])}>{({normal:'일반',disabled:'비활성',selected:'선택',secondary:'선택',highlight:'강조'})[buttonState]}</button>)}</div>
+ <button className="kit-choose" type="button" aria-pressed={active===variant} onClick={()=>onSelect?.(variant)}>{active===variant?'현재 선택됨':'이 디자인 선택'}</button>
+ </article>)}</div>
+ <section aria-label="도구 버튼 키트 미리보기" style={materialStyle(design.materials.panels)}><h4>Tools &amp; Filters 버튼</h4><div className="material-actions">{['선택','펜','형광펜','텍스트','화살표'].map((label,index)=><button key={label} style={materialStyle(buttonMaterial(design,'tools',index===1?'selected':'normal'))}>{label}</button>)}</div></section><div className="kit-components"><section style={materialStyle(design.materials.panels)}><h4>선택과 강조의 차이</h4><p>기본 버튼은 절제하고, 현재 선택과 주요 동작에 색상을 사용합니다.</p><button style={materialStyle(states[active==='purple'?'secondary':'selected'])}>선택 상태</button><div className="kit-icon-row">{['▶','Ⅱ','✓','×'].map((t,i)=><button aria-label={['재생 예시','일시정지 예시','확인 예시','취소 예시'][i]} key={t} style={materialStyle(i%2?states.secondary:states.highlight)}>{t}</button>)}</div></section><section><div className="kit-search" style={materialStyle(design.materials.inputs)}><span>Search…</span><button aria-label="검색 예시" style={materialStyle(states[active==='purple'?'secondary':'selected'])}>⌕</button></div><label>진행률 · 72%<div className="kit-track"><span style={{...materialStyle(states[active==='purple'?'secondary':'selected']),width:'72%'}}/></div></label><label>강도<input type="range" aria-label="키트 슬라이더 예시" defaultValue={60} style={{accentColor:states[active==='purple'?'secondary':'selected'].fill,width:'100%'}}/></label><textarea aria-label="키트 입력창 예시" placeholder="Enter your message…" style={materialStyle(design.materials.inputs)}/><button style={materialStyle(states.highlight)}>Submit</button></section></div></section>;
+}

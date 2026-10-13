@@ -25,6 +25,20 @@ export async function migrateEditorialPlugins(saved: PersistedPlugin[]): Promise
         import('../../docs/examples/editorial-diagram-v1.js?raw'),
         import('../../docs/examples/editorial-diagram-v1.1.js?raw'),
         import('../../docs/examples/editorial-diagram-v1.2.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.3.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.4.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.4.1.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.4.2.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.5.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.6.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.6.1.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.6.2.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.7.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.7.1.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.7.2.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.7.3.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.7.4.js?raw'),
+        import('../../docs/examples/editorial-diagram-v1.8.0.js?raw'),
     ]);
     const knownSources = new Set(legacy.map(module => normalizeSource(module.default)));
     return saved.map(item => {

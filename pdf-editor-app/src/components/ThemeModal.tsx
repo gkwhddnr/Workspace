@@ -1,3 +1,4 @@
+import EditorUiCustomization from './EditorUiCustomization';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { TABS } from '../config/tabs';
 import React, { useEffect, useState, useRef } from 'react';
@@ -74,8 +75,8 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
         >
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
 
-            <div className={`relative w-[640px] max-w-[95vw] max-h-[90vh] overflow-y-auto text-slate-700 bg-white rounded-3xl shadow-2xl border border-slate-200 transition-all duration-300 ${isOpen ? 'scale-100 translateY(0)' : 'scale-95 translateY(20px)'}`}>
-                <div className="p-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white flex justify-between items-center">
+            <div className={`relative w-[640px] max-w-[95vw] max-h-[90vh] overflow-y-auto theme-bg-panel text-slate-700 bg-white rounded-3xl shadow-2xl border border-slate-200 transition-all duration-300 ${isOpen ? 'scale-100 translateY(0)' : 'scale-95 translateY(20px)'}`}>
+                <div data-ui-surface="inverse" className="p-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white flex justify-between items-center">
                     <div className="flex items-center gap-3">
                         <Palette size={24} />
                         <h2 className="text-xl font-bold">설정 (Ctrl+,)</h2>
@@ -89,7 +90,7 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                     <p className="text-xs text-slate-500">변경 사항은 즉시 적용되며 앱을 다시 켜도 유지됩니다. Alt+D로도 열 수 있습니다.</p>
                 </div>
                 <section className="mx-6 mt-5 rounded-2xl border border-slate-200 overflow-hidden">
-                    <header className="px-4 py-3 bg-slate-50 border-b border-slate-200">
+                    <header className="px-4 py-3 theme-bg-glass bg-slate-50 border-b border-slate-200">
                         <h3 className="font-bold text-base">작업 환경</h3>
                         <p className="text-xs text-slate-500 mt-1">탭 배치, 저장 품질, 플러그인 시작 동작</p>
                     </header>
@@ -120,12 +121,27 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                     </div>
                 </section>
                 <section className="mx-6 mt-5 rounded-2xl border border-slate-200 overflow-hidden">
-                    <header className="px-4 py-3 bg-slate-50 border-b border-slate-200">
+                    <header className="px-4 py-3 theme-bg-glass bg-slate-50 border-b border-slate-200">
                         <h3 className="font-bold text-base">화면 및 도구</h3>
                         <p className="text-xs text-slate-500 mt-1">화면 테마와 PDF 필기 도구 표시</p>
                     </header>
                     <div className="p-4 space-y-5">
                     <section className="space-y-3">
+                    <h4 className="font-semibold text-sm">글꼴 · 크기 · 텍스트 박스</h4>
+                    <div className="grid grid-cols-2 gap-3">
+                        <label className="text-xs space-y-1">글꼴
+                            <select title="글꼴 선택" value={toolSettings.fontFamily} onChange={e=>setToolSettings({fontFamily:e.target.value})} className="w-full border rounded-lg p-2">
+                                {[['Inter, sans-serif','Inter'],["'Outfit', sans-serif",'Outfit'],["'Roboto', sans-serif",'Roboto'],['serif','Serif'],['monospace','Monospace']].map(([value,label])=><option key={value} value={value}>{label}</option>)}
+                            </select>
+                        </label>
+                        <label className="text-xs space-y-1">글꼴 크기 (Alt + 방향키)
+                            <input title="글꼴 크기 설정" type="number" min={8} max={100} value={toolSettings.fontSize} onChange={e=>{const value=Number(e.target.value);if(value>=8&&value<=100)setToolSettings({fontSize:value});}} className="w-full border rounded-lg p-2" />
+                        </label>
+                    </div>
+                    <label className="block text-xs">박스 투명도 · {Math.round(toolSettings.textBgOpacity*100)}%
+                        <input title="텍스트 박스 투명도 설정" type="range" min={0} max={1} step={.01} value={toolSettings.textBgOpacity} onChange={e=>setToolSettings({textBgOpacity:Number(e.target.value)})} className="block w-full mt-2" />
+                    </label>
+                    </section><section className="space-y-3">
                     <h4 className="font-semibold text-sm">필기 색상</h4>
                     <p className="text-xs text-slate-500">Alt+Shift+방향키로 아래 팔레트를 이동합니다. 선택한 색상과 추가 색상도 저장됩니다.</p>
                     <div className="grid grid-cols-4 gap-2">
@@ -203,7 +219,7 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                                             title="배경색 선택"
                                             placeholder="색상 선택"
                                         />
-                                        <span className="relative text-[10px] font-black text-white mix-blend-difference uppercase">Pick Color</span>
+                                        <span data-material-preserve className="relative text-[10px] font-black text-white mix-blend-difference uppercase">Pick Color</span>
                                     </div>
                                     <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-sm">
                                         <span className="text-[10px] font-black text-slate-300 mr-2">HEX</span>
@@ -256,6 +272,7 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                     </div>
                 </section>
 
+                <details className="p-6"><summary>편집기 꾸미기 · 버튼 및 패널 디테일</summary><EditorUiCustomization/></details>
                 {/* Apply Button */}
                 <div className="p-6 pt-0 flex gap-3">
                     <button 

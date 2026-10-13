@@ -41,13 +41,23 @@ export function createPluginContext(entry: PluginRegistryEntry, scope: PluginSco
             editor: usePdfEditorStore,
             app: useAppStore,
             document: {
+                lookupGlossaryTerm: (term, signal, context) => documentOperation(async combined => {
+                    const { lookupGlossaryTerm } = await import('../services/GlossaryWebService');
+                    return lookupGlossaryTerm(term, combined, context);
+                }, signal),
+                summarizeGlossarySources: (term, sources, signal, context) => documentOperation(async combined => {
+                    const { summarizeGlossarySources } = await import('../services/GlossaryWebService');
+                    return summarizeGlossarySources(term, sources, combined, context);
+                }, signal),
+                getDiagramInstructions: async () => (await import('../services/PluginDocumentService')).getDiagramInstructions(),
+                setDiagramInstructions: async value => (await import('../services/PluginDocumentService')).setDiagramInstructions(value),
                 getPageText: (page, signal) => documentOperation(async combined => {
                     const { readPluginPage } = await import('../services/PluginDocumentService');
                     return readPluginPage(page, combined);
                 }, signal),
-                summarizePage: (page, signal) => documentOperation(async combined => {
+                summarizePage: (page, signal, options) => documentOperation(async combined => {
                     const { summarizePluginPage } = await import('../services/PluginDocumentService');
-                    return summarizePluginPage(page, combined);
+                    return summarizePluginPage(page, combined, options);
                 }, signal),
             },
         },
