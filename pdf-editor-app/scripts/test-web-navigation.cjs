@@ -1,0 +1,30 @@
+const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
+const {app,BrowserWindow}=require('electron');
+const {build}=require('esbuild');
+const {rawSourcesPlugin}=require('./esbuild-fixtures.cjs');
+const root=path.resolve(__dirname,'..');
+const temp=fs.mkdtempSync(path.join(os.tmpdir(),'pdf-web-navigation-'));
+app.setPath('userData',path.join(temp,'profile'));
+app.whenReady().then(async()=>{
+ await build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import {flushSync} from 'react-dom';import WebViewer from './src/components/viewers/WebViewer';import {useAppStore} from './src/store/useAppStore';window.fixture={store:useAppStore,mount(){flushSync(()=>createRoot(document.getElementById('root')).render(<WebViewer/>));}};`,resolveDir:root,loader:'tsx'},bundle:true,format:'iife',platform:'browser',outfile:path.join(temp,'fixture.js'),plugins:[rawSourcesPlugin],define:{'process.env.NODE_ENV':'"production"','import.meta.env':'{}'},logLevel:'silent'});
+ fs.writeFileSync(path.join(temp,'index.html'),'<div id="root"></div><script src="fixture.js"></script>');
+ const win=new BrowserWindow({show:false,webPreferences:{nodeIntegration:true,contextIsolation:false}});
+ await win.loadFile(path.join(temp,'index.html'));
+ console.log(await win.webContents.executeJavaScript(`(async()=>{
+ const assert=require('node:assert/strict');const {store,mount}=window.fixture;mount();
+ const wait=()=>new Promise(resolve=>setTimeout(resolve,40));await wait();
+ const webview=document.querySelector('webview');const loads=[];webview.loadURL=url=>{loads.push(url);return Promise.resolve();};
+ const source1='https://doi.org/10.1234/first',source2='https://doi.org/10.1234/second',source3='https://doi.org/10.1234/third';
+ store.getState().setWebUrl(source1);await wait();store.getState().setWebUrl(source2);await wait();assert.equal(loads.length,0);
+ webview.dispatchEvent(new Event('dom-ready'));assert.deepEqual(loads,[source2],'latest citation loads after readiness');
+ store.getState().setWebUrl(source3);await wait();assert.deepEqual(loads,[source2,source3],'mounted viewer navigates to next citation');
+ assert.equal(document.querySelector('input').value,source3);
+ const redirect='https://publisher.example/paper';const event=new Event('did-navigate');event.url=redirect;webview.dispatchEvent(event);await wait();
+ assert.equal(store.getState().webUrl,redirect);assert.equal(loads.length,2,'redirect does not restart navigation');
+ store.getState().setWebUrl(source1);await wait();assert.equal(loads.at(-1),source1);
+ assert.equal(webview.getAttribute('src'),'https://www.google.com','src stays stable to preserve browser history');
+ return 'PASS: citation switching, queued latest URL, redirects and stable webview source';
+})()`));win.destroy();app.exit(0);
+}).catch(error=>{console.error(error);app.exit(1)});

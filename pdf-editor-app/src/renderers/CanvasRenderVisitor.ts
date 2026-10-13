@@ -106,7 +106,7 @@ export class CanvasRenderVisitor implements ElementVisitor {
         this.ctx.globalAlpha = style.opacity;
         // Highlight uses square caps for marker-like appearance; pen uses round
         this.ctx.lineCap = isHighlight ? 'square' : 'round';
-        this.ctx.lineJoin = isHighlight ? 'miter' : 'round';
+        this.ctx.lineJoin = isHighlight ? 'bevel' : 'round';
         this.ctx.stroke();
         this.ctx.restore();
     }

@@ -62,6 +62,18 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
         setOfficePristineBytes,
         setOfficeClean
     } = useAppStore();
+    // OS scaling / moving between monitors changes the required backing resolution.
+    const [displayDpr, setDisplayDpr] = useState(() => window.devicePixelRatio || 1);
+    useEffect(() => {
+        const query = window.matchMedia(`(resolution: ${displayDpr}dppx)`);
+        const refresh = () => setDisplayDpr(window.devicePixelRatio || 1);
+        query.addEventListener('change', refresh);
+        window.addEventListener('resize', refresh);
+        return () => {
+            query.removeEventListener('change', refresh);
+            window.removeEventListener('resize', refresh);
+        };
+    }, [displayDpr]);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
     const guideCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -625,26 +637,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
             // 이번 요청의 id를 기록해 더 최신 요청이 들어왔으면 나중에 포기한다.
             const requestId = ++renderReqIdRef.current;
-
-            const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true })!;
-            const dpr = window.devicePixelRatio || 1;
-            const qualityMultiplier = 2.0;
-
-            const viewport = page.getViewport({ scale: s * dpr * qualityMultiplier });
-
-            canvas.height = viewport.height;
-            canvas.width = viewport.width;
-            canvas.style.height = `${viewport.height / (dpr * qualityMultiplier)}px`;
-            canvas.style.width = `${viewport.width / (dpr * qualityMultiplier)}px`;
-
-            if (overlayCanvasRef.current) {
-                const overlay = overlayCanvasRef.current;
-                overlay.height = viewport.height;
-                overlay.width = viewport.width;
-                overlay.style.height = `${viewport.height / (dpr * qualityMultiplier)}px`;
-                overlay.style.width = `${viewport.width / (dpr * qualityMultiplier)}px`;
-                overlay.getContext('2d')!.setTransform(dpr * qualityMultiplier, 0, 0, dpr * qualityMultiplier, 0, 0);
-            }
+            lastRenderedKeyRef.current = null;
 
             // 진행 중인 이전 렌더가 있으면 취소하고 canvas를 내려놓을 때까지
             // 기다린다. 이 대기 없이 바로 render() 하면 같은 canvas 다중
@@ -664,9 +657,29 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                 return;
             }
 
+            // Resize only after the previous PDF.js task has released this canvas.
+            // Keep a logical viewport and use exact integer backing-store ratios.
+            const ctx = canvas.getContext('2d', { alpha: false })!;
+            const viewport = page.getViewport({ scale: s });
+            const outputScale = (window.devicePixelRatio || 1) * 2;
+            canvas.width = Math.ceil(viewport.width * outputScale);
+            canvas.height = Math.ceil(viewport.height * outputScale);
+            canvas.style.width = `${viewport.width}px`;
+            canvas.style.height = `${viewport.height}px`;
+            const sx = canvas.width / viewport.width;
+            const sy = canvas.height / viewport.height;
+            const overlay = overlayCanvasRef.current;
+            if (overlay) {
+                overlay.width = canvas.width;
+                overlay.height = canvas.height;
+                overlay.style.width = canvas.style.width;
+                overlay.style.height = canvas.style.height;
+                overlay.getContext('2d')!.setTransform(sx, 0, 0, sy, 0, 0);
+            }
             renderRunKeyRef.current = key;
             const renderContext = {
                 canvasContext: ctx,
+                transform: [sx, 0, 0, sy, 0, 0],
                 viewport,
                 intent: 'display',
                 annotationMode: pdfjsLib.AnnotationMode.ENABLE
@@ -726,7 +739,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
                 // 렌더 중복 방지 키: 같은 문서·페이지·scale이면 동시에 두 번
                 // render() 하지 않는다(같은 canvas 다중 render 금지).
-                const renderKey = `${String((doc as any).fingerprints?.[0] ?? '?').slice(0, 12)}:${pageNum}:${s}`;
+                const renderKey = `${String((doc as any).fingerprints?.[0] ?? '?').slice(0, 12)}:${pageNum}:${s}:${window.devicePixelRatio || 1}`;
                 await renderPage(page, s, renderKey);
 
                 // Extract text content for snapping
@@ -1429,13 +1442,13 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
         if (!overlay) return;
         const ctx = overlay.getContext('2d')!;
 
-        // DPR-aware clear
-        const dpr = window.devicePixelRatio || 1;
-        const qualityMultiplier = 2.0;
-
+        // Match the actual backing dimensions, including fractional zoom rounding.
+        const width = parseFloat(overlay.style.width) || 1;
+        const height = parseFloat(overlay.style.height) || 1;
         ctx.save();
-        ctx.setTransform(dpr * qualityMultiplier, 0, 0, dpr * qualityMultiplier, 0, 0);
-        ctx.clearRect(0, 0, overlay.width / (dpr * qualityMultiplier), overlay.height / (dpr * qualityMultiplier));
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+        ctx.setTransform(overlay.width / width, 0, 0, overlay.height / height, 0, 0);
 
         const visitor = new CanvasRenderVisitor(ctx, scale, () => {
             // Re-render when a lazy-loaded image finishes loading
@@ -1753,7 +1766,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
         } else if (imageDoc) {
             renderImage(imageDoc, scale);
         }
-    }, [pdfDoc, imageDoc, currentPage, scale, numPages, renderTick, loadPage, renderImage]);
+    }, [pdfDoc, imageDoc, currentPage, scale, numPages, renderTick, displayDpr, loadPage, renderImage]);
 
     // ─── Stable refs so the page-switch effect can always see the latest data ───
     // ─── Stable refs so the page-switch effect can always see the latest data ───
@@ -2387,8 +2400,8 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
     // Apply dynamic inline styles safely avoiding linter warnings
     useEffect(() => {
         if (guideCanvasRef.current && canvasRef.current) {
-            guideCanvasRef.current.style.setProperty('--canvas-width', `${(canvasRef.current.width || 0) / (window.devicePixelRatio || 1)}px`);
-            guideCanvasRef.current.style.setProperty('--canvas-height', `${(canvasRef.current.height || 0) / (window.devicePixelRatio || 1)}px`);
+            guideCanvasRef.current.style.setProperty('--canvas-width', canvasRef.current.style.width);
+            guideCanvasRef.current.style.setProperty('--canvas-height', canvasRef.current.style.height);
         }
     }, [scale, canvasRevision]);
 

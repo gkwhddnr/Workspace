@@ -6,7 +6,8 @@ const WebViewer: React.FC = () => {
     const { webUrl, setWebUrl, setWebPageText, sharedCode } = useAppStore();
     const [inputUrl, setInputUrl] = useState(webUrl);
     // webview의 src 속성에 직접 webUrl을 바인딩하면 did-navigate 시 무한 갱신/로딩 취소가 발생할 수 있으므로 분리합니다.
-    const [currentSrc, setCurrentSrc] = useState(webUrl);
+    const [currentSrc] = useState(webUrl);
+    const lastNavigationUrlRef = useRef(webUrl);
     const [loading, setLoading] = useState(false);
     const webviewRef = useRef<any>(null);
     // dom-ready 이벤트가 발생하기 전에 loadURL()을 호출하면 예외가 발생하므로 준비 상태를 추적하고, 준비 전 요청은 대기열에 보관합니다.
@@ -16,7 +17,8 @@ const WebViewer: React.FC = () => {
     // dom-ready 전에는 URL을 대기열에 보관했다가 준비되면 자동으로 로드합니다.
     const safeLoadURL = (url: string) => {
         if (domReadyRef.current) {
-            webviewRef.current?.loadURL(url);
+            pendingLoadRef.current = null;
+            webviewRef.current?.loadURL(url)?.catch(() => setLoading(false));
         } else {
             pendingLoadRef.current = url;
         }
@@ -34,12 +36,13 @@ const WebViewer: React.FC = () => {
             if (pendingLoadRef.current) {
                 const url = pendingLoadRef.current;
                 pendingLoadRef.current = null;
-                webview.loadURL(url);
+                webview.loadURL(url)?.catch(() => setLoading(false));
             }
         };
 
         const handleNavigate = (e: any) => {
             const url = e.url;
+            lastNavigationUrlRef.current = url;
             setWebUrl(url);
             setInputUrl(url);
         };
@@ -88,6 +91,16 @@ const WebViewer: React.FC = () => {
         };
     }, [setWebUrl, setWebPageText]);
 
+    // Plugin citations and other panels update the store while this viewer stays mounted.
+    // Browser navigation events record their URL first so redirects/history are not loaded again.
+    React.useEffect(() => {
+        if (webUrl === lastNavigationUrlRef.current || webUrl === 'workspace://preview') return;
+        lastNavigationUrlRef.current = webUrl;
+        setInputUrl(webUrl);
+        setWebPageText('');
+        safeLoadURL(webUrl);
+    }, [webUrl, setWebPageText]);
+
     // ─── Real-time Code Preview (workspace://preview) ───
     React.useEffect(() => {
         if (webUrl === 'workspace://preview' && webviewRef.current) {
@@ -132,10 +145,8 @@ const WebViewer: React.FC = () => {
         }
         setWebUrl(finalUrl);
         setInputUrl(finalUrl);
-        setCurrentSrc(finalUrl); // 외부에서 이동할 때만 src를 명시적으로 변경합니다.
-        
-        // React 상태가 변하지 않았을 때도 강제로 이동하기 위해 직접 메서드를 호출합니다.
-        safeLoadURL(finalUrl);
+        // Same-address submission should still navigate; changed addresses use the store effect.
+        if (finalUrl === lastNavigationUrlRef.current) safeLoadURL(finalUrl);
     };
 
     const handleSubmit = (e: React.FormEvent) => {
