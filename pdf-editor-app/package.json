@@ -17,9 +17,10 @@
     "test:annotations": "node scripts/test-ai-annotations.cjs",
     "test:text-selection": "electron scripts/test-text-selection.cjs",
     "test:cache": "node scripts/test-text-cache.cjs",
-    "verify": "npm run typecheck && npm run test:core && npm run test:cache && npm run test:annotations && npm run test:text-selection && npm run test:pdfjs && npm run test:ui && npm run test:plugins && npm run test:custom-ai && npm run build",
+    "verify": "npm run typecheck && npm run test:core && npm run test:cache && npm run test:annotations && npm run test:text-selection && npm run test:pdfjs && npm run test:export-geometry && npm run test:ui && npm run test:plugins && npm run test:custom-ai && npm run build",
     "test:plugins": "node scripts/test-material-lab.cjs && node scripts/test-glossary-web.cjs && node scripts/test-plugin-editor.cjs && node scripts/test-ai-plugin-drafts.cjs && electron scripts/test-plugin-ai-view.cjs",
     "test:custom-ai": "node scripts/test-custom-ai.cjs",
+    "test:export-geometry": "electron scripts/test-export-geometry.cjs",
     "test:material-references": "electron scripts/test-material-references.cjs"
   },
   "dependencies": {

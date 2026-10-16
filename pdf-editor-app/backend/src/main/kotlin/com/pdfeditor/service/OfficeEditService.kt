@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.stereotype.Service
 import org.apache.poi.hslf.usermodel.*
 import org.apache.poi.sl.usermodel.PictureData
+import org.apache.poi.common.usermodel.fonts.FontGroup
+import org.apache.poi.sl.usermodel.VerticalAlignment
+import org.apache.poi.sl.usermodel.TextShape
 import org.apache.poi.sl.usermodel.ShapeType
 import org.apache.poi.xslf.usermodel.*
 import java.awt.BasicStroke
@@ -56,8 +59,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
                 if (!items.isArray) continue
                 val wPt = pageSizes[(idx + 1).toString()]?.first
                 val hPt = pageSizes[(idx + 1).toString()]?.second
-                val sx = if (wPt != null && wPt > 0) slideW / wPt else 1.0
-                val sy = if (hPt != null && hPt > 0) slideH / hPt else 1.0
+                val (sx, sy) = pageScale(wPt, hPt, slideW, slideH)
                 for (item in items) addElementToXslf(slide, item, sx, sy)
             }
 
@@ -123,22 +125,27 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
         val w = item.path("width").asDouble(200.0)
         val h = item.path("height").asDouble(item.path("fontSize").asDouble(12.0) * 1.4)
         val fontSize = item.path("fontSize").asDouble(12.0)
-        val fontFamily = item.path("fontFamily").asText("Outfit, sans-serif")
+        val fontFamily = officeFont(item.path("fontFamily").asText("Arial"))
         val textColor = safeColor(item.path("style").path("color").asText("#111827"))
 
         val tb = slide.createTextBox()
         tb.anchor = Rectangle2D.Double(x * sx, y * sy, max(1.0, w * sx), max(1.0, h * sy))
         tb.wordWrap = true
+        tb.textAutofit = TextShape.TextAutofit.NONE
+        tb.verticalAlignment = VerticalAlignment.TOP
+        tb.leftInset = 0.0; tb.rightInset = 0.0; tb.topInset = 0.0; tb.bottomInset = 0.0
 
         tb.clearText()
         var offset = 0
         text.split('\n').forEach { line ->
             val paragraph = tb.addNewTextParagraph()
+            paragraph.leftMargin = 0.0; paragraph.rightMargin = 0.0; paragraph.indent = 0.0
+            paragraph.spaceBefore = 0.0; paragraph.spaceAfter = 0.0; paragraph.lineSpacing = 120.0
             styledRuns(item, line, offset).forEach { part ->
                 val run = paragraph.addNewTextRun()
                 run.setText(part.text)
                 run.fontSize = fontSize * sy
-                run.fontFamily = fontFamily
+                FontGroup.values().forEach { group -> run.setFontFamily(fontFamily, group) }
                 run.setFontColor(textColor)
                 run.isBold = part.bold
                 run.isUnderlined = part.underline
@@ -229,8 +236,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
                 if (!items.isArray) continue
                 val wPt = pageSizes[(idx + 1).toString()]?.first
                 val hPt = pageSizes[(idx + 1).toString()]?.second
-                val sx = if (wPt != null && wPt > 0) slideW / wPt else 1.0
-                val sy = if (hPt != null && hPt > 0) slideH / hPt else 1.0
+                val (sx, sy) = pageScale(wPt, hPt, slideW, slideH)
                 for (item in items) addElementToHslf(slide, item, sx, sy)
             }
 
@@ -264,6 +270,7 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
                 shapeBbox(item), sx, sy
             )
             "image" -> insertImageElementHslf(slide, item, sx, sy)
+            "group" -> item.path("children").takeIf { it.isArray }?.forEach { child -> addElementToHslf(slide, child, sx, sy) }
         }
     }
 
@@ -278,9 +285,12 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
             max(1.0, item.path("height").asDouble(item.path("fontSize").asDouble(12.0) * 1.4) * sy)
         )
         val fontSize = item.path("fontSize").asDouble(12.0)
-        val fontFamily = item.path("fontFamily").asText("Outfit, sans-serif")
+        val fontFamily = officeFont(item.path("fontFamily").asText("Arial"))
         val textColor = safeColor(item.path("style").path("color").asText("#111827"))
 
+        tb.wordWrap = true
+        tb.verticalAlignment = VerticalAlignment.TOP
+        tb.leftInset = 0.0; tb.rightInset = 0.0; tb.topInset = 0.0; tb.bottomInset = 0.0
         var offset = 0
         var first = true
         text.split('\n').forEachIndexed { lineIndex, line ->
@@ -289,13 +299,17 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
                     else tb.appendText(part.text, lineIndex > 0 && partIndex == 0)
                 first = false
                 run.setFontSize(fontSize * sy)
-                run.setFontFamily(fontFamily)
+                FontGroup.values().forEach { group -> run.setFontFamily(fontFamily, group) }
                 run.setFontColor(textColor)
                 run.setBold(part.bold)
                 run.setUnderlined(part.underline)
                 run.setStrikethrough(part.strike)
             }
             offset += line.length + 1
+        }
+        tb.textParagraphs.forEach { paragraph ->
+            paragraph.leftMargin = 0.0; paragraph.rightMargin = 0.0; paragraph.indent = 0.0
+            paragraph.spaceBefore = 0.0; paragraph.spaceAfter = 0.0; paragraph.lineSpacing = 120.0
         }
     }
 
@@ -437,18 +451,42 @@ class OfficeEditService(private val objectMapper: ObjectMapper) {
             if (py < minY) minY = py
             if (py > maxY) maxY = py
         }
-        val pad = item.path("style").path("strokeWidth").asDouble(2.0) / 2.0
-        return floatArrayOf(
-            (minX - pad).toFloat(),
-            (minY - pad).toFloat(),
-            (maxX - minX + item.path("style").path("strokeWidth").asDouble(2.0)).toFloat(),
-            (maxY - minY + item.path("style").path("strokeWidth").asDouble(2.0)).toFloat()
-        )
+        val pad = item.path("style").path("strokeWidth").asDouble(2.0)
+        return rasterBounds(item, minX, minY, maxX, maxY, pad)
     }
 
-    /** Bounding box of a shape element (x, y, w, h). */
-    private fun shapeBbox(item: JsonNode): FloatArray =
-        floatArrayOf(xOf(item).toFloat(), yOf(item).toFloat(), wOf(item).toFloat(), hOf(item).toFloat())
+    private fun shapeBbox(item: JsonNode): FloatArray {
+        val points = item.path("points")
+        if (!points.isArray || points.isEmpty) return floatArrayOf(xOf(item).toFloat(), yOf(item).toFloat(), wOf(item).toFloat(), hOf(item).toFloat())
+        val stroke = item.path("style").path("strokeWidth").asDouble(2.0)
+        val head = item.path("style").path("arrowHeadSize").asDouble(12.0).coerceAtLeast(stroke * 2.5)
+        val tip = points.last()
+        val minX = minOf(points.minOf { it.path("x").asDouble() }, tip.path("x").asDouble() - head)
+        val minY = minOf(points.minOf { it.path("y").asDouble() }, tip.path("y").asDouble() - head)
+        val maxX = maxOf(points.maxOf { it.path("x").asDouble() }, tip.path("x").asDouble() + head)
+        val maxY = maxOf(points.maxOf { it.path("y").asDouble() }, tip.path("y").asDouble() + head)
+        return rasterBounds(item, minX, minY, maxX, maxY, stroke)
+    }
+
+    private fun rasterBounds(item: JsonNode, minX: Double, minY: Double, maxX: Double, maxY: Double, pad: Double): FloatArray {
+        val requested = item.path("style").path("rasterScale").asDouble(2.0)
+        val scale = if (requested.isFinite()) requested.coerceIn(1.0, 3.0) else 2.0
+        return floatArrayOf((minX-pad).toFloat(), (minY-pad).toFloat(),
+            (ceil((maxX-minX+pad*2)*scale)/scale).toFloat(), (ceil((maxY-minY+pad*2)*scale)/scale).toFloat())
+    }
+
+    private fun officeFont(css: String): String = when (val family=css.substringBefore(',').trim().trim('\'', '"')) {
+        "sans-serif", "system-ui", "" -> "Arial"
+        "serif" -> "Times New Roman"
+        "monospace" -> "Courier New"
+        else -> family
+    }
+
+    private fun pageScale(width: Double?, height: Double?, slideWidth: Double, slideHeight: Double): Pair<Double,Double> {
+        if (width == null && height == null) return 1.0 to 1.0 // legacy payload
+        require(width != null && height != null && width.isFinite() && height.isFinite() && width > 0 && height > 0) { "필기 기준 페이지 크기를 확인하세요." }
+        return slideWidth/width to slideHeight/height
+    }
 
     private fun renderPathPng(pointsNode: JsonNode, color: Color, strokeWidth: Double, opacity: Double, rasterScale: Double): ByteArray? {
         if (!pointsNode.isArray || pointsNode.isEmpty) return null

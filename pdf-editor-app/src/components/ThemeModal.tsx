@@ -79,7 +79,7 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                 <div data-ui-surface="inverse" className="p-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white flex justify-between items-center">
                     <div className="flex items-center gap-3">
                         <Palette size={24} />
-                        <h2 className="text-xl font-bold">설정 (Ctrl+,)</h2>
+                        <h2 className="text-xl font-bold">설정 (Alt+D)</h2>
                     </div>
                     <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-lg transition-colors" title="닫기">
                         <X size={20} />
@@ -138,9 +138,6 @@ const ThemeModal: React.FC<ThemeModalProps> = ({ isOpen, onClose }) => {
                             <input title="글꼴 크기 설정" type="number" min={8} max={100} value={toolSettings.fontSize} onChange={e=>{const value=Number(e.target.value);if(value>=8&&value<=100)setToolSettings({fontSize:value});}} className="w-full border rounded-lg p-2" />
                         </label>
                     </div>
-                    <label className="block text-xs">박스 투명도 · {Math.round(toolSettings.textBgOpacity*100)}%
-                        <input title="텍스트 박스 투명도 설정" type="range" min={0} max={1} step={.01} value={toolSettings.textBgOpacity} onChange={e=>setToolSettings({textBgOpacity:Number(e.target.value)})} className="block w-full mt-2" />
-                    </label>
                     </section><section className="space-y-3">
                     <h4 className="font-semibold text-sm">필기 색상</h4>
                     <p className="text-xs text-slate-500">Alt+Shift+방향키로 아래 팔레트를 이동합니다. 선택한 색상과 추가 색상도 저장됩니다.</p>

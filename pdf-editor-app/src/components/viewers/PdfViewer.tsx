@@ -1,3 +1,6 @@
+import {pdfOverlayPlacement} from '../../utils/pdfOverlayPlacement';
+import {isFileDrag} from '../../utils/dragPayload';
+import { drawAlignmentGuides } from '../../renderers/alignmentGuides';
 import { restoreProjectElements } from '../../utils/restoreProjectElements';
 import { getPdfTextContent } from '../../services/PdfTextContentCache';
 import { PdfTextSelection } from './PdfTextSelection';
@@ -14,7 +17,7 @@ import { useAppStore, DrawingTool } from '../../store/useAppStore';
 import { usePdfEditorStore } from '../../store/usePdfEditorStore';
 import { FileUp, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Save } from 'lucide-react';
 import { jsPDF } from 'jspdf';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, degrees } from 'pdf-lib';
 import { RenderElement } from '../../models/RenderElement';
 import { ElementFactory } from '../../models/ElementFactory';
 import { ToolManager } from '../../tools/next/ToolManager';
@@ -338,44 +341,17 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
     // Effect to render alignment guides on a separate canvas
     useEffect(() => {
         const canvas = guideCanvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        if (guideLineY === null && guideLineX === null) return;
-
-        ctx.save();
-        ctx.setLineDash([5, 5]);
-        ctx.strokeStyle = 'rgba(37, 99, 235, 0.7)'; // Brighter blue for guides
-        ctx.lineWidth = 1;
-
-        if (guideLineY !== null) {
-            ctx.beginPath();
-            ctx.moveTo(0, guideLineY);
-            ctx.lineTo(canvas.width, guideLineY);
-            ctx.stroke();
-        }
-        if (guideLineX !== null) {
-            ctx.beginPath();
-            ctx.moveTo(guideLineX, 0);
-            ctx.lineTo(guideLineX, canvas.height);
-            ctx.stroke();
-        }
-
-        // ─── Render Snap Indicator (Visual Guide) ───
-        if (activeSnapPoint) {
-            ctx.beginPath();
-            ctx.arc(activeSnapPoint.x * scale, activeSnapPoint.y * scale, 5, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(37, 99, 235, 0.6)'; // Blue-600 with transparency
-            ctx.fill();
-            ctx.strokeStyle = 'white';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-        }
-        ctx.restore();
-    }, [guideLineX, guideLineY, activeSnapPoint, scale]); // Re-render when guides or scale changes
+        const main = canvasRef.current;
+        if (!canvas || !main) return;
+        if (canvas.width !== main.width) canvas.width = main.width;
+        if (canvas.height !== main.height) canvas.height = main.height;
+        canvas.style.width = main.style.width;
+        canvas.style.height = main.style.height;
+        const width = parseFloat(main.style.width);
+        const height = parseFloat(main.style.height);
+        drawAlignmentGuides(canvas, width, height, guideLineX, guideLineY,
+            activeSnapPoint ? {x:activeSnapPoint.x*scale,y:activeSnapPoint.y*scale} : null);
+    }, [guideLineX, guideLineY, activeSnapPoint, scale, canvasRevision]);
     const [resizingType, setResizingType] = useState<'width' | 'height' | 'both' | null>(null);
     const [pageInput, setPageInput] = useState('1');
     const [wasErased, setWasErased] = useState(false);
@@ -675,6 +651,13 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                 overlay.style.width = canvas.style.width;
                 overlay.style.height = canvas.style.height;
                 overlay.getContext('2d')!.setTransform(sx, 0, 0, sy, 0, 0);
+            }
+            const guide = guideCanvasRef.current;
+            if (guide) {
+                guide.width = canvas.width;
+                guide.height = canvas.height;
+                guide.style.width = canvas.style.width;
+                guide.style.height = canvas.style.height;
             }
             renderRunKeyRef.current = key;
             const renderContext = {
@@ -1208,7 +1191,10 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
 
     const handleDrop = async (e: React.DragEvent) => {
+        setIsDraggingOver(false);
+        if (!isFileDrag(e.dataTransfer)) return;
         e.preventDefault();
+        e.stopPropagation();
         setIsDraggingOver(false);
         const files = e.dataTransfer.files;
         if (files.length === 0) return;
@@ -1230,7 +1216,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
         await doOpen();
     };
 
-    const getPos = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const getPos = (e: React.MouseEvent<HTMLElement>) => {
         const canvas = overlayCanvasRef.current!;
         const rect = canvas.getBoundingClientRect();
         return { x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -1363,11 +1349,11 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
     // ─── Global Drag & Drop Recovery ───
     useEffect(() => {
         const handleGlobalDragOver = (e: DragEvent) => {
+            if (!isFileDrag(e.dataTransfer)) { setIsDraggingOver(false); return; }
             // Prevent default to allow drop and show 'copy' cursor
             e.preventDefault();
             e.stopPropagation();
             if (e.dataTransfer) {
-                e.dataTransfer.effectAllowed = 'all';
                 e.dataTransfer.dropEffect = 'copy';
             }
             // Use functional update to ensure we use the latest state or just check ref if needed
@@ -1376,13 +1362,13 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
         };
 
         const handleGlobalDragEnter = (e: DragEvent) => {
+            if (!isFileDrag(e.dataTransfer)) { setIsDraggingOver(false); return; }
             e.preventDefault();
             e.stopPropagation();
             if (e.dataTransfer) {
                 e.dataTransfer.effectAllowed = 'all';
                 e.dataTransfer.dropEffect = 'copy';
             }
-            console.log('Drag Enter detected');
             setIsDraggingOver(true);
         };
 
@@ -1395,6 +1381,8 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
         };
 
         const handleGlobalDrop = async (e: DragEvent) => {
+            setIsDraggingOver(false);
+            if (!isFileDrag(e.dataTransfer)) return;
             e.preventDefault();
             e.stopPropagation();
             setIsDraggingOver(false);
@@ -1420,12 +1408,17 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
             }
         };
 
+        const resetDragOverlay = () => setIsDraggingOver(false);
+        window.addEventListener('dragend', resetDragOverlay);
+        window.addEventListener('blur', resetDragOverlay);
         window.addEventListener('dragover', handleGlobalDragOver);
         window.addEventListener('dragenter', handleGlobalDragEnter);
         window.addEventListener('dragleave', handleGlobalDragLeave);
         window.addEventListener('drop', handleGlobalDrop);
 
         return () => {
+            window.removeEventListener('dragend', resetDragOverlay);
+            window.removeEventListener('blur', resetDragOverlay);
             window.removeEventListener('dragover', handleGlobalDragOver);
             window.removeEventListener('dragenter', handleGlobalDragEnter);
             window.removeEventListener('dragleave', handleGlobalDragLeave);
@@ -1486,7 +1479,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                     ctx.stroke();
                 };
 
-                if (selEl.shapeType?.startsWith('arrow-') && selEl.points?.length >= 2) {
+                if ((selEl.shapeType === 'arrow' || selEl.shapeType?.startsWith('arrow-')) && selEl.points?.length >= 2) {
                     // Arrow: Iterate through all points
                     for (let i = 0; i < selEl.points.length; i++) {
                         const p = selEl.points[i];
@@ -1534,40 +1527,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
             }
         }
 
-        // ─── Live text preview while typing in textarea ───
-        if (inputPos) {
-            const fontSize = (Number(toolSettings.fontSize) || 20) * scale;
-            const fontFamily = toolSettings.fontFamily || 'Outfit, sans-serif';
-            const color = toolSettings.color || '#000000';
-            const maxWidth = (editorWidth || 300);
-
-            ctx.save();
-            ctx.font = `${fontSize}px ${fontFamily}`;
-            ctx.fillStyle = color;
-            ctx.globalAlpha = 1.0;
-
-            const lineHeight = fontSize * 1.2;
-            const lines = tempText.split('\n');
-            let currentY = inputPos.y + (fontSize * 0.85);
-
-            for (const line of lines) {
-                let currentLine = '';
-                const chars = Array.from(line);
-                for (let j = 0; j < chars.length; j++) {
-                    const testLine = currentLine + chars[j];
-                    if (ctx.measureText(testLine).width > maxWidth && j > 0) {
-                        ctx.fillText(currentLine, inputPos.x, currentY);
-                        currentLine = chars[j];
-                        currentY += lineHeight;
-                    } else {
-                        currentLine = testLine;
-                    }
-                }
-                ctx.fillText(currentLine, inputPos.x, currentY);
-                currentY += lineHeight;
-            }
-            ctx.restore();
-        }
+        // The contentEditable renders pending text; drawing it here would duplicate it.
 
         ctx.restore();
     }, [currentPageElements, scale, historyRevision, canvasRevision, previewRevision, inputPos, tempText, toolSettings, editorWidth, editingId, selectedElementId, activeTool]);
@@ -1624,8 +1584,9 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                     const image = await pdfDocLib.embedPng(imgData);
 
                     const pdfPage = pdfDocLib.getPage(i - 1);
-                    const { width, height } = pdfPage.getSize();
-                    pdfPage.drawImage(image, { x: 0, y: 0, width, height });
+                    const placement = pdfOverlayPlacement(page.getViewport({scale:1}));
+                    const {angle,...bounds} = placement;
+                    pdfPage.drawImage(image, {...bounds,rotate:degrees(angle)});
                 }
             }
 
@@ -1693,7 +1654,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
 
     // ─── Event Handling (State/Strategy Pattern) ───
-    const handlePointerDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const handlePointerDown = (e: React.MouseEvent<HTMLElement>) => {
         const pos = getPos(e);
 
         // Block all drawing/tool actions while text input is active
@@ -1897,8 +1858,9 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
         if (!inputPos) return;
 
         const editable = editableRef.current;
-        const width = editable ? editable.offsetWidth : 300;
-        const height = editable ? editable.offsetHeight : 100;
+        const editorStyle = editable ? getComputedStyle(editable) : null;
+        const width = editable && editorStyle ? editable.clientWidth - parseFloat(editorStyle.paddingLeft) - parseFloat(editorStyle.paddingRight) : 300;
+        const height = editable && editorStyle ? editable.clientHeight - parseFloat(editorStyle.paddingTop) - parseFloat(editorStyle.paddingBottom) : 100;
 
         // Serialize the rich editor back to plain text + spans.
         let finalText = tempText;
@@ -2406,17 +2368,6 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
     }, [scale, canvasRevision]);
 
     useEffect(() => {
-        if (floatingInputRef.current && inputPos) {
-            // Precise alignment: 
-            // Wrapper div has p-2 (8px), Textarea has padding: 1px 0.5rem (8px left, 1px top)
-            // Total Left Offset = 8 + 8 = 16px
-            // Total Top Offset = 8 + 1 = 9px
-            floatingInputRef.current.style.setProperty('--input-left', `${inputPos.x - 20}px`);
-            floatingInputRef.current.style.setProperty('--input-top', `${inputPos.y - 12}px`);
-        }
-    }, [inputPos]);
-
-    useEffect(() => {
         if (editableRef.current) {
             const el = editingId ? currentPageElements.find(a => a.id === editingId) : null;
             const ann = el as any;
@@ -2429,8 +2380,31 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
             if (color) editableRef.current.style.setProperty('--text-color', color);
             editableRef.current.style.setProperty('--editor-width', `${editorWidth}px`);
             editableRef.current.style.setProperty('--editor-height', `${editorHeight}px`);
+            const container = floatingInputRef.current;
+            if (container && inputPos) {
+                const editor = editableRef.current;
+                const computed = getComputedStyle(editor);
+                const editorRect = editor.getBoundingClientRect();
+                const containerRect = container.getBoundingClientRect();
+                const insetX = editorRect.left - containerRect.left + parseFloat(computed.borderLeftWidth) + parseFloat(computed.paddingLeft);
+                const insetY = editorRect.top - containerRect.top + parseFloat(computed.borderTopWidth) + parseFloat(computed.paddingTop);
+                const context = document.createElement('canvas').getContext('2d');
+                let cssBaseline = size * .85;
+                if (context) {
+                    context.font = computed.font;
+                    const metrics = context.measureText('한글Mg');
+                    const ascent = metrics.fontBoundingBoxAscent;
+                    const descent = metrics.fontBoundingBoxDescent;
+                    if (Number.isFinite(ascent) && Number.isFinite(descent)) {
+                        cssBaseline = (parseFloat(computed.lineHeight) - ascent - descent) / 2 + ascent;
+                    }
+                }
+                // Match the PDF renderer's baseline while measuring actual editor chrome.
+                container.style.setProperty('--input-left', (inputPos.x - insetX) + 'px');
+                container.style.setProperty('--input-top', (inputPos.y - insetY + size * .85 - cssBaseline) + 'px');
+            }
         }
-    }, [editingId, currentPageElements, toolSettings, scale, editorWidth, editorHeight]);
+    }, [inputPos, editingId, currentPageElements, toolSettings, scale, editorWidth, editorHeight]);
 
 
     const hasDocument = !!pdfDoc || !!imageDoc;
@@ -2446,9 +2420,9 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
     if (!hasDocument) {
         return (
             <div
-                className={`h-full w-full flex flex-col items-center gap-4 rounded-lg border-2 border-dashed transition-colors ${isDraggingOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white'} ${bottomDocked ? 'justify-center' : 'justify-start pt-[60.8vh]'}`}
-                onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
-                onDragEnter={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                data-file-drop-active={isDraggingOver} className={`h-full w-full flex flex-col items-center gap-4 rounded-lg border-2 border-dashed transition-colors ${isDraggingOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white'} ${bottomDocked ? 'justify-center' : 'justify-start pt-[60.8vh]'}`}
+                onDragOver={(e) => { if (!isFileDrag(e.dataTransfer)) { setIsDraggingOver(false); return; } e.preventDefault(); setIsDraggingOver(true); }}
+                onDragEnter={(e) => { if (!isFileDrag(e.dataTransfer)) { setIsDraggingOver(false); return; } e.preventDefault(); setIsDraggingOver(true); }}
                 onDragLeave={() => setIsDraggingOver(false)}
                 onDrop={handleDrop}
             >
@@ -2466,15 +2440,15 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
     return (
         <div
-            className="flex flex-col h-full bg-transparent relative"
-            onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
-            onDragEnter={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+            data-file-drop-active={isDraggingOver} className="flex flex-col h-full bg-transparent relative"
+            onDragOver={(e) => { if (!isFileDrag(e.dataTransfer)) { setIsDraggingOver(false); return; } e.preventDefault(); setIsDraggingOver(true); }}
+            onDragEnter={(e) => { if (!isFileDrag(e.dataTransfer)) { setIsDraggingOver(false); return; } e.preventDefault(); setIsDraggingOver(true); }}
             onDragLeave={() => setIsDraggingOver(false)}
             onDrop={handleDrop}
         >
             {/* Visual feedback for dragging over the whole app */}
             {isDraggingOver && (
-                <div className="absolute inset-0 z-[500] bg-blue-500/10 border-4 border-dashed border-blue-500 flex items-center justify-center pointer-events-none transition-all animate-in fade-in">
+                <div data-file-drop-overlay className="absolute inset-0 z-[500] bg-blue-500/10 border-4 border-dashed border-blue-500 flex items-center justify-center pointer-events-none transition-all animate-in fade-in">
                     <div className="bg-white px-8 py-6 rounded-2xl shadow-2xl flex flex-col items-center gap-4 border border-blue-100">
                         <FileUp size={48} className="text-blue-500 animate-bounce" />
                         <span className="text-lg font-bold text-blue-600">여기에 파일을 놓아 열기</span>
@@ -2653,6 +2627,12 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
                         {activeTool === 'select' && pdfDoc && !isInputActive && (
                             <PdfTextSelection document={pdfDoc} pageNumber={currentPage} scale={scale}
+                                shouldSelectAnnotation={(clientX,clientY)=>{
+                                    const canvas=overlayCanvasRef.current;if(!canvas)return false;
+                                    const rect=canvas.getBoundingClientRect();
+                                    return toolManager.hitTestSelection({x:clientX-rect.left,y:clientY-rect.top},scale);
+                                }}
+                                onAnnotationPointerDown={handlePointerDown}
                                 onSelect={() => setSelectedElements([])} />
                         )}
                         {/* Floating Text Input */}
@@ -2660,9 +2640,6 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                             <div
                                 ref={floatingInputRef}
                                 className="pdf-floating-input-container animate-in fade-in zoom-in duration-200"
-                                style={{
-                                    '--text-bg-opacity': toolSettings.textBgOpacity
-                                } as React.CSSProperties}
                             >
                                 {/* Font Size Indicator Tooltip */}
                                 <div className={`absolute -top-10 left-1/2 -translate-x-1/2 transition-all duration-300 pointer-events-none z-[120] ${fontSizeIndicator.visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}>
@@ -2677,7 +2654,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
 
                                 <div
-                                    className="relative group p-2 border-2 border-dashed border-blue-400/50 bg-blue-50/10 rounded-lg cursor-move pointer-events-auto"
+                                    className="relative group p-2 border-2 border-dashed border-blue-400/50 rounded-lg cursor-move pointer-events-auto"
                                     onMouseDown={handleBoxMouseDown}
                                 >
                                     <div
@@ -2688,6 +2665,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                                             aria-multiline="true"
                                             spellCheck={false}
                                             className="pdf-text-editor-textarea"
+                                            data-material-preserve
                                             title="텍스트 입력"
                                             onInput={(e) => {
                                                 const t = (e.currentTarget.innerText || '').replace(/\n$/, '');
@@ -2777,7 +2755,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                                     </div>
                                 </div>
 
-                                {/* Floating Toolbar (Opacity - Bottom and Finish - Top) */}
+                                {/* Text completion status */}
                                 {/* 1. Status Bar (Moved to Top Right) */}
                                 <div className="absolute -top-8 right-0 pointer-events-auto">
                                     <div className="bg-blue-600 text-white text-[6px] font-bold px-1.5 py-1 rounded-md uppercase tracking-tighter shadow-lg whitespace-nowrap border border-blue-500/50">
@@ -2785,28 +2763,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                                     </div>
                                 </div>
 
-                                {/* 2. Transparency Bar (Moved to Bottom Left, Expanded Width) */}
-                                <div className="absolute -bottom-6 left-0 pointer-events-auto">
-                                    <div className="bg-white/95 backdrop-blur-md px-1 py-0.5 rounded-md border border-slate-200 shadow-lg flex items-center gap-1.5 w-[120px]">
-                                        <div className="flex flex-col min-w-[30px]">
-                                            <span className="text-[5px] font-black text-slate-400 uppercase leading-none mb-0.5">박스 투명도</span>
-                                            <span className="text-[7px] font-mono font-black text-blue-600 leading-none">
-                                                {Math.round(toolSettings.textBgOpacity * 100)}%
-                                            </span>
-                                        </div>
-                                        <input
-                                            type="range"
-                                            min="0"
-                                            max="1"
-                                            step="0.01"
-                                            value={toolSettings.textBgOpacity}
-                                            onMouseDown={(e) => e.stopPropagation()}
-                                            onChange={(e) => setToolSettings({ textBgOpacity: Number(e.target.value) })}
-                                            className="pdf-text-editor-slider-mini w-[70px] h-0.5"
-                                            title="배경 투명도 조절"
-                                        />
-                                    </div>
-                                </div>
+
                             </div>
                         )}
                     </div>
@@ -2826,14 +2783,16 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                             <div>
                                 <h3 className="text-base font-bold text-slate-900 dark:text-white">저장하지 않은 변경 사항</h3>
                                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">종료하기 전에 저장하시겠습니까?</p>
+                                {saveStatus && <p role="status" className="text-xs theme-text-main mt-2 break-words">{saveStatus}</p>}
                             </div>
                         </div>
                         <div className="flex flex-col gap-2 mt-4">
                             <button
                                 onClick={async () => {
-                                    toggleExitDialog(false);
                                     const success = await handleSave();
-                                    if (success) {
+                                    const savedState = usePdfEditorStore.getState();
+                                    if (success && savedState.lastSavedRevision >= savedState.historyRevision) {
+                                        toggleExitDialog(false);
                                         const anyWindow = window as any;
                                         await anyWindow?.electronAPI?.forceQuitApp?.();
                                     }

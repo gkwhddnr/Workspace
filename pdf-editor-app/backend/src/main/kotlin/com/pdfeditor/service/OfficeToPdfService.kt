@@ -101,20 +101,14 @@ class OfficeToPdfService {
 
             val outDir = workDir.resolve("out").also { Files.createDirectories(it) }
 
-            // LibreOffice -> PowerPoint COM fallback
+            // Match the native PowerPoint layout when it is available; LibreOffice remains the fallback.
             var libErr: String? = null
             var pptErr: String? = null
-            val generatedPdf = runCatching { convertWithLibreOffice(inputPath, outDir) }
-                .getOrElse {
-                    libErr = it.message ?: it.javaClass.simpleName
-                    null
-                } ?: runCatching { convertWithPowerPoint(inputPath, outDir) }
-                .getOrElse {
-                    pptErr = it.message ?: it.javaClass.simpleName
-                    null
-                } ?: throw IllegalStateException(
-                    buildFailureMessage(libErr, pptErr)
-                )
+            val generatedPdf = runCatching { convertWithPowerPoint(inputPath, outDir) }
+                .getOrElse { pptErr = it.message ?: it.javaClass.simpleName; null }
+                ?: runCatching { convertWithLibreOffice(inputPath, outDir) }
+                .getOrElse { libErr = it.message ?: it.javaClass.simpleName; null }
+                ?: throw IllegalStateException(buildFailureMessage(libErr, pptErr))
 
             val bytes = Files.readAllBytes(generatedPdf)
             val convertedName = "${safeBaseName}.pdf"

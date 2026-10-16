@@ -283,7 +283,7 @@ export function buildAgentToolInstructions(ctx: AgentToolsContext): string {
             { name: 'plan_annotations', args: '{pages:[1,2,...], minimumCounts?:{"1":2}}', desc: '필기 전에 요청 범위의 모든 페이지와 페이지별 최소 추가 요소 수를 계획. 전체 요청은 마지막 페이지까지 포함' },
             { name: 'verify_annotations', args: '{}', desc: '계획한 페이지별 요소 개수와 생성된 요소의 실제 존재를 확인. 누락을 보완한 뒤 완료 보고' },
             { name: 'set_tool', args: '{tool, color?, strokeWidth?}', desc: '도구(filters) 전환: select|pen|highlight|text|rect|circle|eraser|arrow|image (색·두께 동시 설정 가능)' },
-            { name: 'set_settings', args: '{color?, strokeWidth?, fontSize?, fontFamily?, textBgOpacity?, arrowHeadSize?}', desc: 'Tools&Filters 세부 설정 변경' },
+            { name: 'set_settings', args: '{color?, strokeWidth?, fontSize?, fontFamily?, arrowHeadSize?}', desc: 'Tools&Filters 세부 설정 변경' },
             { name: 'goto_page', args: '{page}', desc: '특정 페이지로 이동(1부터)' },
             { name: 'read_page', args: '{page}', desc: '페이지의 텍스트 라인을 정규화 좌표(0~1)와 함께 읽기' },
             { name: 'add_shape', args: '{page, type, x, y, w, h, color?, strokeWidth?, arrowHeadSize?}', desc: '도형 추가. type=rect|circle|highlight|arrow, 좌표는 정규화(0~1). arrowHeadSize는 화살표 머리(5~50)로, 보통 생략하면 본문 글자 크기에 맞춰 자동 조정됩니다' },

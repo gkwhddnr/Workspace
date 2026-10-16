@@ -161,8 +161,9 @@ export class CanvasRenderVisitor implements ElementVisitor {
                 if (pending && (pendingW !== run.fontWeight || pendingD !== run.decoration)) {
                     flush();
                 }
-                const testWidth = this.ctx.measureText((pending + ch)).width;
-                if (testWidth > maxWidth && pending) {
+                this.ctx.font = `${run.fontWeight === 'bold' ? 'bold ' : ''}${scaledFontSize}px ${fontFamily}`;
+                const testWidth = lineStartX - x * s + this.ctx.measureText(pending + ch).width;
+                if (testWidth > maxWidth && (pending || lineStartX > x * s)) {
                     flush();
                     currentY += lineHeight;
                     lineStartX = x * s;

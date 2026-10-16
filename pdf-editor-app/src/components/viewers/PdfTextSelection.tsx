@@ -4,10 +4,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import { renderTextLayer, type PDFDocumentProxy } from '../../services/pdfjs';
 
 /** Native text ranges preserve copy and accessibility without rasterizing the document. */
-export function PdfTextSelection({document: pdf, pageNumber, scale, onSelect}: {
+export function PdfTextSelection({document: pdf, pageNumber, scale, onSelect, shouldSelectAnnotation, onAnnotationPointerDown}: {
     document: PDFDocumentProxy; pageNumber: number; scale: number; onSelect: () => void;
+    shouldSelectAnnotation?: (clientX:number,clientY:number)=>boolean;
+    onAnnotationPointerDown?: React.MouseEventHandler<HTMLDivElement>;
 }) {
     const host = useRef<HTMLDivElement>(null);
+    const annotationGesture=useRef(false);
     const [bypass, setBypass] = useState(false);
     const [selectionPath, setSelectionPath] = useState('');
     useEffect(() => {
@@ -39,10 +42,12 @@ export function PdfTextSelection({document: pdf, pageNumber, scale, onSelect}: {
         };
     }, []);
     useEffect(() => {
-        const key = (event: KeyboardEvent) => setBypass(event.altKey);
-        const blur = () => setBypass(false);
+        const key = (event: KeyboardEvent) => setBypass(event.altKey || annotationGesture.current);
+        const blur = () => {annotationGesture.current=false;setBypass(false);};
+        const release = (event:MouseEvent) => {annotationGesture.current=false;setBypass(event.altKey);};
+        window.addEventListener('mouseup', release);
         window.addEventListener('keydown', key); window.addEventListener('keyup', key); window.addEventListener('blur', blur);
-        return () => { window.removeEventListener('keydown', key); window.removeEventListener('keyup', key); window.removeEventListener('blur', blur); };
+        return () => { window.removeEventListener('mouseup', release); window.removeEventListener('keydown', key); window.removeEventListener('keyup', key); window.removeEventListener('blur', blur); };
     }, []);
     useEffect(() => {
         const container = host.current!;
@@ -65,6 +70,13 @@ export function PdfTextSelection({document: pdf, pageNumber, scale, onSelect}: {
         };
     }, [pdf, pageNumber, scale]);
     return <><div ref={host} className="pdf-text-selection" data-bypass={bypass} aria-label="문서 텍스트 선택"
-        title="드래그하여 텍스트 선택 · Ctrl+C 복사 · Alt를 누르면 겹친 필기 선택"
+        title="필기와 모서리 핸들 우선 선택 · 빈 영역에서 문서 텍스트 선택 · Ctrl+C 복사"
+        onMouseDownCapture={event=>{
+            if(event.button!==0||!onAnnotationPointerDown||!shouldSelectAnnotation?.(event.clientX,event.clientY))return;
+            event.preventDefault();event.stopPropagation();
+            annotationGesture.current=true;setBypass(true);
+            window.getSelection()?.removeAllRanges();
+            onAnnotationPointerDown(event);
+        }}
         onMouseDown={event => { if (event.button === 0) onSelect(); }}/><svg className="pdf-selection-paint" aria-hidden="true"><path d={selectionPath} fill="rgba(59,130,246,0.35)" fillRule="nonzero"/></svg></>
 }

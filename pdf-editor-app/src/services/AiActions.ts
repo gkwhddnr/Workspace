@@ -197,7 +197,6 @@ async function setSettings(args: any): Promise<string> {
     if (args?.strokeWidth) updates.strokeWidth = Math.max(1, Math.min(20, num(args.strokeWidth, settings.strokeWidth)));
     if (args?.fontSize) updates.fontSize = Math.max(8, Math.min(100, num(args.fontSize, settings.fontSize)));
     if (args?.fontFamily) updates.fontFamily = String(args.fontFamily);
-    if (args?.textBgOpacity) updates.textBgOpacity = clamp01(num(args.textBgOpacity, settings.textBgOpacity));
     if (args?.arrowHeadSize) updates.arrowHeadSize = Math.max(5, Math.min(50, num(args.arrowHeadSize, settings.arrowHeadSize)));
     if (Object.keys(updates).length) {
         pdfStore().setToolSettings(updates);

@@ -285,7 +285,6 @@ const readSavedTextTools = (): Partial<ToolSettings> => {
         return {
             ...(Number.isFinite(saved.fontSize) && saved.fontSize >= 1 && saved.fontSize <= 1000 ? {fontSize:saved.fontSize}:{}),
             ...(typeof saved.fontFamily === 'string' && saved.fontFamily.length <= 200 ? {fontFamily:saved.fontFamily}:{}),
-            ...(Number.isFinite(saved.textBgOpacity) && saved.textBgOpacity >= 0 && saved.textBgOpacity <= 1 ? {textBgOpacity:saved.textBgOpacity}:{})
         };
     } catch { return {}; }
 };
@@ -412,15 +411,15 @@ export const useAppStore = create<AppState>((set) => ({
         fontSize: 12,
         fontFamily: 'Inter, sans-serif',
         strokeWidth: 2,
-        textBgOpacity: 0.5,
+        textBgOpacity: 0,
         arrowHeadSize: 12,
         ...readSavedTextTools(),
     },
     setToolSettings: (settings) => {
         if (settings.color && /^#[0-9a-f]{6}$/i.test(settings.color)) localStorage.setItem('selectedToolColor', settings.color);
         set((s) => {
-            const next = { ...s.toolSettings, ...settings };
-            localStorage.setItem('textToolPreferences.v1', JSON.stringify({fontFamily:next.fontFamily,fontSize:next.fontSize,textBgOpacity:next.textBgOpacity}));
+            const next = { ...s.toolSettings, ...settings, textBgOpacity: 0 };
+            localStorage.setItem('textToolPreferences.v1', JSON.stringify({fontFamily:next.fontFamily,fontSize:next.fontSize}));
             return { toolSettings: next };
         });
     },

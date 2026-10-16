@@ -73,6 +73,19 @@ export class ToolManager {
         this.currentState = selectTool;
     }
 
+    public hitTestSelection(pos: {x:number;y:number}, scale:number): boolean {
+        const tool=this.tools.get('select');
+        if(!(tool instanceof SelectTool))return false;
+        const state=this.store.getState();
+        const elements=state.elements[state.currentPage]||[];
+        if(state.selectedElementIds.length===1){
+            const selected=elements.find((element:RenderElement)=>element.id===state.selectedElementIds[0]);
+            if(selected&&tool.hitTestHandles(selected,pos,scale))return true;
+        }
+        const point={x:pos.x/scale,y:pos.y/scale};
+        return elements.some((element:RenderElement)=>tool.hitTestElement(element,point,scale));
+    }
+
     public switchTool(toolName: string): void {
         const nextTool = this.tools.get(toolName);
         if (nextTool && nextTool !== this.currentState) {
