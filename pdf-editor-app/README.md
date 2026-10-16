@@ -1,7 +1,7 @@
 # PDF Editor App
 
-> 현재 릴리스: **v1.7.0**
-> PDF/PPT/PPTX 텍스트 선택, 자동 저장, 설정 영속화, Office 서식·한글 굵기 보존, 플러그인 생명주기 최적화가 포함되어 있습니다.
+> 현재 소스 버전: **v1.8.0** · 2026-10-16
+> UI Material Lab·플러그인 탭·저장 안정성·PDF/PPT/PPTX 필기 좌표 보존을 반영했습니다. 설치 패키지 배포는 별도입니다.
 
 
 PDF, 이미지, 그리고 **PPT/PPTX(열면 자동으로 PDF 변환)** 파일에 필기, 주석, 도형을 추가할 수 있는 Electron 기반 데스크탑 편집 애플리케이션입니다.
@@ -48,7 +48,7 @@ cd backend
 - **PDF 렌더링**: PDF.js
 - **PDF 편집/저장**: pdf-lib
 - **Backend**: Kotlin + Spring Boot + H2 Database
-- **Office 변환**: LibreOffice headless (기본) → Microsoft PowerPoint COM (폴백)
+- **Office 변환**: Microsoft PowerPoint COM 우선 → 사용할 수 없으면 LibreOffice headless
 - **아키텍처**: Visitor Pattern, Command Pattern, Strategy Pattern, Factory Method, Iterator, Proxy, Mediator, State, Flyweight, Decorator Pattern
 
 ---
@@ -74,7 +74,7 @@ cd backend
 ### 선택 도구 (S)
 - 요소 클릭으로 선택
 - 드래그로 이동
-- **화살표 선택 시**: 시작점(초록), 끝점(빨강) 핸들 표시 → 드래그로 방향·길이 조정
+- **화살표 선택 시**: 꼭짓점·중간점 핸들 표시 → 드래그로 방향·길이 조정. 선택된 주석 핸들이 PDF 원문 텍스트보다 우선
 - **도형/이미지 선택 시**: 4개 모서리 핸들 표시 → 드래그로 크기 조절
 - **Ctrl + 드래그**: PDF 텍스트, 텍스트 박스, 모든 도형 경계에 자동 스냅
 
@@ -94,12 +94,12 @@ cd backend
 ### 텍스트 도구 (T)
 - PDF 빈 공간 클릭 → 새 텍스트 박스 생성
 - 기존 텍스트 박스 클릭 → 편집 모드
-- **실시간 미리보기**: 타이핑 시 canvas에 즉시 반영
+- **실시간 미리보기**: 입력창에서 표시하고 완료 시 필기 요소로 확정
 - V체크 또는 Ctrl+Enter로 완료
 - **부분 서식(rich-text)**: 글자를 선택한 뒤 **굵게 / 밑줄 / 취소선** 적용 가능 (편집 박스 상단 툴바 `B` `U` `S` 버튼 또는 `Ctrl+B` / `Ctrl+U` / `Ctrl+Shift+X`)
 - Enter로 줄바꿈 (서식 유지), `Escape`로 편집 취소
 - 폰트, 크기, 색상 설정 가능
-- 박스 투명도 슬라이더로 배경 조절
+- 박스 배경은 완전 투명(투명도 설정 없음). 필기 색상은 UI 재질과 독립적으로 유지
 
 ### 화살표 도구 (3)
 - 드래그 방향으로 자동 화살표 방향 결정 (상/하/좌/우)
@@ -125,6 +125,17 @@ cd backend
 ---
 
 ## ⌨️ 전체 단축키
+
+[상세 단축키 및 조작 안내](docs/SHORTCUTS.md)
+
+### 설정·도움말
+
+| 단축키 | 기능 |
+| --- | --- |
+| `Alt + D` | 설정 열기 (기본) |
+| `Ctrl + ,` | 설정 열기 (보조) |
+| `F1` / `?` | 단축키 도움말 |
+| `Alt + C` | 사용자 색상 선택 |
 
 ### 파일
 | 단축키 | 기능 |
@@ -304,7 +315,7 @@ graph TD
     subgraph BackendLayer["☁️ Backend Layer (Spring Boot)"]
         PC["PdfController\n저장·백업·/convert-to-pdf"]
         FOCT["FlattenController"]
-        OCT["OfficeToPdfService\nLibreOffice → PowerPoint COM"]
+        OCT["OfficeToPdfService\nPowerPoint COM → LibreOffice"]
         FSS["FileStorageService\nTemplate Method"]
         FLATS["FlattenService\n필기 평탄화"]
         WR["PdfWorkspaceRepository\nH2 DB"]
@@ -392,7 +403,7 @@ graph TD
 - **WorkspaceApiService**: 백엔드 HTTP 호출을 캡슐화하는 Axios 기반 Facade. 타임아웃, 인터셉터, 보안 헤더가 통합되어 있습니다.
 - **PdfController**: Spring Boot REST 컨트롤러. 저장, 워크스페이스 관리, 원본 PDF 백업, **PPT/PPTX → PDF 변환(`/convert-to-pdf`)** 엔드포인트를 제공합니다.
 - **FlattenController / FlattenService**: 저장 시 필기를 병합(평탄화) 처리하는 엔드포인트와 로직을 제공합니다.
-- **OfficeToPdfService**: LibreOffice headless(기본) → Microsoft PowerPoint COM(폴백) 순으로 Office 문서를 PDF로 변환합니다. 임시 파일명은 ASCII로 고정하고 변환 스크립트는 UTF-8 BOM으로 기록하여 한글 파일명 깨짐을 방지합니다.
+- **OfficeToPdfService**: Microsoft PowerPoint COM을 사용할 수 있으면 우선 사용하고, 사용할 수 없으면 LibreOffice headless로 Office 문서를 PDF로 변환합니다. 임시 파일명은 ASCII로 고정하고 변환 스크립트는 UTF-8 BOM으로 기록하여 한글 파일명 깨짐을 방지합니다.
 - **FileStorageService**: Template Method 패턴으로 파일 저장 전략(덮어쓰기/새 이름)을 분리합니다.
 - **PdfWorkspaceRepository / WorkHistoryRepository**: H2 DB에 마지막 페이지, 주석 데이터, 백업 여부, 작업 이력을 저장합니다.
 
@@ -529,7 +540,16 @@ graph TD
 - `SelectTool.ts`: Ctrl 스냅 threshold, 핸들 hit radius
 - `ShapeTool.ts`: 화살표 Ctrl 스냅 threshold
 
-## 최근 업데이트 (v1.7.0)
+## 최근 업데이트 (v1.8.0 · 2026-10-16)
+
+- **설정·도움말**: Alt+D를 기본 설정 단축키로 안내합니다. Ctrl+,도 지원합니다. 모달과 단축키 탭은 같은 안내 원문을 사용합니다.
+- **UI Material Lab**: 영역별 재질과 버튼 상태, 참고 파일·폴더 분석, 디자인 보관함, 미리보기·다시 만들기·디테일 수정 및 즉시 적용을 제공합니다. 밝은 카드·어두운 재질에서 글자 대비를 계산합니다.
+- **플러그인 탭**: 모든 플러그인을 표시하고 우클릭으로 활성/비활성을 전환합니다. 좌클릭 드래그·삽입 미리보기·순서 저장을 지원하며 파일 드롭과 구분합니다.
+- **편집·저장**: 텍스트 배경 투명 고정, 입력/확정 위치와 가이드 좌표 보정, 주석 핸들 우선 선택, 저장 취소·실패 시 종료 보호를 반영했습니다.
+- **내보내기**: PDF 회전·자르기 영역 및 PPT/PPTX 슬라이드 크기에 맞춰 필기 배치를 환산합니다. 설치 글꼴과 변환 엔진에 따른 원문 차이는 남을 수 있습니다.
+- **검증**: npm run verify에 PDF 저장 좌표 검사를 포함합니다. 백엔드는 OfficeGeometryTest·OfficeEditServiceTest·OfficeSaveQualityTest로 확인합니다.
+
+### 이전 업데이트 (v1.7.0)
 
 - **AI 플러그인 작업**: JS 초안 작성·설치·소스 조회·공개 AI 기능 실행을 네 제공자에서 공통으로 지원하며 진행 안내 후 도구 실행을 계속합니다.
 - **Editorial Diagram 1.3.0**: 실제 PDF 본문 요약, 페이지 자동 갱신, 전체 문서 순차 처리, 중단과 저장 결과 재사용을 지원합니다.
@@ -583,7 +603,7 @@ AI 디자인 생성이 완료되면 큰 미리보기 창이 자동으로 열립�
 Material Lab 디자인 보관함은 AI 생성·리프롬프팅 결과 및 AI 도구로 적용한 디자인을 자동 저장합니다. 이름·생성 시각·모델·요청과 함께 보관하며 검색, 미리보기 불러오기, 이름 변경, 삭제를 지원합니다. 직접 편집한 초안과 이전에 남아 있는 최신 초안은 현재 초안 보관으로 저장할 수 있습니다. 로컬 앱 저장소에 유지됩니다.
 
 
-## 최근 작업 정리 · 2026-10-13
+## 이전 작업 정리 · 2026-10-13
 
 - UI Material Lab의 두 적용 방식, 호버 선택, 청록/보라 상태, 즉시 화면 적용·전체 초기화·보관함을 연결했습니다. 적용 중인 디자인의 선택 영역은 실시간 반영하며 일반 버튼과 도구 버튼 상태를 분리합니다.
 - 한글·설정·네이티브 드롭다운의 대비를 보정하고 필기 색상 견본을 보존합니다. 열린 탭을 배경·테두리·밑줄로 구분합니다. 설정의 AI 꾸미기 입력 영역은 제거하고 수동 디테일만 제공합니다.
