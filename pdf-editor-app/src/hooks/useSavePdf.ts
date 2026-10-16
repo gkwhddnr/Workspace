@@ -1,6 +1,6 @@
 import { useSettingsStore } from '../store/useSettingsStore';
-import { sha256Hex, toArrayBuffer } from '../utils/bytes';
-import { useCallback, useState, useRef } from 'react';
+import { blobToBase64, sha256Hex, toArrayBuffer } from '../utils/bytes';
+import { useCallback, useRef } from 'react';
 import { usePdfEditorStore } from '../store/usePdfEditorStore';
 import { useAppStore } from '../store/useAppStore';
 import { workspaceApiService } from '../services/WorkspaceApiService';
@@ -29,10 +29,13 @@ export const useSavePdf = (
     // 1) 저장 로직
     const saveDocument = useCallback(async (onSuccess?: () => void, silent = false): Promise<boolean> => {
         const revision = usePdfEditorStore.getState().historyRevision;
+        const elements = usePdfEditorStore.getState().elements;
         const rasterScale = useSettingsStore.getState().saveQuality;
+        let savedPath = currentFilePath;
+        let savedName = currentFileName;
         const markSaved = () => {
             const app = useAppStore.getState();
-            if (app.currentFilePath === currentFilePath && app.currentFileName === currentFileName) {
+            if (app.currentFilePath === savedPath && app.currentFileName === savedName) {
                 usePdfEditorStore.getState().markSaved(revision);
             }
         };
@@ -97,15 +100,7 @@ export const useSavePdf = (
                         JSON.stringify(pageSizes)
                     );
 
-                    const base64 = await new Promise<string>((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                            const dataUrl = reader.result as string;
-                            resolve(dataUrl.split(',')[1] || '');
-                        };
-                        reader.onerror = reject;
-                        reader.readAsDataURL(new Blob([toArrayBuffer(editedBytes)], { type: 'application/octet-stream' }));
-                    });
+                    const base64 = await blobToBase64(new Blob([toArrayBuffer(editedBytes)], {type:'application/octet-stream'}));
 
                     const result = await electronAPI.writeFile({ filePath: officeOriginalPath, data: base64 });
                     if (!result?.success) {
@@ -137,11 +132,14 @@ export const useSavePdf = (
                     setOfficeBakedIds(fullIds);
                 }
 
-                // 편집 요소를 영속화해, 이 파일을 다시 열었을 때 이어서 편집할 수 있게 한다.
-                if (currentFileName) {
-                    await workspaceApiService.saveProjectData(currentFileName, JSON.stringify({ elements }));
+                let backupSaved = true;
+                try {
+                    if (savedName) await workspaceApiService.saveProjectData(savedName, JSON.stringify({elements}));
+                } catch (error) {
+                    backupSaved = false;
+                    console.warn('[Save] Office file saved; workspace backup unavailable:', error);
                 }
-                setSaveStatus('저장 완료');
+                setSaveStatus(backupSaved ? '저장 완료' : '파일 저장 완료 · 편집 백업 실패');
                 markSaved();
                 setTimeout(() => setSaveStatus(null), 3000);
                 if (typeof onSuccess === 'function') onSuccess();
@@ -168,42 +166,44 @@ export const useSavePdf = (
             return false;
         }
 
-        if (electronAPI?.autoSave && currentFilePath) {
+        if ((electronAPI?.autoSave && currentFilePath) || electronAPI?.saveFileDialog) {
             try {
-                // Return base64 via FileReader
-                const base64 = await new Promise<string>((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        const dataUrl = reader.result as string;
-                        resolve(dataUrl.split(',')[1] || '');
-                    };
-                    reader.onerror = reject;
-                    reader.readAsDataURL(blob);
-                });
+                const base64 = await blobToBase64(blob);
 
-                const result = await electronAPI.autoSave({ filePath: currentFilePath, data: base64 });
+                const result = currentFilePath && electronAPI.autoSave
+                    ? await electronAPI.autoSave({filePath:currentFilePath,data:base64})
+                    : await electronAPI.saveFileDialog({defaultName:currentFileName || 'document.pdf',data:base64});
+                if (result?.canceled) { setSaveStatus('저장 취소'); return false; }
+                if (result?.success && result.filePath && !currentFilePath) {
+                    savedPath = result.filePath;
+                    savedName = result.filePath.split(/[/\\]/).pop() || 'document.pdf';
+                    setCurrentFile(savedPath, savedName);
+                }
                 if (result?.success) {
-                    if (currentFileName && originalData && originalData.length > 0) {
-                        const pristineBlob = new Blob([originalData as any], { type: 'application/pdf' });
-                        await workspaceApiService.uploadOriginalPdf(currentFileName, pristineBlob);
+                    let backupSaved = true;
+                    try {
+                        if (savedName && originalData?.length) {
+                            await workspaceApiService.uploadOriginalPdf(savedName, new Blob([originalData as any], {type:'application/pdf'}));
+                        }
+                        if (savedName) await workspaceApiService.saveProjectData(savedName, JSON.stringify({elements}));
+                    } catch (error) {
+                        backupSaved = false;
+                        console.warn('[Save] File saved; workspace backup unavailable:', error);
                     }
-                    if (currentFileName) {
-                        await workspaceApiService.saveProjectData(currentFileName, JSON.stringify({ elements }));
-                    }
-                    setSaveStatus('저장 완료');
+                    setSaveStatus(backupSaved ? '저장 완료' : '파일 저장 완료 · 편집 백업 실패');
                     markSaved();
                     setTimeout(() => setSaveStatus(null), 3000);
                     if (typeof onSuccess === 'function') onSuccess();
                     return true;
                 } else {
                     console.error('AutoSave 실패:', result);
-                    setSaveStatus('저장 실패');
+                    setSaveStatus('저장 실패: ' + (result?.error || '파일 쓰기 결과를 확인할 수 없습니다'));
                     setTimeout(() => setSaveStatus(null), 3000);
                     return false;
                 }
             } catch (error) {
                 console.error('AutoSave/Sync 오류:', error);
-                setSaveStatus('저장 오류');
+                setSaveStatus('저장 오류: ' + (error instanceof Error ? error.message : String(error)));
                 setTimeout(() => setSaveStatus(null), 3000);
                 return false;
             }
@@ -211,16 +211,18 @@ export const useSavePdf = (
 
         // 브라우저 환경
         try {
+            if (!currentFileName) { setSaveStatus('저장 실패: 다른 이름으로 저장하여 파일 이름을 지정하세요'); return false; }
+            await workspaceApiService.savePdf(blob, currentFileName);
             if (currentFileName && originalData && originalData.length > 0) {
                 const pristineBlob = new Blob([originalData as any], { type: 'application/pdf' });
                 await workspaceApiService.uploadOriginalPdf(currentFileName, pristineBlob);
 
                 await workspaceApiService.saveProjectData(currentFileName, JSON.stringify({ elements }));
 
-                setSaveStatus('저장 완료');
-                markSaved();
-                if (onSuccess) onSuccess();
             }
+            setSaveStatus('저장 완료');
+            markSaved();
+            if (typeof onSuccess === 'function') onSuccess();
         } catch (error) {
             console.error('워크스페이스 백업 오류:', error);
             setSaveStatus('백업 실패');
@@ -253,7 +255,9 @@ export const useSavePdf = (
 
     // 3) 다른 이름으로 저장 확정
     const confirmSaveAs = async (isClosingAfterSaveAs: boolean, onSuccess?: () => void) => {
-        if (savingRef.current) return;
+        if (savingRef.current || usePdfEditorStore.getState().saveStatus === '저장 중...') return;
+        savingRef.current = true;
+        try {
         const savedRevision = usePdfEditorStore.getState().historyRevision;
         const blob = await createEditedPdfBlob();
         if (!blob) return;
@@ -272,17 +276,9 @@ export const useSavePdf = (
 
         if (electronAPI?.saveFileDialog) {
             try {
-                const base64 = await new Promise<string>((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        const dataUrl = reader.result as string;
-                        resolve(dataUrl.split(',')[1] || '');
-                    };
-                    reader.onerror = reject;
-                    reader.readAsDataURL(blob);
-                });
+                const base64 = await blobToBase64(blob);
 
-                const result = await electronAPI.saveFileDialog({ defaultPath: name, data: base64 });
+                const result = await electronAPI.saveFileDialog({ defaultName: name, data: base64 });
                 if (result?.success && result.filePath) {
                     const newFileName = result.filePath.split(/[/\\]/).pop() || name;
                     
@@ -307,7 +303,7 @@ export const useSavePdf = (
                     setTimeout(() => setSaveStatus(null), 3000);
                     toggleSaveAsDialog(false);
 
-                    if (isClosingAfterSaveAs) {
+                    if (isClosingAfterSaveAs && usePdfEditorStore.getState().lastSavedRevision >= usePdfEditorStore.getState().historyRevision) {
                         await anyWindow?.electronAPI?.forceQuitApp?.();
                     }
                     if (typeof onSuccess === 'function') onSuccess();
@@ -332,6 +328,7 @@ export const useSavePdf = (
             toggleSaveAsDialog(false);
             if (typeof onSuccess === 'function') onSuccess();
         }
+        } finally { savingRef.current = false; }
     };
 
     return { handleSave, openSaveAsDialog, confirmSaveAs };

@@ -168,9 +168,9 @@ ipcMain.handle('dialog:openFile', async (event, options = {}) => {
 });
 
 // 파일 저장 다이얼로그
-ipcMain.handle('dialog:saveFile', async (event, { defaultName, data, fileType }) => {
+ipcMain.handle('dialog:saveFile', async (event, { defaultName, defaultPath, data, fileType }) => {
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: defaultName || 'untitled',
+    defaultPath: defaultName || defaultPath || 'untitled',
     filters: [
       { name: fileType || 'PDF', extensions: [fileType?.toLowerCase() || 'pdf'] },
       { name: 'All Files', extensions: ['*'] }
@@ -183,7 +183,7 @@ ipcMain.handle('dialog:saveFile', async (event, { defaultName, data, fileType })
 
   try {
     const buffer = Buffer.from(data, 'base64');
-    await fs.writeFile(result.filePath, buffer);
+    await writeFileWithRetry(result.filePath, buffer);
     return {
       canceled: false,
       success: true,
