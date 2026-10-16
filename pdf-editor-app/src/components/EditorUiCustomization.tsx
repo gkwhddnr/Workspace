@@ -1,14 +1,26 @@
-import React,{useState} from 'react';
+import React,{useLayoutEffect,useRef,useState} from 'react';
+import {useMaterialStore} from '../store/useMaterialStore';
+import {surfaceForeground} from '../utils/surfaceForeground';
 import {useAppStore,ThemeMode} from '../store/useAppStore';
 import {useEditorUiStore,EditorUiDesign} from '../store/useEditorUiStore';
 import {readEditorUi,applyEditorUi} from '../services/EditorUiDesignService';
 
 import './EditorAppearance.css';
 export default function EditorUiCustomization(){
+ const section=useRef<HTMLElement>(null);
+ const materialDesign=useMaterialStore(state=>state.design);
+ const materialEnabled=useMaterialStore(state=>state.enabled);
  const design=useEditorUiStore(state=>state.design);const app=useAppStore();
  const [message,setMessage]=useState('변경하면 현재 PDF 편집기 화면에 바로 적용됩니다.'),[previous,setPrevious]=useState<ReturnType<typeof readEditorUi>|null>(null);
+ useLayoutEffect(()=>{
+  section.current?.querySelectorAll<HTMLElement>('.appearance-card,.appearance-status').forEach(surface=>{
+   const foreground=surfaceForeground(surface);
+   surface.style.color=foreground;
+   for(const token of ['--material-foreground','--text-main','--text-muted'])surface.style.setProperty(token,foreground);
+  });
+ },[app.themeMode,app.customThemeColor,materialDesign,materialEnabled]);
  const apply=(patch:any)=>{try{setPrevious(readEditorUi());applyEditorUi(patch);setMessage('현재 편집기에 적용하고 저장했습니다.');}catch(error){setMessage((error as Error).message);}};
- return <section className="appearance-settings" aria-label="PDF 편집기 UI 커스터마이즈"><header className="appearance-heading"><div><h2>PDF 편집기 꾸미기</h2><p>현재 화면 · 즉시 적용 · 자동 저장</p></div></header>
+ return <section ref={section} className="appearance-settings" aria-label="PDF 편집기 UI 커스터마이즈"><header className="appearance-heading"><div><h2>PDF 편집기 꾸미기</h2><p>현재 화면 · 즉시 적용 · 자동 저장</p></div></header>
  <div className="appearance-card editor-ui-fields"><h3>화면 테마</h3><label>설정과 같은 테마<select aria-label="편집기 UI 테마" value={app.themeMode} onChange={e=>apply({themeMode:e.target.value as ThemeMode})}><option value="white">화이트</option><option value="translucent">반투명</option><option value="dark">다크</option><option value="custom">사용자 색상</option></select></label>
  <label>테마 배경 색상<input type="color" aria-label="편집기 배경 색상" value={app.customThemeColor} onChange={e=>apply({customThemeColor:e.target.value,themeMode:'custom'})}/></label>
  <h3>버튼 · 패널 디테일</h3><label>강조 색상<input type="color" aria-label="UI 강조 색상" value={design.accent} onChange={e=>apply({design:{accent:e.target.value}})}/></label>
