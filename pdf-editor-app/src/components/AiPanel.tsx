@@ -10,6 +10,8 @@ import { Send, Trash2, Bot, User, Settings, Eye, EyeOff, CheckCircle, XCircle, C
 import { callAi, refineError, AiProvider, OPENAI_BILLING_URL, OPENAI_BILLING_ERROR } from '../services/AiService';
 import type { AgentActionLog } from '../services/AiAgentService';
 import { runAiAgent, buildAgentToolInstructions, hasTerminalForAgent } from '../services/AiAgentService';
+import {isTextBoxWriteRequest} from '../services/AiTextBoxService';
+import './AiPanel.css';
 import type { AiAgentContext } from '../services/AiContextService';
 import { buildAiAgentContext } from '../services/AiContextService';
 import { describeTheme } from '../services/AiActions';
@@ -157,7 +159,7 @@ const heuristicThreadTitle = (question: string): string => {
 };
 
 const isPdfAnnotationRequest = (text: string, enabled: boolean, hasPdf: boolean) =>
-    enabled && hasPdf && /필기|형광펜|하이라이트|밑줄|주석|중요.*표시|표시.*중요|강조.*표시|도형.*추가|화살표.*그려|메모.*추가/.test(text);
+    enabled && hasPdf && (isTextBoxWriteRequest(text) || /필기|형광펜|하이라이트|밑줄|주석|중요.*표시|표시.*중요|강조.*표시|도형.*추가|화살표.*그려|메모.*추가/.test(text));
 
 // Plug-in status is local application state. Answer status-only questions from
 // the store so providers do not need to infer it from instructions or receive
@@ -204,7 +206,7 @@ const getRequestedAnnotationPages = (text: string): { pages: number[]; wholeDocu
     return { pages: [...pages].filter(Number.isFinite), wholeDocument: false };
 };
 
-const DEFAULT_AI_WRITING_GUIDE = `필기 작성 지침\n- 원문 텍스트와 겹치지 않도록 여백에 배치하고, 겹칠 가능성이 있으면 위치를 조정합니다.\n- 사용자가 지정한 페이지와 대상에만 적용하고, 요청한 색상·도구·표시 방식을 따릅니다.\n- 긴 내용은 핵심 위주로 짧게 나누고, 원문을 가리거나 읽기 어렵게 만들지 않습니다.\n- 실제 적용 결과를 확인한 뒤 완료 여부와 적용한 페이지를 알려 줍니다.`;
+const DEFAULT_AI_WRITING_GUIDE = `필기 작성 지침\n- 원문 텍스트와 겹치지 않도록 여백에 배치하고, 겹칠 가능성이 있으면 위치를 조정합니다.\n- 사용자가 지정한 페이지와 대상에만 적용하고, 요청한 색상·도구·표시 방식을 따릅니다.\n- 번역·전체 작성 요청을 임의로 요약하거나 생략하지 않습니다. 지정된 텍스트 상자의 위치를 유지하고 줄바꿈과 높이로 내용을 표시합니다.\n- 텍스트 상자 작성은 write_text_box로 실제 확정하고 검증합니다. 채팅 답변만으로 작성 완료나 파일 저장 완료라고 말하지 않습니다.`;
 
 // ─── 컴포넌트 ───────────────────────────────────────────────────────────────────
 const AiPanel: React.FC = () => {
@@ -295,8 +297,11 @@ const AiPanel: React.FC = () => {
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
+    const messagesScrollRef = useRef<HTMLDivElement>(null);
+    const followMessages = useRef(true);
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        const list = messagesScrollRef.current;
+        if (list && followMessages.current) list.scrollTop = list.scrollHeight;
     }, [aiMessages]);
 
     // 텍스트 클립보드 복사 (불가능 환경은 폴백)
@@ -408,6 +413,7 @@ const AiPanel: React.FC = () => {
         const firstQuestion = text;
 
         addAiMessage('user', text);
+        followMessages.current = true;
         setInput('');
         setIsLoading(true);
         const runAbort = new AbortController();
@@ -473,8 +479,9 @@ ${ctxText.text}
         }
 
         if (agentMode || designRequest) {
+            finalSystemPrompt += '\n[현재 실행 상태] 에이전트 도구 ON. 파일 접근: '+(accessPermissions.file?'허용':'거부')+'. PDF 문서: '+(useAppStore.getState().pdfOriginalData?'열림':'없음')+'. 이전 대화의 OFF/작업 실패는 현재 권한을 뜻하지 않습니다. 첨부 문맥이 없으면 read_page로 실제 본문과 좌표를 읽고 쓰기 도구를 호출하세요. 도구 목록이 제공되면 파일 편집을 못한다고 단정하지 마세요.';
             finalSystemPrompt += '\n\n' + buildAgentToolInstructions({
-                hasPdf: !pluginTask && !!ctxText?.hasPdf,
+                hasPdf: !pluginTask && accessPermissions.file && !!useAppStore.getState().pdfOriginalData,
                 hasTerminal: !pluginTask && !annotationTask && includeContext && hasTerminalForAgent(),
                 palette: PRESET_COLORS,
                 theme: describeTheme(),
@@ -506,6 +513,10 @@ ${ctxText.text}
                     messages: history,
                     systemPrompt: finalSystemPrompt + (editorUiTask ? '\n'+MATERIAL_INSTRUCTIONS : ''),
                     editorUiTask,
+                    annotationTask,
+                    canWritePdf: accessPermissions.file && !!useAppStore.getState().pdfOriginalData,
+                    annotationPages: requestedPageScope.pages,
+                    wholeDocument: requestedPageScope.wholeDocument,
                     onProgress: editorUiTask ? setDesignProgress : undefined,
                     maxRounds: (editorUiTask && deepDesign) ? 60 : annotationTask && !requestedPageScope.wholeDocument ? 12 : 24,
                     signal: runAbort.signal,
@@ -556,7 +567,7 @@ ${ctxText.text}
     };
 
     return (
-        <div ref={panelRef} className="flex-1 flex flex-col min-w-0 min-h-0 bg-transparent">
+        <div ref={panelRef} data-ai-panel className="h-full flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden bg-transparent">
 
             {/* ── 헤더 ── */}
             <div data-ai-header className="border-b theme-border-subtle flex flex-wrap items-center px-3 py-2 theme-bg-header shrink-0 shadow-sm z-10 gap-2 min-w-0">
@@ -706,11 +717,14 @@ ${ctxText.text}
                     title={agentMode
                         ? '에이전트 도구 사용 ON — AI가 PDF 필기/도형을 직접 그리고 터미널 명령을 실행합니다.'
                         : '에이전트 도구 사용 OFF — 대화(질문/답변)만 수행합니다.'}
-                    className={`p-2 rounded-xl transition-all ${agentMode
-                        ? 'bg-amber-100 text-amber-600 border border-amber-200'
-                        : 'theme-tool-hover theme-text-muted hover:text-amber-600'}`}
+                    data-ai-agent-toggle data-material-preserve
+                    aria-pressed={agentMode}
+                    aria-label={agentMode ? '에이전트 ON' : '에이전트 OFF'}
+                    disabled={isLoading}
+                    className="ai-agent-toggle"
                 >
                     <Wrench size={14} />
+                    <span>{agentMode ? 'ON' : 'OFF'}</span>
                 </button>
 
                 {/* 설정 버튼 */}
@@ -966,7 +980,7 @@ ${ctxText.text}
             )}
 
             {/* ── 메시지 목록 ── */}
-            <div className="flex-1 overflow-y-auto px-4 py-2 flex flex-col gap-3 bg-transparent">
+            <div ref={messagesScrollRef} data-ai-messages onScroll={event=>{const list=event.currentTarget;followMessages.current=list.scrollHeight-list.scrollTop-list.clientHeight<64;}} className="flex-1 min-h-0 overflow-y-auto px-4 py-2 flex flex-col gap-3 bg-transparent">
                 {aiMessages.map((msg: any, idx: number) => (
                     <div
                         key={idx}

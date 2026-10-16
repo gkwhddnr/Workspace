@@ -1,4 +1,6 @@
 import { buildTextSnapBlocks, computeTextSnapRect, snapToNearestTextBoundary } from '../utils/textSnap';
+import {writeActiveAiTextBox} from './AiTextBoxService';
+import {fitTextBox,remainingTextArea,textPageMargin} from '../utils/fitTextBox';
 // AiActions — AI 코파일럿이 호출하는 도구 실행기
 // - PDF 편집(도구 전환, 도형/형광펜/텍스트/필기/지우기, 페이지 이동, undo/redo)을
 //   프로그램적으로 수행하며, 요소 추가는 PdfViewer와 동일한 Command + 공용 History로
@@ -292,25 +294,33 @@ async function addText(args: any, guard: () => void): Promise<string> {
     const psize = sizes[page - 1];
     const settings = appStore().toolSettings;
     const color = pickToolColor(args?.color, settings.color);
-    // 글자 크기: 명시하지 않으면 페이지 본문 텍스트 크기에 맞춰 자동 확대/축소한다.
+    // Treat the preferred size as an upper bound; every line must fit the page.
     const textScale = await estimatePageTextScale(info, page);
-    const fontSize = args?.fontSize != null
+    const preferredFontSize = args?.fontSize != null
         ? Math.max(8, Math.min(100, num(args.fontSize, 8)))
-        : Math.max(8, Math.max(6, Math.round(textScale)));
+        : Math.max(8, Math.round(textScale*.8));
 
-    const x = clamp01(num(args?.x, 0.5)) * psize.width;
-    const y = clamp01(num(args?.y, 0.5)) * psize.height;
-    const el = ElementFactory.create('text', makeId(), [x, y, fontSize * text.length * 0.7, fontSize * 1.3], color) as any;
+    const margin = textPageMargin(psize.width,psize.height);
+    const x = Math.max(margin,clamp01(num(args?.x, 0.5)) * psize.width);
+    const y = Math.max(margin,clamp01(num(args?.y, 0.5)) * psize.height);
+    const {width:availableWidth,height:availableHeight} = remainingTextArea(psize.width,psize.height,x,y);
+    const fontFamily = settings.fontFamily || 'sans-serif';
+    await document.fonts?.ready;
+    const layout = fitTextBox({text,fontFamily,preferredFontSize,
+        width:Math.min(availableWidth,args?.w == null?availableWidth:num(args.w)*psize.width),
+        height:Math.min(availableHeight,args?.h == null?availableHeight:num(args.h)*psize.height)});
+    const fontSize = layout.fontSize;
+    const el = ElementFactory.create('text', makeId(), [x, y, layout.width, layout.height], color) as any;
     el.text = text;
     el.fontSize = fontSize;
-    el.fontFamily = settings.fontFamily;
-    el.width = fontSize * text.length * 0.7;
-    el.height = fontSize * 1.3;
+    el.fontFamily = fontFamily;
+    el.width = layout.width;
+    el.height = layout.height;
 
     guard();
     pushElement(page, el as RenderElement);
     appStore().setActiveTool('select');
-    return `텍스트 "${text}"를 ${page}페이지 (${x.toFixed(1)},${y.toFixed(1)}), 글자 크기 ${fontSize}pt로 추가했습니다.`;
+    return `텍스트 "${text}"를 ${page}페이지 (${x.toFixed(1)},${y.toFixed(1)}), 글자 크기 ${fontSize}pt, ${layout.lines}줄로 자동 맞춤하여 추가했습니다. 상자 ${layout.width.toFixed(1)}×${layout.height.toFixed(1)}pt, 페이지 경계 안에 전체 내용을 배치했습니다.`;
 }
 
 async function drawPath(args: any, guard: () => void): Promise<string> {
@@ -610,6 +620,7 @@ export async function executeAiTool(name: string, args: any, signal?: AbortSigna
             case 'read_page': return await readPage(args);
             case 'add_shape': return await addShape(args, guard);
             case 'add_text': return await addText(args, guard);
+            case 'write_text_box': guard(); return JSON.stringify(writeActiveAiTextBox(args));
             case 'draw_path': return await drawPath(args, guard);
             case 'highlight_text': return await highlightText(args, guard);
             case 'erase_rect': return await eraseRect(args);

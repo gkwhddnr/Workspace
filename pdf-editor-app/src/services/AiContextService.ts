@@ -9,6 +9,7 @@ import { useAppStore } from '../store/useAppStore';
 import { usePdfEditorStore } from '../store/usePdfEditorStore';
 import { usePluginStore } from '../store/usePluginStore';
 import { pdfTextService } from './PdfTextService';
+import {getActiveAiTextBox} from './AiTextBoxService';
 
 export interface AiContextOptions {
     signal?: AbortSignal;
@@ -64,6 +65,8 @@ export async function buildAiAgentContext(opts: AiContextOptions): Promise<AiAge
 
     // ③ PDF 편집 — 문서 구조 + 전 페이지 라이브러리(정규화 좌표)
     if (accessPermissions.file && s.pdfOriginalData && s.currentFileName) {
+        const activeBox = getActiveAiTextBox();
+        if (activeBox) sections.push('[현재 편집 중인 텍스트 상자]\n' + JSON.stringify(activeBox) + '\n이 상자에 작성하라는 요청은 write_text_box로 실제 반영하세요. 위치를 추측해 새 상자를 만들거나 채팅 답변만 하지 마세요.');
         const cacheKey = `${s.currentFileName}:${s.pdfOriginalData.byteLength}`;
         const data = s.pdfOriginalData;
 

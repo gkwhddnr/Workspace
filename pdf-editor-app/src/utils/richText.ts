@@ -69,10 +69,10 @@ export function parseRichDom(root: HTMLElement): { text: string; spans: FormatSp
                 if (text.length > 0 && !text.endsWith('\n')) text += '\n';
                 return;
             }
-            const startLen = text.length;
+            // Separate sibling lines, rather than appending a phantom newline
+            // after every block (including the contentEditable root).
+            if (node !== root && (tag === 'DIV' || tag === 'P') && node.previousSibling) text += '\n';
             for (const child of Array.from((node as HTMLElement).childNodes)) walk(child);
-            // Block-level separators (contentEditable may produce <div>/<p> per line).
-            if ((tag === 'DIV' || tag === 'P') && text.length > startLen && !text.endsWith('\n')) text += '\n';
         }
     };
     const ancestors = (node: Node): Node[] => {

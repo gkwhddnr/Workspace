@@ -1,4 +1,6 @@
 import {pdfOverlayPlacement} from '../../utils/pdfOverlayPlacement';
+import {bindAiTextBox} from '../../services/AiTextBoxService';
+import {fitTextBox,remainingTextArea} from '../../utils/fitTextBox';
 import {isFileDrag} from '../../utils/dragPayload';
 import { drawAlignmentGuides } from '../../renderers/alignmentGuides';
 import { restoreProjectElements } from '../../utils/restoreProjectElements';
@@ -1853,8 +1855,47 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
 
 
     const editableRef = useRef<HTMLDivElement>(null);
+    const aiTextBoxId = useRef(0);
+    useEffect(() => { aiTextBoxId.current++; }, [!!inputPos, editingId, currentPage]);
 
-    const handleInputComplete = () => {
+    useEffect(() => {
+        if (!inputPos || !editableRef.current) return;
+        const targetId = 'text-box-' + aiTextBoxId.current;
+        return bindAiTextBox({
+            document: useAppStore.getState().pdfOriginalData,
+            snapshot: () => ({targetId, page:currentPage, x:inputPos.x/scale, y:inputPos.y/scale, text:parseRichDom(editableRef.current!).text}),
+            write: (text, mode) => {
+                const editable = editableRef.current!;
+                const original = parseRichDom(editable);
+                const next = mode === 'replace' ? text : original.text + text;
+                const main = canvasRef.current!;
+                const pageWidth = parseFloat(main.style.width)/scale;
+                const pageHeight = parseFloat(main.style.height)/scale;
+                const available = remainingTextArea(pageWidth,pageHeight,inputPos.x/scale,inputPos.y/scale);
+                const annotation = editingId ? currentPageElements.find(item=>item.id===editingId) as any : null;
+                const computed = getComputedStyle(editable);
+                const width = (editable.clientWidth-parseFloat(computed.paddingLeft)-parseFloat(computed.paddingRight))/scale;
+                const layout = fitTextBox({text:next,
+                    width:Math.min(width,available.width),
+                    height:available.height,
+                    fontFamily:annotation?.fontFamily || toolSettings.fontFamily || 'sans-serif',
+                    preferredFontSize:Number(annotation?.fontSize || toolSettings.fontSize) || 20,
+                    bold:annotation?.fontWeight==='bold' || original.spans.some(span=>span.fontWeight==='bold')});
+                editable.innerHTML = buildRichHtml(next, mode === 'append' ? original.spans : []);
+                editable.style.setProperty('--font-size',layout.fontSize*scale+'px');
+                editable.style.setProperty('--editor-width',layout.width*scale+'px');
+                editable.style.minWidth = '0';
+                editable.style.minHeight = '0';
+                editable.style.height = layout.height*scale+'px';
+                // Keep the existing box position and use the normal undoable commit path.
+                const before = new Set((usePdfEditorStore.getState().elements[currentPage] || []).map(item=>item.id));
+                flushSync(() => handleInputComplete(true,layout.fontSize));
+                return editingId || (usePdfEditorStore.getState().elements[currentPage] || []).find(item=>!before.has(item.id))?.id || '';
+            },
+        });
+    }, [inputPos, editingId, currentPage, scale, toolSettings, currentPageElements]);
+
+    const handleInputComplete = (preserveStyle = false, fittedFontSize?: number) => {
         if (!inputPos) return;
 
         const editable = editableRef.current;
@@ -1891,9 +1932,9 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
             if (editingId) {
                 const oldAnn = currentPageElements.find(a => a.id === editingId) as any;
                 if (oldAnn) {
-                    const baseFs = Number(toolSettings.fontSize) || Number(oldAnn.fontSize) || 20;
-                    const baseColor = toolSettings.color || (oldAnn.style?.strokeColor) || '#000000';
-                    const baseFontFamily = toolSettings.fontFamily || oldAnn.fontFamily || 'Outfit, sans-serif';
+                    const baseFs = fittedFontSize ?? (preserveStyle ? Number(oldAnn.fontSize) || 20 : Number(toolSettings.fontSize) || Number(oldAnn.fontSize) || 20);
+                    const baseColor = preserveStyle ? oldAnn.color || oldAnn.style?.color || '#000000' : toolSettings.color || oldAnn.style?.color || '#000000';
+                    const baseFontFamily = preserveStyle ? oldAnn.fontFamily || 'Outfit, sans-serif' : toolSettings.fontFamily || oldAnn.fontFamily || 'Outfit, sans-serif';
 
                     const newProps: any = {
                         text: finalText,
@@ -1923,7 +1964,7 @@ const PdfViewer: React.FC<{ bottomDocked?: boolean }> = ({ bottomDocked = false 
                 }
             } else {
                 // Add via Command
-                const fsNum = Number(toolSettings.fontSize) || 20;
+                const fsNum = fittedFontSize ?? (Number(toolSettings.fontSize) || 20);
                 const newEl = ElementFactory.create('text',
                     Date.now().toString() + Math.random().toString(36).substring(2),
                     [inputPos.x / scale, inputPos.y / scale, width / scale, height / scale],

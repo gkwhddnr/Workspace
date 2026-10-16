@@ -1,5 +1,7 @@
 import { usePdfEditorStore } from '../store/usePdfEditorStore';
 import { useAppStore } from '../store/useAppStore';
+import {getActiveAiTextBox, isTextBoxWriteRequest} from './AiTextBoxService';
+import {requestPdfTextWritePlan} from './PdfTextWritePlan';
 // AiAgentService — AI 코파일럿 에이전트 루프
 // 모델 출력에서 <ai_tool>{"name","args"}</ai_tool> 블록을 추출해 AiActions로 실행하고,
 // 그 결과를 <ai_result>로 다시 모델에 넘겨 다음 판단을 받는 구조를 반복한다.
@@ -33,6 +35,10 @@ export interface AgentOptions {
     systemPrompt: string;
     maxRounds?: number;
     editorUiTask?: boolean;
+    annotationTask?: boolean;
+    canWritePdf?: boolean;
+    annotationPages?: number[];
+    wholeDocument?: boolean;
     onProgress?: (message: string) => void;
     signal?: AbortSignal;
     pluginDraftRequest?: boolean;
@@ -71,7 +77,7 @@ export function parseToolCalls(reply: string): AiToolCall[] {
             const parsed = JSON.parse(raw);
             const candidates = Array.isArray(parsed) ? parsed : [parsed];
             if (candidates.length && candidates.length <= 20 && candidates.every(call =>
-                call && typeof call.name === 'string' && /^(?:editor_ui_get|editor_ui_apply|material_get|material_apply|plugin_(?:list|get_source|get_example|write_draft|install|set_active|run|use)|plan_annotations|verify_annotations|set_tool|set_settings|goto_page|read_page|add_shape|add_text|draw_path|highlight_text|erase_rect|undo|redo|terminal_run|terminal_interrupt|terminal_destroy)$/.test(call.name)
+                call && typeof call.name === 'string' && /^(?:editor_ui_get|editor_ui_apply|material_get|material_apply|plugin_(?:list|get_source|get_example|write_draft|install|set_active|run|use)|plan_annotations|verify_annotations|set_tool|set_settings|goto_page|read_page|add_shape|add_text|write_text_box|draw_path|highlight_text|erase_rect|undo|redo|terminal_run|terminal_interrupt|terminal_destroy)$/.test(call.name)
                 && (!call.args || (typeof call.args === 'object' && !Array.isArray(call.args))))) {
                 calls.push(...candidates.map(call => ({ name: call.name, args: call.args ?? {} })));
             }
@@ -123,10 +129,16 @@ export async function runAiAgent(opts: AgentOptions): Promise<AgentResult> {
         if (suppliedCode || previousCode) return writeDraft(suppliedCode || previousCode!);
     }
     const document = useAppStore.getState().pdfOriginalData;
+    const requestPage = usePdfEditorStore.getState().currentPage;
+    const requiresAnnotation = opts.annotationTask || (!!document && isTextBoxWriteRequest(effectiveRequest));
+    const requestedBox = isTextBoxWriteRequest(effectiveRequest) ? getActiveAiTextBox() : null;
+    let writtenBox = false;
+    const writtenText = new Map<string,string>();
+    let structuredWriteAttempted = false;
     let plan: Record<number, number> | null = null;
     let attemptedAnnotations = false;
     const created = new Map<number, Set<string>>();
-    const mutationTools = new Set(['add_shape','add_text','draw_path','highlight_text']);
+    const mutationTools = new Set(['add_shape','add_text','write_text_box','draw_path','highlight_text']);
     const verify = () => {
         const state = usePdfEditorStore.getState();
         const pages = Object.keys(plan || {}).map(Number);
@@ -135,7 +147,8 @@ export async function runAiAgent(opts: AgentOptions): Promise<AgentResult> {
             const present = (state.elements[page] || []).filter(element => ids.has(element.id));
             return {page, expected: plan![page], applied: present.length, missingIds: [...ids].filter(id => !present.some(el => el.id === id))};
         });
-        return {ok: !!plan && document === useAppStore.getState().pdfOriginalData && details.every(p => p.applied >= p.expected && !p.missingIds.length), pages: details};
+        const textPresent = [...writtenText].every(([id,text])=>Object.values(state.elements).flat().some(element=>element.id===id && (element as any).text===text));
+        return {ok: !!plan && (!requestedBox || writtenBox) && textPresent && document === useAppStore.getState().pdfOriginalData && details.every(p => p.applied >= p.expected && !p.missingIds.length), pages: details};
     };
 
     for (let i = 0; i < maxRounds; i++) {
@@ -147,9 +160,32 @@ export async function runAiAgent(opts: AgentOptions): Promise<AgentResult> {
         if (opts.signal?.aborted) {
             return { text: '⏹ 사용자가 에이전트 실행을 중단했습니다. 지금까지 수행한 내용을 요약해 주세요.', log, rounds: i + 1, done: false };
         }
-        const calls = parseToolCalls(reply);
+        let calls = parseToolCalls(reply);
+        if (requiresAnnotation && opts.canWritePdf === false) return {text:'파일 접근이 꺼져 있어 문서에 작성할 수 없습니다. 코파일럿 설정의 파일 접근을 허용한 뒤 다시 요청하세요.',log,rounds:i+1,done:false};
+        // Compatible providers sometimes keep returning prose instead of tool tags.
+        // Obtain data only, validate it, then execute the same undoable write tools.
+        if (!calls.length && continuationAttempts > 0 && !plan && !attemptedAnnotations && !structuredWriteAttempted
+            && isTextBoxWriteRequest(effectiveRequest) && !opts.wholeDocument && (opts.annotationPages?.length ?? 0) <= 1) {
+            structuredWriteAttempted = true;
+            const page = requestedBox?.page ?? opts.annotationPages?.[0] ?? requestPage;
+            try {
+                if (document !== useAppStore.getState().pdfOriginalData) throw Error('문서가 변경되었습니다.');
+                const source = await executeAiTool('read_page',{page},opts.signal);
+                log.push({name:'read_page',args:{page},result:source});
+                calls = await requestPdfTextWritePlan({provider:opts.provider,apiKey:opts.apiKey,model:opts.model,
+                    signal:opts.signal,request:effectiveRequest,page,source,target:requestedBox});
+                if (document !== useAppStore.getState().pdfOriginalData) throw Error('문서가 변경되었습니다.');
+            } catch (error) {
+                log.push({name:'text_write_plan',args:{page},result:error instanceof Error?error.message:String(error),error:true});
+            }
+        }
 
         if (calls.length === 0) {
+            if (requiresAnnotation && !plan && !attemptedAnnotations) {
+                if (continuationAttempts++ >= 2) return {text:'요청한 텍스트·필기를 실제 문서에 반영하지 못했습니다. AI가 쓰기 도구를 호출하지 않아 완료로 처리하지 않았습니다.',log,rounds:i+1,done:false};
+                messages.push({role:'assistant',content:reply},{role:'user',content:'채팅 요약은 문서 작성이 아닙니다. 먼저 plan_annotations로 대상 페이지를 계획하고 실제 쓰기 도구를 호출하세요. '+(requestedBox ? 'write_text_box의 targetId는 '+requestedBox.targetId+'입니다. 현재 상자의 위치를 유지하세요.' : 'read_page로 위치를 확인한 뒤 add_text로 문서에 작성하세요.')+' 실제 결과를 검증하기 전 완료했다고 말하지 마세요.'});
+                continue;
+            }
             if(opts.editorUiTask&&!log.some(entry=>!entry.error&&(entry.name==='material_apply'||entry.name==='editor_ui_apply'||entry.name==='plugin_use'&&['apply_editor_ui','material_apply'].includes(entry.args?.tool)))){
                 if(continuationAttempts++>=3)return {text:'편집기 UI 적용을 완료하지 못했습니다. 플러그인의 직접 조절 화면을 사용하거나 변경 항목을 구체적으로 요청하세요.',log,rounds:i+1,done:false};
                 messages.push({role:'assistant',content:reply},{role:'user',content:'현재 재질을 material_get으로 읽고 요청한 변경을 material_apply로 실제 적용하세요. 실행 예고로 끝내지 마세요.'});continue;
@@ -179,7 +215,7 @@ export async function runAiAgent(opts: AgentOptions): Promise<AgentResult> {
                     continue;
                 }
                 const summary = result.pages.map(p => p.page+'페이지 '+p.applied+'개').join(', ');
-                return {text:stripToolTags(reply)+'\n\n[적용 확인] '+summary+' — 계획한 최소 개수와 생성 요소의 존재를 확인했습니다.',log,rounds:i+1,done:true};
+                return {text:'요청한 텍스트·필기를 실제 문서에 반영했습니다.\n\n[적용 확인] '+summary+' — 계획한 최소 개수와 실제 요소의 존재를 확인했습니다.',log,rounds:i+1,done:true};
             }
             return { text: stripToolTags(reply), log, rounds: i + 1, done: true };
         }
@@ -208,12 +244,24 @@ export async function runAiAgent(opts: AgentOptions): Promise<AgentResult> {
                 } else if (call.name === 'verify_annotations') {
                     const checked = verify(); result = JSON.stringify(checked); error = !checked.ok;
                 } else {
+                    if (mutationTools.has(call.name) && opts.canWritePdf === false) throw Error('파일 접근 권한이 없습니다.');
                     if (mutationTools.has(call.name) && !plan) throw Error('필기 전에 plan_annotations로 요청 범위를 지정하세요.');
                     if (mutationTools.has(call.name) && !plan?.[call.args?.page ?? usePdfEditorStore.getState().currentPage]) throw Error('계획에 포함된 페이지에만 필기할 수 있습니다.');
                     if (mutationTools.has(call.name) && document !== useAppStore.getState().pdfOriginalData) throw Error('작업 중 문서가 변경되었습니다.');
                     const before = new Set(Object.values(usePdfEditorStore.getState().elements).flat().map(el => el.id));
+                    if (call.name === 'write_text_box' && requestedBox && call.args?.targetId !== requestedBox.targetId) throw Error('요청 시작 시 선택한 텍스트 상자와 다릅니다.');
                     result = await executeAiTool(call.name, call.args, opts.signal, { pluginSourceIds });
                     let added = 0;
+                    if (call.name === 'write_text_box' && !result.startsWith('도구 실행 중 오류:')) {
+                        const written = JSON.parse(result);
+                        if (written.applied) {
+                            if (!created.has(written.page)) created.set(written.page,new Set());
+                            created.get(written.page)!.add(written.id);
+                            writtenText.set(written.id,written.text);
+                            writtenBox = !requestedBox || written.targetId === requestedBox.targetId;
+                            added++;
+                        }
+                    }
                     for (const [page, elements] of Object.entries(usePdfEditorStore.getState().elements)) {
                         for (const el of elements) if (!before.has(el.id) && el.id.startsWith("ai-") && mutationTools.has(call.name)) {
                             if (!created.has(+page)) created.set(+page,new Set());
@@ -287,7 +335,8 @@ export function buildAgentToolInstructions(ctx: AgentToolsContext): string {
             { name: 'goto_page', args: '{page}', desc: '특정 페이지로 이동(1부터)' },
             { name: 'read_page', args: '{page}', desc: '페이지의 텍스트 라인을 정규화 좌표(0~1)와 함께 읽기' },
             { name: 'add_shape', args: '{page, type, x, y, w, h, color?, strokeWidth?, arrowHeadSize?}', desc: '도형 추가. type=rect|circle|highlight|arrow, 좌표는 정규화(0~1). arrowHeadSize는 화살표 머리(5~50)로, 보통 생략하면 본문 글자 크기에 맞춰 자동 조정됩니다' },
-            { name: 'add_text', args: '{page, x, y, text, fontSize?, color?}', desc: '페이지에 텍스트 주석 추가 (좌표는 정규화, 왼쪽 위 기준). fontSize 생략 시 본문 글자 크기에 맞춰 자동 조정' },
+            { name: 'add_text', args: '{page, x, y, text, fontSize?, w?, h?, color?}', desc: '페이지 텍스트 추가. x/y와 선택 w/h는 0~1. fontSize는 선호 최대 크기이며 남은 너비·높이에 맞춰 줄바꿈·축소. 본문 크기의 약 80%부터 자동 맞춤. 공간 부족 오류 시 더 넓은 여백에 재배치하거나 여러 상자로 나누되 번역을 요약·생략하지 말 것' },
+            { name: 'write_text_box', args: '{targetId, text, mode?:"append"|"replace"}', desc: '현재 편집 중인 상자에 실제 작성·확정. targetId 사용. 위치·색상·부분 서식을 유지하며 남은 페이지 높이에 전체 내용이 들어가도록 글자를 자동 축소. 기본 append, 명시적 교체 요청에만 replace. 공간 부족 오류 시 내용을 생략하지 말고 더 넓은 영역이나 여러 상자로 분할' },
             { name: 'draw_path', args: '{page, points:[[x,y],...], color?, strokeWidth?}', desc: '자유 곡선 필기. points는 정규화 좌표 2개 이상' },
             { name: 'highlight_text', args: '{page, text, color?}', desc: '페이지에서 문구를 찾아 형광펜으로 표시 (라인 기준 근사 좌표)' },
             { name: 'erase_rect', args: '{page, x, y, w, h}', desc: '주어진 정규화 영역과 겹치는 주석 요소 삭제' },
@@ -315,7 +364,8 @@ export function buildAgentToolInstructions(ctx: AgentToolsContext): string {
         );
     }
 
-    const toolDoc = tools.map(t => `- ${t.name}(${t.args}): ${t.desc}`).join('\n');
+    const textBoxRule = '텍스트 상자에 번역·추가·작성하라는 요청은 채팅 요약 요청이 아닙니다. 번역·전체 작성 요청은 예전 사용자 지침의 간결화 규칙보다 우선하며 임의로 요약·생략하지 마세요. 현재 편집 중인 상자가 컨텍스트에 있으면 plan_annotations 후 write_text_box로 그 targetId에 실제 작성하고 verify_annotations로 확인하세요. 상자가 없으면 위치 확인 후 add_text를 사용하거나 대상 선택을 요청하세요. 도구 미실행·실패·취소를 작성 완료라고 보고하지 마세요. 파일 쓰기 저장은 별도 동작이며 필기 반영만으로 파일 저장 완료라고 말하지 마세요.';
+    const toolDoc = tools.map(t => `- ${t.name}(${t.args}): ${t.desc}`).join('\n') + (ctx.hasPdf ? '\n작성 규칙: ' + textBoxRule : '');
 
     // 도구&필터 팔레트(프리셋)만 색상 후보로 노출. ctx.palette가 없으면 기본 순서 사용.
     const knownPalette = (ctx.palette ?? [])
