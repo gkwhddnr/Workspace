@@ -29,8 +29,9 @@ app.whenReady().then(async () => {
             import { useAppStore } from './src/store/useAppStore';
             import { usePdfEditorStore } from './src/store/usePdfEditorStore';
             import { buildRichHtml, parseRichDom } from './src/utils/richText';
+            import {getActiveAiTextBox,writeActiveAiTextBox} from './src/services/AiTextBoxService';
             const root = createRoot(document.getElementById('root'));
-            window.testApp = { drawAlignmentGuides, GRADIENT_KIT, useMaterialJob, useMaterialStore, useEditorUiStore, createSaveHarness(blobFactory) {
+            window.testApp = { getActiveAiTextBox,writeActiveAiTextBox, drawAlignmentGuides, GRADIENT_KIT, useMaterialJob, useMaterialStore, useEditorUiStore, createSaveHarness(blobFactory) {
                 const host = document.createElement('div'); document.body.appendChild(host);
                 const saveRoot = createRoot(host); let handle;
                 function Save() { handle = useSavePdf(blobFactory,null,{},1,async()=>({})).handleSave;return null; }
@@ -382,6 +383,31 @@ app.whenReady().then(async () => {
         assert.equal(sessions.size, 0, 'opening AI does not start a PTY');
         const header = document.querySelector('[data-ai-header]');
         const aiPanel = header.parentElement;
+        const toggle=document.querySelector('[data-ai-agent-toggle]');
+        const initiallyOn=toggle.getAttribute('aria-pressed')==='true';
+        const savedMaterial=testApp.useMaterialStore.getState();
+        testApp.useMaterialStore.getState().apply(testApp.GRADIENT_KIT);await delay();
+        if(!initiallyOn){toggle.click();await delay();}
+        assert.equal(toggle.textContent,'ON');
+        assert.equal(getComputedStyle(toggle).backgroundColor,'rgb(220, 252, 231)','ON semantic color survives a generated material');
+        assert.equal(getComputedStyle(toggle).color,'rgb(20, 83, 45)');
+        toggle.click();await delay();
+        assert.equal(toggle.textContent,'OFF');
+        assert.equal(toggle.getAttribute('aria-pressed'),'false');
+        assert.equal(getComputedStyle(toggle).backgroundColor,'rgb(254, 226, 226)','OFF has a different semantic color');
+        assert.equal(localStorage.getItem('aiAgentMode'),'false');
+        if(initiallyOn){toggle.click();await delay();}
+        testApp.useMaterialStore.getState().apply(savedMaterial.design);
+        if(!savedMaterial.enabled)testApp.useMaterialStore.getState().disable();
+        testApp.useMaterialStore.setState({previous:savedMaterial.previous});await delay();
+        const messageScroll=document.querySelector('[data-ai-messages]');
+        const filler=document.createElement('div');filler.style.cssText='height:2000px;flex-shrink:0';messageScroll.append(filler);
+        const headerTop=header.getBoundingClientRect().top;
+        messageScroll.scrollTop=messageScroll.scrollHeight;messageScroll.dispatchEvent(new Event('scroll'));
+        assert.equal(header.getBoundingClientRect().top,headerTop,'scrolling chat does not move the controls');
+        messageScroll.scrollTop=0;messageScroll.dispatchEvent(new Event('scroll'));
+        assert(header.getBoundingClientRect().top>=aiPanel.getBoundingClientRect().top-1,'controls remain visible at chat top');
+        filler.remove();
         const originalStyle = aiPanel.getAttribute('style');
         for (const width of [240, 320, 426, 600]) {
             aiPanel.style.width = width + 'px'; aiPanel.style.flex = 'none';
@@ -434,6 +460,10 @@ app.whenReady().then(async () => {
         assert.equal(rich.querySelector('b').textContent,'second');
         const parsed = parseRichDom(rich);
         assert.equal(parsed.spans[0].start,6); assert.equal(parsed.spans[0].end,12);
+        for(const sample of ['single','first\\nsecond','first\\n\\nthird','last\\n','<literal>']) {
+            rich.innerHTML=buildRichHtml(sample,[]);
+            assert.equal(parseRichDom(rich).text,sample,'rich text round trip preserves exact line breaks');
+        }
         const bytes = new Uint8Array(require('node:fs').readFileSync(${JSON.stringify(path.join(temp,'sample.pdf'))}));
         const api = testApp.workspaceApiService;
         const savedApi = {};
@@ -481,6 +511,20 @@ app.whenReady().then(async () => {
         assert(Math.abs(textRect.left+committedText.x*textScale-typedRect.left)<1.5,'committed text keeps the editor content x');
         const committedBaseline=textRect.top+committedText.y*textScale+committedText.fontSize*textScale*.85;
         assert(Math.abs(committedBaseline-typedBaseline)<1.5,'committed text keeps the editor glyph baseline: '+JSON.stringify({committedBaseline,typedBaseline,font:typedStyle.font,rangeHeight:typedRect.height,metrics:{ascent:typedMetrics.fontBoundingBoxAscent,descent:typedMetrics.fontBoundingBoxDescent}}));
+        document.querySelector('.pdf-text-editor-textarea')?.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+        testApp.usePdfEditorStore.setState({elements:{1:[]}});await delay();
+        const aiCanvasRect=textCanvas.getBoundingClientRect();
+        textCanvas.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:aiCanvasRect.left+80,clientY:aiCanvasRect.top+100}));
+        await delay();
+        await until(()=>!!testApp.getActiveAiTextBox(),'AI sees the active empty text box');
+        const aiBox=testApp.getActiveAiTextBox();
+        assert.equal(aiBox.text,'','new target is an empty box: '+JSON.stringify(aiBox));
+        const writeResult=testApp.writeActiveAiTextBox({targetId:aiBox.targetId,text:'AI 번역문\\n다음 줄'});
+        await delay();
+        const aiText=testApp.usePdfEditorStore.getState().elements[1].find(item=>item.id===writeResult.id);
+        assert.equal(aiText.text,'AI 번역문\\n다음 줄');
+        assert.equal(aiText.x,aiBox.x);assert.equal(aiText.y,aiBox.y);
+        assert.equal(document.querySelector('.pdf-text-editor-textarea'),null,'AI commits using the same finish path as the check button');
         testApp.usePdfEditorStore.setState({elements:originalTextElements,historyRevision:originalTextState.historyRevision,lastSavedRevision:originalTextState.lastSavedRevision,histories:originalTextState.histories});
         testApp.useAppStore.getState().setActiveTool('select');await delay();
         // Fractional zoom must rerasterize both PDF text and annotations, including
