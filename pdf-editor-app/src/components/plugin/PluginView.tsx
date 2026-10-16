@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import type { PluginRegistryEntry } from '../../plugins/types';
 import { PluginOutputPanel } from './PluginOutputPanel';
+import {usePluginStore} from '../../store/usePluginStore';
 import { setPluginViewReady } from '../../plugins/pluginViewReady';
 
 class PluginErrorBoundary extends React.Component<React.PropsWithChildren, { error: string | null }> {
@@ -43,11 +44,17 @@ function MountedPlugin({ entry }: { entry: PluginRegistryEntry }) {
 
 export function PluginView({ entry, onClose }: { entry: PluginRegistryEntry; onClose: () => void }) {
     const renderer = entry.definition.render;
-    if (!entry.active || !entry.context || !renderer) return null;
-    if (renderer.kind === 'html') return <PluginOutputPanel html={renderer.html} onClose={onClose} />;
+    if (!entry.active || !entry.context) return null;
+    if (!renderer) return <section id={'plugin-panel-'+entry.definition.id} role="tabpanel" aria-labelledby={'plugin-tab-'+entry.definition.id} className="h-full p-4 theme-bg-panel theme-text-main overflow-auto">
+        <h2 className="font-bold">{entry.definition.name}</h2>
+        <p className="text-sm my-3">{entry.definition.description || '활성화된 플러그인입니다.'}</p>
+        <button onClick={()=>void usePluginStore.getState().runPlugin(entry.definition.id)} className="px-3 py-2 rounded border theme-border-subtle">실행</button>
+        <button onClick={onClose} className="ml-2 px-3 py-2 rounded border theme-border-subtle">닫기</button>
+    </section>;
+    if (renderer.kind === 'html') return <div id={'plugin-panel-'+entry.definition.id} role="tabpanel" aria-labelledby={'plugin-tab-'+entry.definition.id} className="h-full flex flex-col min-h-0"><PluginOutputPanel html={renderer.html} onClose={onClose} /></div>;
     const Component = renderer.kind === 'react' ? renderer.component as React.ComponentType : null;
     return (
-        <div className="flex flex-col min-w-0 min-h-0 h-full theme-bg-panel">
+        <div id={'plugin-panel-'+entry.definition.id} role="tabpanel" aria-labelledby={'plugin-tab-'+entry.definition.id} className="flex flex-col min-w-0 min-h-0 h-full theme-bg-panel">
             <div className="flex items-center justify-between px-3 py-2 border-b theme-border-subtle shrink-0">
                 <span className="text-xs font-bold theme-text-main">{entry.definition.name}</span>
                 <button onClick={onClose} className="p-1 theme-tool-hover rounded-md theme-text-muted hover:text-red-500" title="닫기">×</button>

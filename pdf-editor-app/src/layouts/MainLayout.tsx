@@ -1,3 +1,4 @@
+import {PluginTabs} from '../components/plugin/PluginTabs';
 import { useSettingsStore } from '../store/useSettingsStore';
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { shallow } from 'zustand/shallow';
@@ -334,7 +335,7 @@ const MainLayout: React.FC = () => {
                     </div>
                 </div>
 
-                <button onClick={() => setIsThemeModalOpen(true)} title="설정 (Ctrl+,)" aria-label="설정" className="p-2 rounded-xl theme-tool-hover theme-text-main"><Settings size={20}/></button>
+                <button onClick={() => setIsThemeModalOpen(true)} title="설정 (Alt+D)" aria-label="설정" className="p-2 rounded-xl theme-tool-hover theme-text-main"><Settings size={20}/></button>
                 {/* Tab switcher */}
                 <div role="group" aria-label="화면 탭 선택" className="flex p-1 rounded-2xl border theme-border theme-btn">
                     {TABS.map((tab) => {
@@ -462,6 +463,7 @@ const MainLayout: React.FC = () => {
                     </div>
                 </div>
             </header>
+            <PluginTabs terminalOpen={terminalPluginActive && pdfTerminalOpen}/>
 
             {/* ── Main Workspace ──
                 최상위 수평 분할 (합계 = 100%):
@@ -536,7 +538,7 @@ const MainLayout: React.FC = () => {
                     {pluginActiveView && !terminalViewOpen && (() => {
                         const entry = pluginEntries.find(e => e.definition.id === pluginActiveView.pluginId);
                         const render = entry?.definition.render;
-                        if (!render || !entry?.active) return null;
+                        if (!entry?.active) return null;
                         return (
                             <>
                                 <Separator onKeyDownCapture={blockSeparatorArrowKeys} className="w-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-indigo-500 transition-colors cursor-col-resize active:bg-indigo-600" />

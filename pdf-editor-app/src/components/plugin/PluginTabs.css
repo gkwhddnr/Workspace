@@ -1,0 +1,20 @@
+.plugin-tabs{display:flex;gap:5px;flex-shrink:0;min-height:43px;padding:5px 16px 0;overflow-x:auto;border-bottom:1px solid var(--border-subtle,#cbd5e1);scrollbar-width:thin;color:var(--text-main)}
+.plugin-tabs [role=tab]{display:flex;align-items:center;gap:8px;flex:0 0 auto;max-width:240px;min-width:116px;padding:10px 14px;border:1px solid transparent;border-radius:10px 10px 0 0;font-size:12px;font-weight:600;white-space:nowrap;color:inherit;background:transparent;cursor:pointer;position:relative}
+.plugin-tabs [role=tab]:hover{background:var(--bg-tool-hover,#e0e7ff)}
+.plugin-tabs [role=tab][aria-selected=true]{background:var(--bg-panel,#fff);border-color:var(--border-subtle,#cbd5e1);font-weight:800}
+.plugin-tabs [role=tab][aria-selected=true]:after{content:'';position:absolute;bottom:0;left:12px;right:12px;height:3px;border-radius:3px;background:currentColor}
+.plugin-tabs [role=tab]:focus-visible{outline:2px solid #6366f1;outline-offset:-3px}
+.plugin-tab-name{overflow:hidden;text-overflow:ellipsis}.plugin-tab-indicator{width:7px;height:7px;border-radius:50%;background:#10b981;flex-shrink:0}
+
+.plugin-tabs [data-plugin-active=false] .plugin-tab-indicator{background:#ef4444}
+.plugin-tabs [data-plugin-active=false] .plugin-tab-name{font-weight:500}
+
+.plugin-tabs [role=tab]{user-select:none;-webkit-user-select:none;cursor:grab}
+.plugin-tabs [role=tab]:active{cursor:grabbing}
+.plugin-tabs [data-dragging=true]{opacity:.55;cursor:grabbing}
+.plugin-tabs [data-drop-side=before]{box-shadow:inset 3px 0 0 #6366f1!important}
+.plugin-tabs [data-drop-side=after]{box-shadow:inset -3px 0 0 #6366f1!important}
+
+.plugin-drop-preview{display:flex;flex-direction:column;justify-content:center;gap:2px;flex-shrink:0;min-width:116px;max-width:240px;box-sizing:border-box;padding:5px 12px;border:2px dashed #6366f1;border-radius:10px 10px 0 0;background:rgba(99,102,241,.12);color:var(--text-main);cursor:grabbing;user-select:none}
+.plugin-drop-preview-title{display:flex;gap:8px;align-items:center;min-width:0;font-size:12px;font-weight:700;opacity:.65}
+.plugin-drop-preview-hint{font-size:10px;font-weight:600;text-align:center;opacity:.8}
