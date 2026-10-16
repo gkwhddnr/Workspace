@@ -12,6 +12,7 @@ app.whenReady().then(async () => {
     await build({
         stdin: { contents: `
             import React from 'react';
+            import {drawAlignmentGuides} from './src/renderers/alignmentGuides';
             import {useMaterialStore} from './src/store/useMaterialStore';import {GRADIENT_KIT} from './src/services/GradientUiKit';
             import {useMaterialJob} from './src/services/MaterialLabService';
             import {useEditorUiStore} from './src/store/useEditorUiStore';
@@ -29,7 +30,7 @@ app.whenReady().then(async () => {
             import { usePdfEditorStore } from './src/store/usePdfEditorStore';
             import { buildRichHtml, parseRichDom } from './src/utils/richText';
             const root = createRoot(document.getElementById('root'));
-            window.testApp = { GRADIENT_KIT, useMaterialJob, useMaterialStore, useEditorUiStore, createSaveHarness(blobFactory) {
+            window.testApp = { drawAlignmentGuides, GRADIENT_KIT, useMaterialJob, useMaterialStore, useEditorUiStore, createSaveHarness(blobFactory) {
                 const host = document.createElement('div'); document.body.appendChild(host);
                 const saveRoot = createRoot(host); let handle;
                 function Save() { handle = useSavePdf(blobFactory,null,{},1,async()=>({})).handleSave;return null; }
@@ -91,6 +92,83 @@ app.whenReady().then(async () => {
         await state().setActive('ui-design',true);state().setActiveView('ui-design');
         await until(()=>!!document.querySelector('[aria-label="UI Material Lab"]'),'material panel');
         assert.equal(document.querySelector('input[aria-label="Stitch API 키"]'),null);
+        const pluginTabs=()=>[...document.querySelectorAll('[data-plugin-tab]')].map(tab=>tab.dataset.pluginTab).sort();
+        assert.deepEqual(pluginTabs(),state().entries.map(entry=>entry.definition.id).sort(),'tabs contain every registered plugin');
+        await state().registerEntry({definition:{id:'tab-switch-test',name:'Tab switch test',render:{kind:'component',mount:host=>{host.textContent='Tab switch content';return ()=>{host.textContent='';};}}},source:{kind:'code',label:'tab test'},code:'',evaluated:true});
+        await until(()=>!!document.querySelector('[data-plugin-tab="tab-switch-test"]'),'new inactive plugin tab added');
+        const toggleTab=()=>document.querySelector('[data-plugin-tab="tab-switch-test"]');
+        assert.equal(toggleTab().dataset.pluginActive,'false');
+        assert.equal(getComputedStyle(toggleTab().querySelector('.plugin-tab-indicator')).backgroundColor,'rgb(239, 68, 68)','inactive tab has a red dot');
+        toggleTab().click();await delay();assert.notEqual(state().activeView?.pluginId,'tab-switch-test','left click cannot open an inactive plugin');
+        const rightClick=()=>{const event=new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2});toggleTab().dispatchEvent(event);assert(event.defaultPrevented);};
+        rightClick();await until(()=>state().entries.find(entry=>entry.definition.id==='tab-switch-test').active,'right click activates plugin');await delay();
+        assert(pluginTabs().includes('tab-switch-test'),'activation keeps its tab');
+        document.querySelector('[data-plugin-tab="ui-design"]').click();await delay();
+        assert.equal(state().activeView.pluginId,'ui-design');
+        assert.equal(document.querySelector('[data-plugin-tab="ui-design"]').getAttribute('aria-selected'),'true');
+        document.querySelector('[data-plugin-tab="tab-switch-test"]').click();await delay();
+        assert.equal(state().activeView.pluginId,'tab-switch-test','tab click switches plugin view');
+        rightClick();await until(()=>state().entries.find(entry=>entry.definition.id==='tab-switch-test').status==='inactive','right click disables plugin');await delay();
+        assert(pluginTabs().includes('tab-switch-test'),'disabled plugins remain in the tab bar');
+        assert.equal(toggleTab().dataset.pluginActive,'false');
+        assert.equal(getComputedStyle(toggleTab().querySelector('.plugin-tab-indicator')).backgroundColor,'rgb(239, 68, 68)');
+        assert.notEqual(state().activeView?.pluginId,'tab-switch-test');
+        rightClick();await until(()=>state().entries.find(entry=>entry.definition.id==='tab-switch-test').active,'right click reactivates plugin');await delay();
+        assert.equal(toggleTab().dataset.pluginActive,'true');
+        assert.equal(getComputedStyle(toggleTab().querySelector('.plugin-tab-indicator')).backgroundColor,'rgb(16, 185, 129)');
+
+        const beforeMove=state().activeView?.pluginId;
+        const firstPluginTab=document.querySelector('[data-plugin-tab]');
+        const dragData=new DataTransfer();
+        toggleTab().dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:dragData}));await delay();
+
+        assert(dragData.types.includes('application/x-workspace-plugin-tab'),'drag carries explicit plugin tab identity');
+        const originalTabEffect=dragData.effectAllowed;
+        const draggingFileName=testApp.useAppStore.getState().currentFileName;
+        window.dispatchEvent(new DragEvent('dragenter',{bubbles:true,cancelable:true,dataTransfer:dragData}));
+        document.querySelector('[data-file-drop-active]').dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dragData}));await delay();
+        assert.equal(document.querySelector('[data-file-drop-active=true]'),null,'tab drag over PDF does not activate upload');
+        assert.equal(dragData.effectAllowed,originalTabEffect,'file handler cannot override tab move operation');
+        const actualFiles=new DataTransfer();actualFiles.items.add(new File(['fixture'],'dropped.pdf',{type:'application/pdf'}));
+        window.dispatchEvent(new DragEvent('dragenter',{bubbles:true,cancelable:true,dataTransfer:actualFiles}));await delay();
+        assert(document.querySelector('[data-file-drop-active=true]'),'actual files still show upload feedback');
+        window.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dragData}));await delay();
+        assert.equal(document.querySelector('[data-file-drop-active=true]'),null,'internal drag clears stale file overlay');
+        assert.equal(testApp.useAppStore.getState().currentFileName,draggingFileName);
+        const plainDrag=new DataTransfer();plainDrag.setData('text/plain','selected text');
+        window.dispatchEvent(new DragEvent('dragenter',{bubbles:true,cancelable:true,dataTransfer:plainDrag}));await delay();
+        assert.equal(document.querySelector('[data-file-drop-active=true]'),null,'ordinary text is not a file drag');
+        const dropRect=firstPluginTab.getBoundingClientRect();
+        firstPluginTab.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dragData,clientX:dropRect.left+1}));
+
+        const beforePreviewOrder=localStorage.getItem('pluginTabOrder.v1');
+        await delay();
+        const destinationPreview=document.querySelector('[data-plugin-drop-preview]');
+        assert(destinationPreview,'drag shows an actual destination slot');
+        assert(destinationPreview.textContent.includes('Tab switch test'));
+        assert.equal(destinationPreview.dataset.previewSide,'before');
+        assert.equal(destinationPreview.nextElementSibling,firstPluginTab,'preview appears at intended insertion point');
+        assert.equal(localStorage.getItem('pluginTabOrder.v1'),beforePreviewOrder,'preview does not commit tab order');
+        destinationPreview.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:dragData}));await delay();
+        assert.equal(document.querySelector('[data-plugin-drop-preview]'),null,'drop clears the preview');
+        assert.equal(document.querySelector('[data-plugin-tab]').dataset.pluginTab,'tab-switch-test','left drag reorders tabs');
+        assert.equal(JSON.parse(localStorage.getItem('pluginTabOrder.v1'))[0],'tab-switch-test','tab order is persisted');
+        assert.equal(state().activeView?.pluginId,beforeMove,'dragging does not switch or deactivate a plugin');
+        const committedOrder=localStorage.getItem('pluginTabOrder.v1');
+        toggleTab().dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:dragData}));await delay();
+        const cancelTarget=[...document.querySelectorAll('[data-plugin-tab]')].at(-1);
+        const cancelRect=cancelTarget.getBoundingClientRect();
+        cancelTarget.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dragData,clientX:cancelRect.right-1}));await delay();
+        assert(document.querySelector('[data-plugin-drop-preview]'),'another destination can be previewed');
+        toggleTab().dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:dragData}));await delay();
+        assert.equal(document.querySelector('[data-plugin-drop-preview]'),null,'cancel clears destination preview');
+        assert.equal(localStorage.getItem('pluginTabOrder.v1'),committedOrder,'cancel does not change saved order');
+        rightClick();await until(()=>!state().entries.find(entry=>entry.definition.id==='tab-switch-test').active,'disable reordered tab');await delay();
+        assert.equal(document.querySelector('[data-plugin-tab]').dataset.pluginTab,'tab-switch-test','disabled tab retains its position');
+        await state().removeEntry('tab-switch-test');await delay();
+        assert(!pluginTabs().includes('tab-switch-test'),'uninstalled plugin is removed from tabs');
+        document.querySelector('[data-plugin-tab="ui-design"]').click();await delay();
+
         const designScroll=document.querySelector('[data-plugin-view-body]');assert.equal(getComputedStyle(designScroll).overflowY,'auto');designScroll.scrollTop=designScroll.scrollHeight;await delay();assert(designScroll.scrollTop>0);
         [...document.querySelectorAll('button')].find(b=>b.textContent==='현재 초안 보관').click();await delay();
         assert.equal(JSON.parse(localStorage.getItem('materialLab.library.v1')).length,1);
@@ -119,7 +197,7 @@ app.whenReady().then(async () => {
         const twoDesigns=structuredClone(testApp.GRADIENT_KIT);
         twoDesigns.materials.buttons={...twoDesigns.materials.buttons,fill:'#ef4444',end:'#ef4444',gradient:false};
         twoDesigns.materials.tools={...twoDesigns.materials.tools,fill:'#224466',end:'#224466',gradient:false};
-        testApp.useMaterialJob.setState({result:twoDesigns});await delay();
+        testApp.useMaterialJob.setState({result:twoDesigns});await until(()=>!!document.querySelector('dialog[aria-label="생성된 UI 미리보기"]'),'generated design dialog mounted');
         const choiceDialog=document.querySelector('dialog[aria-label="생성된 UI 미리보기"]');
         choiceDialog.querySelector('[data-preview-choice="materials"] .material-choice-heading button').click();await delay();
         [...choiceDialog.querySelectorAll('button')].find(b=>b.textContent==='이 UI 적용').click();await delay();
@@ -178,9 +256,32 @@ app.whenReady().then(async () => {
         for(const target of ['workspace','panels','buttons','tools'])Object.assign(contrastDesign.materials[target],{fill:'#17243c',end:'#17243c',gradient:false,opacity:1});
         for(const target of ['settings','inputs'])Object.assign(contrastDesign.materials[target],{fill:'#ffffff',end:'#ffffff',gradient:false,opacity:1});
         testApp.useMaterialStore.getState().apply(contrastDesign);await delay();
+        const textColorProbe=document.createElement('div');
+        textColorProbe.className='pdf-text-editor-textarea';
+        textColorProbe.setAttribute('data-material-preserve','');
+        textColorProbe.style.setProperty('--text-color','#dc2626');
+        textColorProbe.innerHTML='<span class="text-selected" style="color:#2563eb">한글 서식</span> 입력';
+        document.querySelector('[data-editor-ui]').append(textColorProbe);
+        assert.equal(getComputedStyle(textColorProbe).color,'rgb(220, 38, 38)','document editor retains selected ink under dark material');
+        assert.equal(getComputedStyle(textColorProbe.firstChild).color,'rgb(37, 99, 235)','rich text retains its own ink under dark material');
+        textColorProbe.remove();
         const settingsSurface=document.querySelector('[data-settings-dialog] .theme-bg-panel');
         const settingsHeading=[...settingsSurface.querySelectorAll('h4')].find(node=>node.textContent==='탭 공간 크기');
         await until(()=>getComputedStyle(settingsSurface).backgroundColor==='rgb(255, 255, 255)'&&getComputedStyle(settingsHeading).color==='rgb(17, 24, 39)','dark editor light settings contrast');
+
+        const appearanceCard=document.querySelector('.appearance-card.editor-ui-fields');
+        assert(appearanceCard);
+        const originalAppearanceTheme=testApp.useAppStore.getState().themeMode;
+        const originalAppearanceColor=testApp.useAppStore.getState().customThemeColor;
+        for(const [mode,color,foreground] of [['white','#ffffff','rgb(17, 24, 39)'],['dark','#ffffff','rgb(248, 250, 252)'],['custom','#ffffff','rgb(17, 24, 39)'],['custom','#101827','rgb(17, 24, 39)']]){
+            testApp.useAppStore.getState().setCustomThemeColor(color);
+            testApp.useAppStore.getState().setThemeMode(mode);await delay();
+            await until(()=>getComputedStyle(appearanceCard.querySelector('label')).color===foreground,'appearance label contrast '+mode+'/'+color);
+            assert.equal(getComputedStyle(appearanceCard.querySelector('h3')).color,foreground);
+            assert.equal(getComputedStyle(appearanceCard.querySelector('label span')).color,foreground);
+        }
+        testApp.useAppStore.getState().setCustomThemeColor(originalAppearanceColor);
+        testApp.useAppStore.getState().setThemeMode(originalAppearanceTheme);await delay();
         const fontSelect=document.querySelector('select[title="글꼴 선택"]');
         assert.equal(getComputedStyle(fontSelect).color,'rgb(17, 24, 39)');
         assert.equal(getComputedStyle(fontSelect.options[0]).color,'rgb(17, 24, 39)');
@@ -202,7 +303,7 @@ app.whenReady().then(async () => {
         assert.equal(getComputedStyle(fontSelect).color,'rgb(17, 24, 39)','light font control in dark settings');
         assert.equal(getComputedStyle(document.querySelector('[data-ui-surface="inverse"] h2')).color,'rgb(255, 255, 255)','settings header remains readable');
         testApp.useMaterialStore.getState().disable();await delay();
-        assert.equal(document.querySelectorAll('[data-settings-dialog] input[type="range"]').length,9, 'editor appearance plus text box opacity, four workspace tabs and save quality; code editor is a plugin');
+        assert.equal(document.querySelectorAll('[data-settings-dialog] input[type="range"]').length,8, 'editor appearance, four workspace tabs and save quality; code editor is a plugin');
         document.querySelector('[data-settings-dialog] button[aria-label="필기 색상 #DC2626"]').click();await delay();
         assert.equal(testApp.useAppStore.getState().toolSettings.color,'#DC2626');
         document.querySelector('[data-settings-dialog]').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',altKey:true,shiftKey:true,bubbles:true,cancelable:true}));await delay();
@@ -355,6 +456,33 @@ app.whenReady().then(async () => {
         assert.equal(unexpectedReads,0,'manual PDF open does not start auto restore');
         assert.equal(workspaceRequests,1,'manual PDF opens exactly once');
         assert.equal(Object.keys(testApp.usePdfEditorStore.getState().histories).length,0,'render does not create history');
+        const originalTextState=testApp.usePdfEditorStore.getState();const originalTextElements=originalTextState.elements;
+        testApp.useAppStore.getState().setActiveTool('text');await delay();
+        const textCanvas=document.querySelector('.pdf-overlay-canvas');
+        const textRect=textCanvas.getBoundingClientRect();
+        textCanvas.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:textRect.left+100,clientY:textRect.top+200}));
+        await until(()=>!!document.querySelector('.pdf-text-editor-textarea'),'text editor mounted');
+        const inputText=document.querySelector('.pdf-text-editor-textarea');
+        inputText.textContent='한글 위치 정렬';inputText.dispatchEvent(new Event('input',{bubbles:true}));await delay();await delay();
+        const firstText=document.createTreeWalker(inputText,NodeFilter.SHOW_TEXT).nextNode();
+        const textRange=document.createRange();textRange.setStart(firstText,0);textRange.setEnd(firstText,1);
+        // Font fallback must settle before comparing DOM glyphs with canvas metrics.
+        await document.fonts.ready;
+        const typedRect=textRange.getBoundingClientRect();
+        const typedStyle=getComputedStyle(inputText);
+        assert.equal(typedStyle.backgroundColor,'rgba(0, 0, 0, 0)','text box background stays transparent');
+        assert.equal(document.querySelector('input[title="배경 투명도 조절"]'),null);
+        const metricContext=document.createElement('canvas').getContext('2d');metricContext.font=typedStyle.font;
+        const typedMetrics=metricContext.measureText('한글Mg');
+        const typedBaseline=typedRect.bottom-typedMetrics.fontBoundingBoxDescent;
+        document.querySelector('button[title="작업 완료"]').dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));await delay();
+        const committedText=testApp.usePdfEditorStore.getState().elements[1].find(el=>el.text?.trim()==='한글 위치 정렬');assert(committedText,JSON.stringify(testApp.usePdfEditorStore.getState().elements));
+        const textScale=testApp.usePdfEditorStore.getState().scale;
+        assert(Math.abs(textRect.left+committedText.x*textScale-typedRect.left)<1.5,'committed text keeps the editor content x');
+        const committedBaseline=textRect.top+committedText.y*textScale+committedText.fontSize*textScale*.85;
+        assert(Math.abs(committedBaseline-typedBaseline)<1.5,'committed text keeps the editor glyph baseline: '+JSON.stringify({committedBaseline,typedBaseline,font:typedStyle.font,rangeHeight:typedRect.height,metrics:{ascent:typedMetrics.fontBoundingBoxAscent,descent:typedMetrics.fontBoundingBoxDescent}}));
+        testApp.usePdfEditorStore.setState({elements:originalTextElements,historyRevision:originalTextState.historyRevision,lastSavedRevision:originalTextState.lastSavedRevision,histories:originalTextState.histories});
+        testApp.useAppStore.getState().setActiveTool('select');await delay();
         // Fractional zoom must rerasterize both PDF text and annotations, including
         // a device-scale change at the same page/zoom (previously a stale cache hit).
         const originalDpr = window.devicePixelRatio;
@@ -370,6 +498,20 @@ app.whenReady().then(async () => {
                         overlay.height === Math.ceil(400 * zoom * dpr * 2);
                 }, 'zoom backing resolution ' + dpr + '/' + zoom);
                 await delay();
+                const guide=document.querySelector('.pdf-guide-canvas');
+                const mainCanvas=document.querySelector('canvas');
+                const overlayCanvas=document.querySelector('.pdf-overlay-canvas');
+                assert.equal(guide.width,overlayCanvas.width,'guide backing width follows PDF zoom/DPR');
+                assert.equal(guide.height,overlayCanvas.height,'guide backing height follows PDF zoom/DPR');
+                const guideW=parseFloat(guide.style.width),guideH=parseFloat(guide.style.height);
+                for(const fraction of [.1,.5,.95]) {
+                    const guideX=guideW*fraction;
+                    testApp.drawAlignmentGuides(guide,guideW,guideH,guideX,null);
+                    const physicalX=Math.round(guideX*guide.width/guideW);
+                    const column=guide.getContext('2d').getImageData(Math.max(0,physicalX-1),0,3,guide.height).data;
+                    assert(column.some((value,index)=>index%4===3&&value>0),'guide remains at the expected position including right edge');
+                }
+                testApp.drawAlignmentGuides(guide,guideW,guideH,null,null);
                 const overlay = document.querySelector('.pdf-overlay-canvas');
                 assert.equal(parseFloat(overlay.style.width),300*zoom);
                 assert.equal(getComputedStyle(overlay).opacity,'1','text retains full contrast');
@@ -447,7 +589,37 @@ app.whenReady().then(async () => {
         completeBlob(new Blob(['fixture'],{type:'application/pdf'}));
         assert.equal(await savePromise,true);assert.equal(writes,1);
         assert.equal(editor.getState().lastSavedRevision,20,'actual save marks only its starting revision');
-        saveHarness.unmount(); delete window.electronAPI;
+        saveHarness.unmount();
+        testApp.useAppStore.setState({currentFilePath:'fixture.pdf',currentFileName:'fixture.pdf'});
+        editor.setState({saveStatus:null,historyRevision:22});
+        const originalProjectSave=api.saveProjectData;
+        api.saveProjectData=async()=>{throw Error('backup offline');};
+        const offlineSave=testApp.createSaveHarness(async()=>new Blob(['fixture'],{type:'application/pdf'}));
+        assert.equal(await offlineSave.save(),true,'a successful disk write remains saved when backend backup is offline');
+        assert.equal(editor.getState().lastSavedRevision,22);
+        assert.equal(editor.getState().saveStatus,'파일 저장 완료 · 편집 백업 실패');
+        window.electronAPI.autoSave=async()=>({success:false,error:'ENOSPC: disk full'});
+        editor.setState({historyRevision:23});
+        assert.equal(await offlineSave.save(),false,'failed file writes do not authorize exit');
+        assert.equal(editor.getState().lastSavedRevision,22);
+        assert(editor.getState().saveStatus.includes('ENOSPC'));
+        offlineSave.unmount();api.saveProjectData=originalProjectSave;
+        testApp.useAppStore.setState({currentFilePath:null,currentFileName:null});
+        editor.setState({saveStatus:null});
+        window.electronAPI={saveFileDialog:async()=>({canceled:true})};
+        const newSave=testApp.createSaveHarness(async()=>new Blob(['fixture'],{type:'application/pdf'}));
+        assert.equal(await newSave.save(),false,'cancelled destination does not authorize exit');
+        let backedUpName=null;
+        api.saveProjectData=async name=>{backedUpName=name;};
+        window.electronAPI.saveFileDialog=async request=>{
+            assert.equal(request.data,btoa('fixture'),'native file writing receives only the base64 payload');
+            return {success:true,filePath:'C:/fixtures/new-name.pdf'};
+        };
+        assert.equal(await newSave.save(),true,'new documents save through the native destination dialog');
+        assert.equal(testApp.useAppStore.getState().currentFileName,'new-name.pdf');
+        assert.equal(backedUpName,'new-name.pdf','first save backs up edits under the selected destination name');
+        assert.equal(editor.getState().lastSavedRevision,23);
+        newSave.unmount();api.saveProjectData=originalProjectSave;delete window.electronAPI;
         assert.equal(sessions.size,0); assert.equal(listeners.size,0);
         assert.deepEqual(uiErrors,[]);
         testApp.useSettingsStore.getState().setSaveQuality(2.75);
@@ -476,7 +648,7 @@ app.whenReady().then(async () => {
         assert.equal(testApp.useAppStore.getState().toolSettings.color,'#16A34A');
         assert.equal(testApp.useAppStore.getState().toolSettings.fontFamily,'monospace');
         assert.equal(testApp.useAppStore.getState().toolSettings.fontSize,27);
-        assert.equal(testApp.useAppStore.getState().toolSettings.textBgOpacity,.23);
+        assert.equal(testApp.useAppStore.getState().toolSettings.textBgOpacity,0);
         assert.equal(testApp.useAppStore.getState().themeMode,'dark');
         assert.equal(testApp.useAppStore.getState().aiAgent,'factchat');
         assert.equal(testApp.useAppStore.getState().aiModels.factchat,'saved-custom-model');
