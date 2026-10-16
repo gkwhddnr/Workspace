@@ -1,4 +1,5 @@
 import externalPluginApiGuide from '../../docs/EXTERNAL_AI_PLUGIN_API.md?raw';
+import pluginWorkbenchGuide from '../../docs/PLUGIN_WORKBENCH_GUIDE.md?raw';
 import { isPluginDraftRequest } from './PluginScriptDraftService';
 
 export const DEFAULT_AI_PLUGIN_GUIDE = `JS 플러그인 제작 지침
@@ -8,9 +9,11 @@ export const DEFAULT_AI_PLUGIN_GUIDE = `JS 플러그인 제작 지침
 - AI 코파일럿이 플러그인의 개별 기능을 사용해야 하는 요구에는 aiTools 선언과 hooks.onAiTool 처리기를 포함하고, 각 도구의 입력 스키마를 구체적으로 적습니다.
 - 요구사항이 불명확하면 필요한 질문만 하고, 지원되지 않는 기능을 구현했다고 주장하지 않습니다.
 - UI는 문맥·실행·상태·미리보기·접이식 편집 순으로 구성하고, 실행/확대/내보내기 버튼을 분리합니다. 좁은 패널 반응형 배치, 접근 가능한 라벨, SVG 벡터 글자, 전체 맞춤과 사용자 중심 확대·이동을 제공합니다. 상세 기준은 외부 AI 공유 API 지침서의 UI 설계 절을 따릅니다.
+- 새 화면형 플러그인은 Editorial Diagram의 문서·페이지별 결과 관리와 UI Material Lab의 입력→작업→초안→미리보기→명시적 적용→보관함 흐름을 참고합니다. 모델 검증·작업 상태·DOM·저장을 나누고, 내장 React나 비공개 AI/재질 API를 외부 JS에 복사하지 않습니다.
 - 코드 뒤에 사용 방법과 저장·활성화 절차를 간결하게 안내합니다.`;
 
-export const EXTERNAL_AI_PLUGIN_API_GUIDE = externalPluginApiGuide;
+export const PLUGIN_WORKBENCH_GUIDE = pluginWorkbenchGuide;
+export const EXTERNAL_AI_PLUGIN_API_GUIDE = `${externalPluginApiGuide}\n\n${PLUGIN_WORKBENCH_GUIDE}`;
 export const AI_PLUGIN_GUIDE_UPDATED_EVENT = 'ai-plugin-guide-updated';
 
 export function buildExternalAiPluginPrompt(userGuide?: string): string {
@@ -54,6 +57,8 @@ export function buildPluginAuthoringInstructions(guide: string, agentMode = fals
 - UI가 필요하면 render: {kind:'component', mount(container, ctx) { /* DOM 구성 */ return () => { /* 정리 */ }; }} 또는 {kind:'html', html:'...'}을 사용합니다. 사용자 문자열은 textContent로 표시합니다.
 - API 키를 코드에 넣거나 요청하지 않은 네트워크 전송·파일 삭제를 추가하지 마세요.
 - 저장 안내: 플러그인 → 코드 에디터 활성화·실행 → JS 플러그인 편집 → 새 플러그인 작성(수정은 기존 항목 선택) → 코드 붙여 넣기 → 등록/저장 → 활성화. 저장 후 활성화는 사용자가 수행합니다.
+새 플러그인의 기본 구조(사용자가 저장한 추가 지침과 관계없이 함께 제공):
+${PLUGIN_WORKBENCH_GUIDE}
 사용자 제작 지침(현재 요청의 구체적인 요구를 우선하되 위 호스트 규격을 지키세요):
 ${guide.trim() || DEFAULT_AI_PLUGIN_GUIDE}
 [/JS 플러그인 제작 모드]`;

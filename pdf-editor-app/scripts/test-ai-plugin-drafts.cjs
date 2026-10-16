@@ -13,7 +13,7 @@ global.CustomEvent ??= class extends Event { constructor(type, options) { super(
             export { executeAiTool } from './src/services/AiActions';
             export { usePluginStore } from './src/store/usePluginStore';
             export { readPluginScriptDrafts, readPluginScriptSelection } from './src/services/PluginScriptDraftService';
-            export { isPluginAuthoringRequest } from './src/services/AiPluginGuide';
+            export { isPluginAuthoringRequest, buildExternalAiPluginPrompt, buildPluginAuthoringInstructions, PLUGIN_WORKBENCH_GUIDE } from './src/services/AiPluginGuide';
             export { migrateEditorialPlugins, upgradeEditorialPlugin } from './src/services/EditorialDiagramService';
             export { default as legacyEditorialSource } from './docs/examples/editorial-diagram-v1.1.js?raw';
         `, resolveDir: process.cwd() },
@@ -29,6 +29,15 @@ global.CustomEvent ??= class extends Event { constructor(type, options) { super(
     new Function('require', 'module', 'exports', output.outputFiles[0].text)(require, mod, mod.exports);
     const { runAiAgent, executeAiTool, usePluginStore, readPluginScriptDrafts, readPluginScriptSelection, buildAgentToolInstructions, isPluginAuthoringRequest } = mod.exports;
     const { parseToolCalls } = mod.exports;
+    const savedGuide='Keep my existing plugin naming rules.';
+    localStorage.setItem('aiPluginGuide.v1',savedGuide);
+    const externalGuide=mod.exports.buildExternalAiPluginPrompt();
+    const internalGuide=mod.exports.buildPluginAuthoringInstructions(savedGuide,true);
+    for(const prompt of [externalGuide,internalGuide]) {
+        assert(prompt.includes(mod.exports.PLUGIN_WORKBENCH_GUIDE),'both authoring routes carry the workbench requirements even with an older saved guide');
+        assert(prompt.includes(savedGuide),'custom instructions remain part of the prompt');
+    }
+    assert.equal(localStorage.getItem('aiPluginGuide.v1'),savedGuide,'updating built-in requirements does not replace user instructions');
     assert((await executeAiTool('material_get',{})).includes('활성화'));
     await usePluginStore.getState().registerEntry({definition:{id:'ui-design',name:'UI 디자인'},source:{kind:'builtin'},code:'',evaluated:true,active:true});
     const appliedUi=JSON.parse(await executeAiTool('editor_ui_apply',{design:{accent:'#008080',radius:6}}));assert.equal(appliedUi.applied,true);

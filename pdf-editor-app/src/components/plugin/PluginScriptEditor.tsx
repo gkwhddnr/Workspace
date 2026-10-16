@@ -128,7 +128,7 @@ export default function PluginScriptEditor() {
             <div className="flex items-center justify-between gap-2">
                 <div>
                     <h3 className="text-xs font-bold theme-text-main">외부 AI용 JS 플러그인 제작 지침서</h3>
-                    <p className="text-[10px] theme-text-muted">아래 내용을 프롬프트에 붙여 넣거나 버튼으로 복사한 뒤, 원하는 기능을 설명하세요.</p>
+                    <p className="text-[10px] theme-text-muted">API 명세와 Editorial Diagram·UI Material Lab 기반 작업 환경 지침이 포함됩니다. 전체 복사 후 원하는 기능을 설명하세요.</p>
                 </div>
                 <button onClick={copyExternalGuide} className="shrink-0 rounded border theme-border px-3 py-2 text-xs theme-text-main">지침 전체 복사</button>
             </div>
